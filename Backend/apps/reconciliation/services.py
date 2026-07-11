@@ -8,6 +8,7 @@ from apps.execution.models import Fill
 from apps.instruments.models import BrokerContract
 from apps.portfolios.models import PortfolioPosition
 from .models import ReconciliationBreak, ReconciliationRun
+from apps.audit.models import OutboxEvent
 
 @transaction.atomic
 def reconcile(trigger="manual", client=None):
@@ -32,4 +33,7 @@ def reconcile(trigger="manual", client=None):
             ReconciliationBreak.objects.filter(category=category,material=True,resolved=False).exclude(run=run).update(resolved=True,resolution=f"Automatically resolved by clean reconciliation run {run.pk}")
     material=ReconciliationBreak.objects.filter(material=True,resolved=False).exists(); run.status="BLOCKED" if material else "COMPLETED"; run.completed_at=timezone.now(); run.save(update_fields=["status","completed_at"])
     BrokerAccount.objects.update(is_reconciled=not material)
+    OutboxEvent.objects.create(topic="reconciliation.events.v1",event_type="reconciliation.completed",aggregate_type="system",
+        aggregate_id=str(run.pk),partition_key="reconciliation",payload={"reconciliation_run_id":run.pk,"status":run.status,
+        "material_breaks":run.breaks.filter(material=True).count()},idempotency_key=f"reconciliation:{run.pk}:completed")
     return run

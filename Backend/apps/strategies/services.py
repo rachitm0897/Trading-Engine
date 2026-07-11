@@ -4,6 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 from .engine import calculate
 from .models import HistoricalBar, StrategyRun, StrategyTarget
+from apps.audit.models import OutboxEvent
 
 @transaction.atomic
 def run_strategy(strategy):
@@ -21,5 +22,8 @@ def run_strategy(strategy):
     cap = Decimal(strategy.maximum_target_weight)
     StrategyTarget.objects.bulk_create([StrategyTarget(run=run, instrument=by_symbol[s], target_weight=max(-cap, min(cap, w)), rationale=strategy.strategy_type) for s, w in targets.items() if s in by_symbol])
     run.status = "COMPLETED"; run.completed_at = timezone.now(); run.save(update_fields=["status", "completed_at"])
+    OutboxEvent.objects.create(topic="strategy.targets.v1",event_type="strategy.targets.created",aggregate_type="strategy",
+        aggregate_id=str(strategy.pk),partition_key=str(strategy.pk),payload={"strategy_run_id":run.pk,
+        "targets":[{"instrument_id":target.instrument_id,"target_weight":str(target.target_weight)} for target in run.targets.all()]},
+        idempotency_key=f"strategy-run:{run.pk}:targets")
     return run
-

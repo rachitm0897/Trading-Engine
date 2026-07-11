@@ -8,7 +8,9 @@ A paper-first execution platform that turns deterministic strategy targets into 
 - `Frontend/` — React/TypeScript terminal UI served by Nginx.
 - `IB_gateway/` — one-port Django, IBC, IB Gateway, Xvfb/Fluxbox, VNC/noVNC, Nginx, Supervisor, and the sole `ib_async` worker.
 
-PostgreSQL and Redis are local infrastructure services. Strategies and the Frontend cannot access the TWS socket; only the Gateway worker connects to `127.0.0.1:4001/4002`.
+`streaming/` contains private Kafka contracts and PyFlink jobs; it is infrastructure, not a fourth public application. PostgreSQL remains the financial source of truth. Strategies, Kafka, Flink and the Frontend cannot access the TWS socket; only the Gateway worker connects to `127.0.0.1:4001/4002`.
+
+Kafka carries versioned immutable events through a transactional PostgreSQL outbox. PyFlink normalizes market data, creates event-time 1m/5m/1d OHLCV bars, computes SMA/RSI/Donchian/momentum/volatility/average-volume indicators and publishes price-quality transitions. Backend consumers persist outputs idempotently. Allocation and rebalancing are shadow-first and can create only `OrderIntent`; sizing, risk, OMS, Gateway, ledgers and reconciliation remain mandatory.
 
 ## Local start
 
@@ -34,9 +36,11 @@ Compose defaults to the real `ib_async` broker adapter in paper mode. Supply IBK
 cd Backend && pytest
 cd ../IB_gateway && pytest
 cd ../Frontend && npm install && npm test && npm run build
+cd .. && ./.venv/Scripts/python -m pytest streaming/flink/tests
 docker compose config --quiet
 docker compose up --build -d
 docker compose ps
+powershell -NoProfile -File docs/streaming_recovery_smoke.ps1
 ```
 
 See [local development](docs/LOCAL_DEVELOPMENT.md) and each application README for isolated commands.

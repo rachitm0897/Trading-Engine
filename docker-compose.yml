@@ -27,6 +27,84 @@ services:
       retries: 20
     restart: unless-stopped
 
+  kafka:
+    image: apache/kafka:3.9.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks: [private]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server 127.0.0.1:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  kafka-init:
+    image: apache/kafka:3.9.0
+    entrypoint: ["/bin/bash", "/create-topics.sh"]
+    volumes:
+      - ./streaming/kafka/create-topics.sh:/create-topics.sh:ro
+    networks: [private]
+    depends_on:
+      kafka: {condition: service_healthy}
+    restart: "no"
+
+  flink-jobmanager:
+    build: ./streaming/flink
+    command: jobmanager
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      AUTO_SUBMIT_FLINK_JOBS: "true"
+      INSTRUMENT_SYMBOL_MAP: ${INSTRUMENT_SYMBOL_MAP:-{}}
+      MARKET_PRICE_STALE_SECONDS: ${MARKET_PRICE_STALE_SECONDS:-300}
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        restart-strategy.type: exponential-delay
+        restart-strategy.exponential-delay.initial-backoff: 1 s
+        restart-strategy.exponential-delay.max-backoff: 60 s
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+        execution.checkpointing.savepoint-dir: file:///opt/flink/savepoints
+    volumes:
+      - flink_checkpoints:/opt/flink/checkpoints
+      - flink_savepoints:/opt/flink/savepoints
+    networks: [private]
+    depends_on:
+      kafka-init: {condition: service_completed_successfully}
+    restart: unless-stopped
+
+  flink-taskmanager:
+    build: ./streaming/flink
+    command: taskmanager
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 8
+        restart-strategy.type: exponential-delay
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+        execution.checkpointing.savepoint-dir: file:///opt/flink/savepoints
+    volumes:
+      - flink_checkpoints:/opt/flink/checkpoints
+      - flink_savepoints:/opt/flink/savepoints
+    networks: [private]
+    depends_on:
+      flink-jobmanager: {condition: service_started}
+    restart: unless-stopped
+
   ib_gateway:
     build: ./IB_gateway
     environment:
@@ -72,6 +150,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_ENABLED: "true"
+      FLINK_REST_URL: http://flink-jobmanager:8081
+      NEW_EXECUTION_MODE: ${NEW_EXECUTION_MODE:-SHADOW}
       IB_GATEWAY_SERVICE_URL: http://ib_gateway:8080/api/v1
       GATEWAY_SERVICE_TOKEN: ${GATEWAY_SERVICE_TOKEN:-local-service-token}
       ALLOW_LIVE_TRADING: ${ALLOW_LIVE_TRADING:-false}
@@ -81,6 +163,7 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      kafka: {condition: service_healthy}
       ib_gateway: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
@@ -94,11 +177,12 @@ services:
     build:
       context: ./Frontend
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:${BACKEND_PORT:-8000}/api/v1}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
         VITE_APP_BASE_PATH: ${VITE_APP_BASE_PATH:-/}
         VITE_GATEWAY_PUBLIC_URL: ${VITE_GATEWAY_PUBLIC_URL:-http://localhost:${GATEWAY_PORT:-8080}}
     environment:
       PORT: 5173
+      BACKEND_INTERNAL_URL: http://backend:8000
       APP_BASE_PATH: ${FRONTEND_APP_BASE_PATH:-}
       PUBLIC_BASE_URL: ${FRONTEND_PUBLIC_BASE_URL:-http://localhost:${FRONTEND_PORT:-5173}}
     ports:
@@ -119,5 +203,8 @@ networks:
 
 volumes:
   postgres_data:
+  kafka_data:
+  flink_checkpoints:
+  flink_savepoints:
   gateway_settings:
   gateway_events:

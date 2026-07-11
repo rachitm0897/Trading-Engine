@@ -2,13 +2,13 @@ import {render,screen,waitFor} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from '../src/App'
 
-const data:Record<string,any>={system:{mode:'PAPER',material_breaks:0},gateway:{connected:true,reconciled:true,mode:'paper'},accounts:[],instruments:[{id:1,symbol:'AAPL',exchange:'SMART'}],portfolios:[{id:1,name:'Paper'}],positions:[],orders:[],executions:[],strategies:[{id:1,name:'SMA',strategy_type:'sma_trend',version:1,enabled:true}],risk:{kill_switches:[],decisions:[]},reconciliation:{runs:[],breaks:[]},audit:[]}
+const data:Record<string,any>={system:{mode:'PAPER',material_breaks:0},gateway:{connected:true,reconciled:true,mode:'paper'},accounts:[],instruments:[{id:1,symbol:'AAPL',exchange:'SMART'}],portfolios:[{id:1,name:'Paper'}],positions:[],orders:[],executions:[],strategies:[{id:1,name:'SMA',strategy_type:'sma_trend',version:1,enabled:true}],risk:{kill_switches:[],decisions:[]},reconciliation:{runs:[],breaks:[]},streaming:{kafka_enabled:true,metrics:[],flink:{jobs:[]}},allocations:[],rebalancing:[],audit:[]}
 beforeEach(()=>{vi.stubGlobal('fetch',vi.fn(async(input:string,init?:RequestInit)=>{const key=Object.keys(data).find(x=>input.includes(`/${x}/`))||'system';return {ok:true,json:async()=>({ok:true,data:init?.method==='POST'?{}:data[key],error:null,meta:{}})} as Response}))})
 afterEach(()=>vi.unstubAllGlobals())
 
-test('renders all ten sidebar pages and paper status',async()=>{
+test('renders terminal workflow pages and paper status',async()=>{
  render(<App/>); await waitFor(()=>expect(screen.getAllByText('PAPER').length).toBeGreaterThan(0))
- for(const name of ['Overview','Gateway','Accounts','Portfolio','Strategies','Orders','Executions','Reconciliation','Risk','System Logs']) expect(screen.getByRole('button',{name:new RegExp(name)})).toBeInTheDocument()
+ for(const name of ['Overview','Gateway','Accounts','Portfolio','Strategies','Streaming','Allocations','Rebalancing','Orders','Executions','Reconciliation','Risk','System Logs']) expect(screen.getByRole('button',{name:new RegExp(name)})).toBeInTheDocument()
 })
 
 test('routes between screens and validates an order',async()=>{
