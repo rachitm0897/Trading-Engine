@@ -1,0 +1,9 @@
+server {
+  listen ${PORT};
+  server_name _;
+  server_tokens off;
+  root /usr/share/nginx/html;
+  gzip on;
+  location ~ ^(?:${APP_BASE_PATH})?/healthz$ { access_log off; add_header Content-Type text/plain; return 200 'ok'; }
+  location ~ ^(?:${APP_BASE_PATH})?/(.*)$ { try_files /$1 /index.html; }
+}
