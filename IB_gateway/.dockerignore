@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+gateway.sqlite3*
+tests/
+

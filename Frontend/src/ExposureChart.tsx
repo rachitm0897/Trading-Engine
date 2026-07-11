@@ -1,0 +1,4 @@
+import {useEffect,useRef} from 'react'
+import {createChart,ColorType} from 'lightweight-charts'
+export function ExposureChart(){const ref=useRef<HTMLDivElement>(null);useEffect(()=>{if(!ref.current)return;const chart=createChart(ref.current,{height:150,layout:{background:{type:ColorType.Solid,color:'#0b0f12'},textColor:'#839096'},grid:{vertLines:{color:'#182026'},horzLines:{color:'#182026'}},rightPriceScale:{borderColor:'#293238'},timeScale:{borderColor:'#293238'}});const series=chart.addAreaSeries({lineColor:'#38d996',topColor:'rgba(56,217,150,.18)',bottomColor:'rgba(56,217,150,0)'});series.setData([{time:'2026-07-07',value:100},{time:'2026-07-08',value:101.2},{time:'2026-07-09',value:100.7},{time:'2026-07-10',value:102.4},{time:'2026-07-11',value:103.1}]);chart.timeScale().fitContent();return()=>chart.remove()},[]);return <div ref={ref} aria-label="portfolio exposure chart"/>}
+
