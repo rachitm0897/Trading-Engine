@@ -19,10 +19,14 @@ ALLOWED = {
 
 @transaction.atomic
 def create_order(intent, quantity=None):
+    if not intent.eligible:
+        raise ValueError("Order intent is not eligible for OMS processing")
     order, created = Order.objects.get_or_create(intent=intent, defaults={"internal_id": str(uuid.uuid4()), "quantity": quantity or intent.quantity})
     if created:
         transition(order, "RISK_APPROVED", "risk", f"order:{order.internal_id}:approved")
-        OutboxEvent.objects.create(topic="order.created", aggregate_id=order.internal_id, payload={"order_id": order.internal_id}, idempotency_key=f"outbox:order:{order.internal_id}:created")
+        OutboxEvent.objects.create(topic="orders.events.v1",event_type="order.created",aggregate_type="order",
+            aggregate_id=order.internal_id,partition_key=order.internal_id,payload={"order_id":order.internal_id},
+            idempotency_key=f"outbox:order:{order.internal_id}:created")
     return order
 
 @transaction.atomic
@@ -52,4 +56,12 @@ def apply_execution(order, execution):
     position, _ = PortfolioPosition.objects.select_for_update().get_or_create(portfolio=order.intent.portfolio, instrument=order.intent.instrument)
     position.quantity += signed_qty; position.market_price = fill.price; position.save(update_fields=["quantity", "market_price", "updated_at"])
     AuditEvent.objects.create(event_type="fill.recorded", actor="broker", aggregate_type="order", aggregate_id=order.internal_id, data={"execution_id": fill.execution_id}, idempotency_key=f"audit:fill:{fill.execution_id}")
+    OutboxEvent.objects.create(topic="executions.events.v1",event_type="execution.recorded",aggregate_type="account",
+        aggregate_id=order.intent.portfolio.account.account_id,partition_key=order.intent.portfolio.account.account_id,
+        payload={"execution_id":fill.execution_id,"order_id":order.internal_id,"instrument_id":order.intent.instrument_id,
+                 "quantity":str(fill.quantity),"price":str(fill.price),"commission":str(fill.commission)},
+        idempotency_key=f"outbox:execution:{fill.execution_id}")
+    if order.intent.rebalance_id:
+        from apps.rebalancing.services import advance_rebalance
+        advance_rebalance(order.intent.rebalance)
     return fill

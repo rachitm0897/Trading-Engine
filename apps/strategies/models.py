@@ -47,6 +47,11 @@ class StrategyAllocation(models.Model):
     strategy = models.ForeignKey(TradingStrategy, on_delete=models.PROTECT)
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT)
     weight = models.DecimalField(max_digits=12, decimal_places=8)
+    minimum_share = models.DecimalField(max_digits=12, decimal_places=8, default=0)
+    maximum_share = models.DecimalField(max_digits=12, decimal_places=8, default=1)
+    capacity = models.DecimalField(max_digits=24, decimal_places=8, null=True, blank=True)
+    minimum_allocation = models.DecimalField(max_digits=24, decimal_places=8, default=0)
+    priority = models.PositiveIntegerField(default=100)
+    idle_cash = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     class Meta:
         constraints = [models.UniqueConstraint(fields=["strategy", "portfolio"], name="unique_strategy_allocation")]
-

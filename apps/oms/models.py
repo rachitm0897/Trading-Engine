@@ -15,6 +15,11 @@ class OrderIntent(models.Model):
     reference_price = models.DecimalField(max_digits=24, decimal_places=8, null=True, blank=True)
     time_in_force = models.CharField(max_length=8, default="DAY")
     idempotency_key = models.CharField(max_length=128, unique=True)
+    source = models.CharField(max_length=32, default="MANUAL")
+    mode = models.CharField(max_length=16, default="PAPER")
+    requires_fresh_price = models.BooleanField(default=False)
+    execution_priority = models.PositiveIntegerField(default=100)
+    eligible = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
 class Order(models.Model):
