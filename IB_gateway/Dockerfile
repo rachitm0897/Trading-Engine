@@ -10,13 +10,13 @@ RUN useradd -m -u 1000 ibgateway && mkdir -p /opt/ibc /opt/ibgateway /data /run/
     unzip -q /tmp/ibc.zip -d /opt/ibc && chmod +x /opt/ibc/*.sh && rm /tmp/ibc.zip && \
     curl -fsSL "$IB_GATEWAY_INSTALLER_URL" -o /tmp/ibgateway.sh && chmod +x /tmp/ibgateway.sh && \
     /tmp/ibgateway.sh -q -dir /opt/ibgateway || /tmp/ibgateway.sh -q && rm /tmp/ibgateway.sh && \
+    mkdir -p /opt/Jts/ibgateway && ln -s /opt/ibgateway /opt/Jts/ibgateway/1045 && \
     chown -R ibgateway:ibgateway /home/ibgateway /opt/ibc /opt/ibgateway /data
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-RUN chmod +x entrypoint.sh start-ibgateway.sh && mkdir -p /var/log/supervisor
+RUN chmod +x entrypoint.sh start-ibgateway.sh /opt/ibc/scripts/*.sh && mkdir -p /var/log/supervisor
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --retries=5 CMD curl -fsS http://127.0.0.1:${PORT:-8080}/healthz || exit 1
 ENTRYPOINT ["/usr/bin/tini", "--", "./entrypoint.sh"]
-

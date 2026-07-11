@@ -44,6 +44,8 @@ def positions(request): return response(_latest("snapshot.positions",[]))
 @protected
 def open_orders(request): return response(_latest("snapshot.open_orders",[]))
 @protected
+def completed_orders(request): return response(_latest("snapshot.completed_orders",[]))
+@protected
 def executions(request): return response(_latest("snapshot.executions",[]))
 @csrf_exempt
 @protected
@@ -71,4 +73,3 @@ def ack(request):
 @protected
 def kill_switch(request):
     command=enqueue("KILL_SWITCH",_payload(request),_key(request)); return response({"command_id":command.pk,"status":command.status},202)
-

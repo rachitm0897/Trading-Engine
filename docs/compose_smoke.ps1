@@ -16,8 +16,8 @@ if ($states.Count -ne 5 -or $unhealthy.Count -ne 0) { throw "Compose services di
 $null = Invoke-RestMethod "http://127.0.0.1:8000/healthz"
 $null = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:5173/healthz"
 $null = Invoke-RestMethod "http://127.0.0.1:8080/healthz"
-$strategies = Invoke-RestMethod "http://127.0.0.1:8000/api/v1/strategies/"
-if ($strategies.data.Count -ne 5) { throw "Expected exactly five strategy definitions" }
+$accounts = Invoke-RestMethod "http://127.0.0.1:8000/api/v1/accounts/"
+if (@($accounts.data | Where-Object { $_.account_id -eq "DU-MOCK" }).Count) { throw "Demo broker account must not be created" }
 
 try {
     Invoke-RestMethod "http://127.0.0.1:8080/api/v1/health/"

@@ -9,5 +9,5 @@ chown -R ibgateway:ibgateway /home/ibgateway/.vnc
 envsubst '${PORT} ${APP_BASE_PATH}' < /app/nginx.conf.template > /etc/nginx/nginx.conf
 python manage.py migrate --run-syncdb --noinput
 python manage.py configure_ibc
+chown ibgateway:ibgateway /home/ibgateway/ibc/config.ini
 exec supervisord -c /app/supervisord.conf
-

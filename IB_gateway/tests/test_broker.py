@@ -13,6 +13,7 @@ def test_mock_implements_adapter_and_order_lifecycle():
     assert qualified["qualified"] and placed["status"]=="Submitted"
     assert broker.modify_order({"internal_id":"I1","quantity":2})["quantity"]==2
     assert broker.cancel_order({"internal_id":"I1"})["status"]=="Cancelled"
+    assert broker.refresh_state()["accounts"] == []
 
 def test_command_processing_persists_callback():
     broker=MockBrokerAdapter(); broker.connect()
@@ -23,4 +24,3 @@ def test_command_processing_persists_callback():
 def test_kill_switch_blocks_submission():
     broker=MockBrokerAdapter(); broker.connect(); broker.killed=True
     with pytest.raises(RuntimeError): broker.place_order({"internal_id":"I1"})
-

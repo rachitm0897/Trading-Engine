@@ -31,15 +31,42 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         return MarketOrder(action, qty, tif=tif)
     def place_order(self, payload):
         contract = self.contracts.get(str(payload.get("conid"))) or self._contract(payload)
-        trade = self.ib.placeOrder(contract, self._order(payload)); self.trades[payload["internal_id"]] = trade
+        order = self._order(payload); order.orderRef = payload["internal_id"]
+        if payload.get("account"): order.account = payload["account"]
+        trade = self.ib.placeOrder(contract, order); self.trades[payload["internal_id"]] = trade
         return {"internal_id":payload["internal_id"], "broker_order_id":str(trade.order.orderId), "permanent_id":str(trade.order.permId or ""), "status":trade.orderStatus.status}
+    def _find_trade(self, internal_id):
+        trade = self.trades.get(internal_id)
+        if trade: return trade
+        for candidate in self.ib.trades():
+            if candidate.order.orderRef == internal_id:
+                self.trades[internal_id] = candidate
+                return candidate
+        raise RuntimeError(f"Broker order not found for {internal_id}")
     def modify_order(self, payload):
-        trade = self.trades[payload["internal_id"]]
+        trade = self._find_trade(payload["internal_id"])
         for source, dest in [("quantity","totalQuantity"),("limit_price","lmtPrice"),("stop_price","auxPrice")]:
             if source in payload: setattr(trade.order, dest, float(payload[source]))
         trade = self.ib.placeOrder(trade.contract, trade.order); return {"broker_order_id":str(trade.order.orderId), "status":trade.orderStatus.status}
     def cancel_order(self, payload):
-        trade = self.trades[payload["internal_id"]]; self.ib.cancelOrder(trade.order); return {"broker_order_id":str(trade.order.orderId), "status":"PendingCancel"}
+        trade = self._find_trade(payload["internal_id"]); self.ib.cancelOrder(trade.order); return {"broker_order_id":str(trade.order.orderId), "status":"PendingCancel"}
+    @staticmethod
+    def _contract_data(contract):
+        return {"conid":contract.conId,"symbol":contract.symbol,"local_symbol":contract.localSymbol,"asset_class":contract.secType,"exchange":contract.exchange or contract.primaryExchange,"primary_exchange":contract.primaryExchange,"currency":contract.currency}
+    def _trade_data(self, trade):
+        order, status = trade.order, trade.orderStatus
+        return {**self._contract_data(trade.contract),"account":order.account,"internal_id":order.orderRef,"broker_order_id":str(order.orderId),"permanent_id":str(order.permId or ""),"side":order.action,"quantity":str(order.totalQuantity),"order_type":order.orderType,"limit_price":None if order.lmtPrice in (0,1.7976931348623157e308) else str(order.lmtPrice),"stop_price":None if order.auxPrice in (0,1.7976931348623157e308) else str(order.auxPrice),"time_in_force":order.tif,"status":status.status,"filled_quantity":str(status.filled),"remaining_quantity":str(status.remaining),"average_fill_price":str(status.avgFillPrice or 0)}
     def refresh_state(self):
-        return {"accounts":self.ib.managedAccounts(), "positions":[{"account":p.account,"conid":p.contract.conId,"quantity":p.position,"average_cost":p.avgCost} for p in self.ib.positions()], "open_orders":[{"broker_order_id":t.order.orderId,"status":t.orderStatus.status} for t in self.ib.openTrades()], "executions":[{"execution_id":f.execution.execId,"broker_order_id":f.execution.orderId,"quantity":f.execution.shares,"price":f.execution.price} for f in self.ib.fills()], "reconciled":True}
-
+        summary=[]
+        for value in self.ib.accountValues(): summary.append({"account":value.account,"tag":value.tag,"value":value.value,"currency":value.currency,"model_code":value.modelCode})
+        portfolio_prices={p.contract.conId:p.marketPrice for account in self.ib.managedAccounts() for p in self.ib.portfolio(account)}
+        positions=[{"account":p.account,**self._contract_data(p.contract),"quantity":str(p.position),"average_cost":str(p.avgCost),"market_price":str(portfolio_prices.get(p.contract.conId,0) or 0)} for p in self.ib.positions()]
+        open_trades=self.ib.openTrades(); open_keys={(t.order.clientId,t.order.orderId) for t in open_trades}
+        completed=[t for t in self.ib.trades() if (t.order.clientId,t.order.orderId) not in open_keys]
+        executions=[]
+        for fill in self.ib.fills():
+            report=fill.commissionReport; execution=fill.execution
+            commission=report.commission if report and report.commission < 1e100 else 0
+            executions.append({"execution_id":execution.execId,"broker_order_id":str(execution.orderId),"permanent_id":str(execution.permId or ""),"account":execution.acctNumber,"side":execution.side,"quantity":str(execution.shares),"price":str(execution.price),"executed_at":execution.time.isoformat() if execution.time else None,"commission":str(commission),"currency":report.currency if report else fill.contract.currency,**self._contract_data(fill.contract)})
+        return {"accounts":[{"account_id":account} for account in self.ib.managedAccounts()],"account_summary":summary,"positions":positions,"open_orders":[self._trade_data(t) for t in open_trades],"completed_orders":[self._trade_data(t) for t in completed],"executions":executions,"reconciled":True}
+    def wait(self, seconds): self.ib.sleep(seconds)

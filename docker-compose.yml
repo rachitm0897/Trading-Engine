@@ -40,7 +40,9 @@ services:
       IB_PASSWORD: ${IB_PASSWORD:-}
       IBC_TRADING_MODE: ${IBC_TRADING_MODE:-paper}
       IBKR_CLIENT_ID: ${IBKR_CLIENT_ID:-17}
-      BROKER_ADAPTER: ${BROKER_ADAPTER:-mock}
+      BROKER_ADAPTER: ${BROKER_ADAPTER:-ib_async}
+      BROKER_REFRESH_SECONDS: ${BROKER_REFRESH_SECONDS:-5}
+      TWS_MAJOR_VRSN: ${TWS_MAJOR_VRSN:-1045}
     volumes:
       - gateway_settings:/home/ibgateway/Jts
       - gateway_events:/data
@@ -73,7 +75,6 @@ services:
       IB_GATEWAY_SERVICE_URL: http://ib_gateway:8080/api/v1
       GATEWAY_SERVICE_TOKEN: ${GATEWAY_SERVICE_TOKEN:-local-service-token}
       ALLOW_LIVE_TRADING: ${ALLOW_LIVE_TRADING:-false}
-      BOOTSTRAP_DEMO_DATA: ${BOOTSTRAP_DEMO_DATA:-true}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     networks: [private]
@@ -95,6 +96,7 @@ services:
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:${BACKEND_PORT:-8000}/api/v1}
         VITE_APP_BASE_PATH: ${VITE_APP_BASE_PATH:-/}
+        VITE_GATEWAY_PUBLIC_URL: ${VITE_GATEWAY_PUBLIC_URL:-http://localhost:${GATEWAY_PORT:-8080}}
     environment:
       PORT: 5173
       APP_BASE_PATH: ${FRONTEND_APP_BASE_PATH:-}

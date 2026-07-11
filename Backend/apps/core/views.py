@@ -51,7 +51,10 @@ def portfolios(request):
 
 def positions(request):
     from apps.portfolios.models import PortfolioPosition
-    return response(_serialize(PortfolioPosition.objects.select_related("instrument", "portfolio"), ["portfolio_id", "instrument_id", "quantity", "average_cost", "market_price", "updated_at"]))
+    rows=[]
+    for item in PortfolioPosition.objects.select_related("instrument","portfolio__account"):
+        rows.append({"id":item.pk,"portfolio_id":item.portfolio_id,"portfolio":item.portfolio.name,"account_id":item.portfolio.account.account_id,"instrument_id":item.instrument_id,"symbol":item.instrument.symbol,"asset_class":item.instrument.asset_class,"currency":item.instrument.currency,"quantity":item.quantity,"average_cost":item.average_cost,"market_price":item.market_price,"market_value":item.quantity*item.market_price,"updated_at":item.updated_at})
+    return response(rows)
 
 @csrf_exempt
 def strategies(request):
@@ -84,7 +87,11 @@ def orders(request, internal_id=None, action=None):
     from apps.oms.services import create_order, transition
     from apps.portfolios.models import TradingPortfolio
     from apps.risk.services import evaluate_intent
-    if request.method == "GET": return response(_serialize(Order.objects.all().order_by("-created_at")[:250], ["internal_id", "broker_order_id", "broker_permanent_id", "status", "quantity", "filled_quantity", "average_fill_price", "created_at", "updated_at"]))
+    if request.method == "GET":
+        rows=[]
+        for order in Order.objects.select_related("intent__instrument","intent__portfolio__account").order_by("-created_at")[:250]:
+            rows.append({"id":order.pk,"internal_id":order.internal_id,"account_id":order.intent.portfolio.account.account_id,"symbol":order.intent.instrument.symbol,"side":order.intent.side,"order_type":order.intent.order_type,"time_in_force":order.intent.time_in_force,"broker_order_id":order.broker_order_id,"broker_permanent_id":order.broker_permanent_id,"status":order.status,"quantity":order.quantity,"filled_quantity":order.filled_quantity,"average_fill_price":order.average_fill_price,"created_at":order.created_at,"updated_at":order.updated_at})
+        return response(rows)
     key=request.headers.get("Idempotency-Key")
     if not key: return response(status=400,error={"code":"IDEMPOTENCY_KEY_REQUIRED","message":"Idempotency-Key header is required","details":{}})
     try:
@@ -101,7 +108,7 @@ def orders(request, internal_id=None, action=None):
                 decision,approved,_=evaluate_intent(intent,{"max_quantity":payload.get("max_quantity",quantity),"max_notional":payload.get("max_notional","100000")},state)
                 if decision not in {"APPROVED","RESIZED"}: return response(status=422,error={"code":f"RISK_{decision}","message":"Order did not pass pre-trade risk","details":{"decision":decision}})
                 order=create_order(intent,approved); order=transition(order,"QUEUED","oms",f"order:{order.internal_id}:queued")
-                command=gateway.place_order({"internal_id":order.internal_id,"symbol":instrument.symbol,"asset_class":instrument.asset_class,"exchange":instrument.exchange,"currency":instrument.currency,"side":side,"quantity":str(approved),"order_type":order_type,"limit_price":str(intent.limit_price) if intent.limit_price else None,"stop_price":str(intent.stop_price) if intent.stop_price else None,"time_in_force":tif},f"gateway:place:{order.internal_id}")
+                command=gateway.place_order({"internal_id":order.internal_id,"account":portfolio.account.account_id,"symbol":instrument.symbol,"asset_class":instrument.asset_class,"exchange":instrument.exchange,"currency":instrument.currency,"side":side,"quantity":str(approved),"order_type":order_type,"limit_price":str(intent.limit_price) if intent.limit_price else None,"stop_price":str(intent.stop_price) if intent.stop_price else None,"time_in_force":tif},f"gateway:place:{order.internal_id}")
                 return response({"internal_id":order.internal_id,"status":order.status,"decision":decision,"approved_quantity":approved,"gateway_command":command},status=201)
         order=Order.objects.select_related("intent").get(internal_id=internal_id); gateway=GatewayClient()
         if action=="cancel":
@@ -120,7 +127,10 @@ def orders(request, internal_id=None, action=None):
 
 def executions(request):
     from apps.execution.models import Fill
-    return response(_serialize(Fill.objects.all().order_by("-executed_at")[:250], ["order_id", "execution_id", "quantity", "price", "commission", "currency", "executed_at"]))
+    rows=[]
+    for fill in Fill.objects.select_related("order__intent__instrument","order__intent__portfolio__account").order_by("-executed_at")[:250]:
+        rows.append({"id":fill.pk,"order_id":fill.order.internal_id,"account_id":fill.order.intent.portfolio.account.account_id,"symbol":fill.order.intent.instrument.symbol,"execution_id":fill.execution_id,"quantity":fill.quantity,"price":fill.price,"commission":fill.commission,"currency":fill.currency,"executed_at":fill.executed_at})
+    return response(rows)
 
 def reconciliation(request):
     from apps.reconciliation.models import ReconciliationRun, ReconciliationBreak

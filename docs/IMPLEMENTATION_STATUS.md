@@ -16,9 +16,10 @@ Updated 2026-07-11.
 
 Final verification on 2026-07-11:
 
-- Backend: 14 tests passed.
-- Gateway: 8 tests passed.
+- Backend: 16 tests passed.
+- Gateway: 9 tests passed.
 - Frontend: 4 tests passed; TypeScript and Vite production build passed; production dependency audit reported zero vulnerabilities.
 - `docker compose up --build -d`: passed from clean volumes; all five services healthy.
 - Live mock contract: place, modify, and cancel commands completed and emitted ordered Gateway events.
 - Gateway security: unauthenticated API returned 401; only port 8080 was published; no raw TWS/VNC listener was exposed.
+- Real paper verification: IB Gateway 1045 ran under IBC, noVNC displayed the connected Gateway window, API client 17 connected, and real IBKR account values and positions synchronized into PostgreSQL. Demo/test database and Gateway volumes were removed before verification.

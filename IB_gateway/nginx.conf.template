@@ -12,6 +12,7 @@ http {
 
     location ~ ^(?:${APP_BASE_PATH})?/healthz$ { proxy_pass http://127.0.0.1:8001; include /app/proxy_headers.conf; proxy_set_header X-Forwarded-Prefix "${APP_BASE_PATH}"; }
     location ~ ^(?:${APP_BASE_PATH})?/api/v1/ { proxy_pass http://127.0.0.1:8001; include /app/proxy_headers.conf; proxy_set_header X-Forwarded-Prefix "${APP_BASE_PATH}"; }
+    location ~ ^(?:${APP_BASE_PATH})?/novnc/websockify/?$ { rewrite ^(?:${APP_BASE_PATH})?/novnc/websockify/?$ /websockify break; proxy_pass http://127.0.0.1:6080; include /app/proxy_headers.conf; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection $connection_upgrade; }
     location ~ ^(?:${APP_BASE_PATH})?/novnc/(.*)$ { rewrite ^(?:${APP_BASE_PATH})?/novnc/(.*)$ /$1 break; proxy_pass http://127.0.0.1:6080; include /app/proxy_headers.conf; }
     location ~ ^(?:${APP_BASE_PATH})?/websockify/?$ { rewrite ^(?:${APP_BASE_PATH})?/websockify/?$ /websockify break; proxy_pass http://127.0.0.1:6080; include /app/proxy_headers.conf; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection $connection_upgrade; }
   }

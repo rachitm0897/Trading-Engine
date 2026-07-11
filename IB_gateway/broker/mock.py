@@ -1,3 +1,4 @@
+import time
 from .base import BrokerAdapter
 
 class MockBrokerAdapter(BrokerAdapter):
@@ -17,5 +18,5 @@ class MockBrokerAdapter(BrokerAdapter):
         current = self.orders[payload["internal_id"]]; current.update(payload); current["status"]="Submitted"; return current
     def cancel_order(self, payload):
         current = self.orders[payload["internal_id"]]; current["status"]="Cancelled"; return current
-    def refresh_state(self): return {"accounts":["DU-MOCK"], "positions":[], "open_orders":list(self.orders.values()), "executions":[], "reconciled":True}
-
+    def refresh_state(self): return {"accounts":[], "account_summary":[], "positions":[], "open_orders":list(self.orders.values()), "completed_orders":[], "executions":[], "reconciled":True}
+    def wait(self, seconds): time.sleep(seconds)

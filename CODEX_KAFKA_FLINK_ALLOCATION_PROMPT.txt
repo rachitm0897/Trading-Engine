@@ -1,0 +1,19 @@
+Extend the current implemented IBKR trading-engine repository. Preserve its `Backend/`, `Frontend/` and `IB_gateway/` structure and current execution flow.
+
+Add Kafka as the durable event bus and PyFlink for market normalization, event-time OHLCV bars, SMA, RSI, Donchian channels, momentum, volatility, average volume and stale-price detection. Add Kafka, Flink JobManager and Flink TaskManager to local Docker Compose, but do not create a new public application. PostgreSQL remains the source of truth.
+
+Implement versioned JSON event schemas, a PostgreSQL transactional outbox, idempotent consumers, replay support, dead-letter handling, health metrics and recovery tests. Kafka and Flink must never place orders.
+
+Implement:
+
+1. Rebalancing: aggregate and net strategy targets, calculate target/current weights and drift, round by lot size, suppress small or uneconomic trades, apply turnover, cash and fee buffers, execute sells before buys, recalculate after partial fills and recover safely after restart.
+
+2. Flow allocation: allocate deposits by strategy capital deficits; allocate withdrawals from portfolio cash, strategy cash, strategy surpluses and configured liquidation rules. Enforce strategy minimums, maximums, capacity and idempotency.
+
+3. Single-stock allocation: calculate target, risk, concentration, liquidity, cash and broker quantity limits; approve the minimum valid quantity; add volatility-scaled candidate allocation, caps and renormalization; store every calculation and binding constraint.
+
+Allocation and rebalancing may create only `OrderIntent` records. Existing risk checks, OMS, IB_gateway, ledgers and reconciliation remain mandatory.
+
+Add Backend migrations and APIs plus terminal-style Frontend pages for Streaming, Allocations, Rebalancing and sizing details. Add unit, Flink, integration, restart, replay and Compose smoke tests. Keep all new execution in shadow or paper mode by default.
+
+Follow `KAFKA_FLINK_ALLOCATION_IMPLEMENTATION_PLAN.md`. Update `docs/IMPLEMENTATION_STATUS.md` and document assumptions in `docs/OPEN_QUESTIONS.md`.

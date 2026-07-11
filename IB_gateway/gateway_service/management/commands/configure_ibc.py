@@ -8,12 +8,12 @@ class Command(BaseCommand):
         target=Path("/home/ibgateway/ibc/config.ini")
         target.parent.mkdir(parents=True,exist_ok=True)
         content="\n".join([
-            "[Logon]", f"IbLoginId={os.getenv('IB_USERNAME','')}", f"IbPassword={os.getenv('IB_PASSWORD','')}",
-            f"TradingMode={os.getenv('IBC_TRADING_MODE','paper')}", "AcceptNonBrokerageAccountWarning=yes", "",
-            "[Gateway]", "ReadOnlyApi=no", f"ExistingSessionDetectedAction=primary", f"AcceptIncomingConnectionAction=accept",
-            f"TwoFactorAuthenticationTimeout={os.getenv('IBC_2FA_TIMEOUT','180')}", "",
-            "[AutoRestart]", f"AutoRestartTime={os.getenv('IBC_AUTO_RESTART_TIME','11:45 PM')}",
+            f"IbLoginId={os.getenv('IB_USERNAME','')}", f"IbPassword={os.getenv('IB_PASSWORD','')}",
+            f"TradingMode={os.getenv('IBC_TRADING_MODE','paper')}", "AcceptNonBrokerageAccountWarning=yes",
+            "ReadOnlyApi=no", "ExistingSessionDetectedAction=primary", "AcceptIncomingConnectionAction=accept",
+            "ReloginAfterSecondFactorAuthenticationTimeout=yes",
+            f"SecondFactorAuthenticationTimeout={os.getenv('IBC_2FA_TIMEOUT','180')}",
+            f"AutoRestartTime={os.getenv('IBC_AUTO_RESTART_TIME','11:45 PM')}",
         ])+"\n"
         target.write_text(content,encoding="utf-8"); target.chmod(0o600)
         self.stdout.write("IBC runtime configuration created")
-

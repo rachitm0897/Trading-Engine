@@ -20,4 +20,4 @@ IBC_TRADING_MODE = os.getenv("IBC_TRADING_MODE", "paper").lower()
 IBKR_CLIENT_ID = int(os.getenv("IBKR_CLIENT_ID", "17"))
 BROKER_ADAPTER = os.getenv("BROKER_ADAPTER", "mock")
 TWS_PORT = 4001 if IBC_TRADING_MODE == "live" else 4002
-
+BROKER_REFRESH_SECONDS = max(2, int(os.getenv("BROKER_REFRESH_SECONDS", "5")))

@@ -26,7 +26,7 @@ Local URLs:
 - Gateway health: <http://localhost:8080/healthz>
 - noVNC: <http://localhost:8080/novnc/vnc.html>
 
-Compose defaults to the mock broker and paper mode, so it starts without an IBKR account. To authenticate a real paper account, set `BROKER_ADAPTER=ib_async`, supply secrets outside source control, restart the Gateway, and complete 2FA over noVNC.
+Compose defaults to the real `ib_async` broker adapter in paper mode. Supply IBKR and noVNC secrets in the root `.env`, start the stack, and use noVNC for login/2FA when IBKR requires operator action. Accounts, account values, positions, open/completed orders, and executions are synchronized through the Gateway event buffer into Backend PostgreSQL. No demo portfolio, instrument, account, or order data is created.
 
 ## Tests
 

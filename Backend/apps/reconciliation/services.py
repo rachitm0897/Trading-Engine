@@ -27,7 +27,9 @@ def reconcile(trigger="manual", client=None):
     internal_execs=set(Fill.objects.values_list("execution_id",flat=True))
     for execution_id in sorted(broker_execs-internal_execs): ReconciliationBreak.objects.create(run=run,category="EXECUTION",severity="CRITICAL",internal_value={"execution_id":None},broker_value={"execution_id":execution_id},material=True)
     for execution_id in sorted(internal_execs-broker_execs): ReconciliationBreak.objects.create(run=run,category="EXECUTION",severity="WARNING",internal_value={"execution_id":execution_id},broker_value={"execution_id":None},material=False)
-    material=run.breaks.filter(material=True,resolved=False).exists(); run.status="BLOCKED" if material else "COMPLETED"; run.completed_at=timezone.now(); run.save(update_fields=["status","completed_at"])
+    for category in ("GATEWAY","POSITION","EXECUTION","ORDER","CASH","ACCOUNT"):
+        if not run.breaks.filter(category=category,material=True).exists():
+            ReconciliationBreak.objects.filter(category=category,material=True,resolved=False).exclude(run=run).update(resolved=True,resolution=f"Automatically resolved by clean reconciliation run {run.pk}")
+    material=ReconciliationBreak.objects.filter(material=True,resolved=False).exists(); run.status="BLOCKED" if material else "COMPLETED"; run.completed_at=timezone.now(); run.save(update_fields=["status","completed_at"])
     BrokerAccount.objects.update(is_reconciled=not material)
     return run
-
