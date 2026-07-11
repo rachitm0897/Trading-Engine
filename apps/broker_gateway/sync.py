@@ -1,0 +1,133 @@
+from decimal import Decimal, InvalidOperation
+from django.db import transaction
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+from apps.accounts.models import BrokerAccount
+from apps.execution.models import Fill
+from apps.instruments.models import BrokerContract, Instrument
+from apps.oms.models import Order, OrderIntent, OrderStatusHistory
+from apps.oms.services import apply_execution
+from apps.portfolios.models import PortfolioPosition, TradingPortfolio
+from .client import GatewayClient
+from .models import BrokerSyncCursor
+
+TERMINAL={"FILLED","CANCELLED","REJECTED","EXPIRED"}
+STATUS_MAP={
+    "PendingSubmit":"SUBMITTED","ApiPending":"SUBMITTED","PreSubmitted":"ACKNOWLEDGED",
+    "Submitted":"ACKNOWLEDGED","PendingCancel":"CANCEL_PENDING","ApiCancelled":"CANCELLED",
+    "Cancelled":"CANCELLED","Inactive":"REJECTED","Filled":"FILLED",
+}
+
+def dec(value, default="0"):
+    try: return Decimal(str(value if value not in (None,"") else default).replace(",",""))
+    except (InvalidOperation,ValueError): return Decimal(default)
+
+def ensure_account(account_id):
+    account,_=BrokerAccount.objects.get_or_create(account_id=account_id or "UNKNOWN",defaults={"alias":f"IBKR {account_id or 'UNKNOWN'}"})
+    portfolio,_=TradingPortfolio.objects.get_or_create(account=account,name=f"IBKR {account.account_id}")
+    return account,portfolio
+
+def ensure_instrument(row):
+    conid=int(row.get("conid") or 0)
+    if conid:
+        existing=BrokerContract.objects.select_related("instrument").filter(conid=conid).first()
+        if existing: return existing.instrument
+    symbol=row.get("symbol") or row.get("local_symbol") or (f"CONID-{conid}" if conid else "UNKNOWN")
+    defaults={"asset_class":row.get("asset_class") or "STK","exchange":row.get("exchange") or row.get("primary_exchange") or "SMART","currency":row.get("currency") or "USD"}
+    instrument,_=Instrument.objects.get_or_create(symbol=symbol,**defaults)
+    if conid: BrokerContract.objects.get_or_create(instrument=instrument,defaults={"conid":conid,"primary_exchange":row.get("primary_exchange") or "","local_symbol":row.get("local_symbol") or symbol,"qualified_at":timezone.now()})
+    return instrument
+
+def sync_accounts(rows):
+    for row in rows:
+        account_id=row if isinstance(row,str) else row.get("account_id") or row.get("account")
+        if account_id: ensure_account(account_id)
+
+def sync_account_summary(rows):
+    grouped={}
+    for row in rows:
+        account_id=row.get("account"); tag=row.get("tag")
+        if account_id and tag: grouped.setdefault(account_id,{})[tag]=row
+    for account_id,values in grouped.items():
+        account,_=ensure_account(account_id)
+        def value(*tags):
+            for tag in tags:
+                if tag in values: return dec(values[tag].get("value"))
+            return Decimal(0)
+        base=values.get("NetLiquidation",{}).get("currency") or values.get("TotalCashValue",{}).get("currency") or account.base_currency
+        account.base_currency=base if base and base != "BASE" else account.base_currency
+        account.net_liquidation=value("NetLiquidation")
+        account.available_cash=value("AvailableFunds","TotalCashValue","CashBalance")
+        account.buying_power=value("BuyingPower")
+        account.daily_pnl=value("DailyPnL","RealizedPnL")
+        account.save(update_fields=["base_currency","net_liquidation","available_cash","buying_power","daily_pnl","updated_at"])
+
+def sync_positions(rows):
+    PortfolioPosition.objects.update(quantity=0,average_cost=0,market_price=0)
+    for row in rows:
+        _,portfolio=ensure_account(row.get("account")); instrument=ensure_instrument(row)
+        PortfolioPosition.objects.update_or_create(portfolio=portfolio,instrument=instrument,defaults={"quantity":dec(row.get("quantity")),"average_cost":dec(row.get("average_cost")),"market_price":dec(row.get("market_price"))})
+
+def _external_order(row, instrument, portfolio):
+    identity=row.get("permanent_id") or row.get("broker_order_id")
+    internal=(row.get("internal_id") or f"IBKR-{portfolio.account.account_id}-{identity}")[:64]
+    intent,_=OrderIntent.objects.get_or_create(idempotency_key=f"broker-import:{portfolio.account.account_id}:{identity}",defaults={"portfolio":portfolio,"instrument":instrument,"side":"BUY" if row.get("side") in {"BUY","BOT"} else "SELL","quantity":dec(row.get("quantity")),"order_type":row.get("order_type") or "MKT","limit_price":row.get("limit_price"),"stop_price":row.get("stop_price"),"time_in_force":row.get("time_in_force") or "DAY"})
+    order,created=Order.objects.get_or_create(intent=intent,defaults={"internal_id":internal,"quantity":intent.quantity,"status":"ACKNOWLEDGED","broker_order_id":str(row.get("broker_order_id") or ""),"broker_permanent_id":str(row.get("permanent_id") or "")})
+    if created: OrderStatusHistory.objects.create(order=order,from_status="",to_status="ACKNOWLEDGED",source="broker_import",reason="Discovered at IBKR",event_key=f"broker-import:{portfolio.account.account_id}:{identity}:ack")
+    return order
+
+def _set_broker_status(order,target,event_key):
+    if not target or target=="FILLED" or order.status==target: return
+    if order.status in TERMINAL: return
+    OrderStatusHistory.objects.get_or_create(event_key=event_key,defaults={"order":order,"from_status":order.status,"to_status":target,"source":"broker_sync","reason":"IBKR order status"})
+    order.status=target; order.save(update_fields=["status","updated_at"])
+
+def sync_orders(rows, snapshot):
+    for row in rows:
+        _,portfolio=ensure_account(row.get("account")); instrument=ensure_instrument(row)
+        order=None
+        if row.get("internal_id"): order=Order.objects.filter(internal_id=row["internal_id"]).first()
+        if not order and row.get("permanent_id"): order=Order.objects.filter(broker_permanent_id=str(row["permanent_id"])).first()
+        if not order and row.get("broker_order_id"): order=Order.objects.filter(broker_order_id=str(row["broker_order_id"])).first()
+        order=order or _external_order(row,instrument,portfolio)
+        order.broker_order_id=str(row.get("broker_order_id") or order.broker_order_id)
+        order.broker_permanent_id=str(row.get("permanent_id") or order.broker_permanent_id)
+        order.quantity=max(order.quantity,dec(row.get("quantity")))
+        order.save(update_fields=["broker_order_id","broker_permanent_id","quantity","updated_at"])
+        _set_broker_status(order,STATUS_MAP.get(row.get("status")),f"broker-status:{snapshot}:{order.internal_id}:{row.get('status')}:{row.get('filled_quantity')}")
+
+def sync_executions(rows):
+    for row in rows:
+        if not row.get("execution_id") or Fill.objects.filter(execution_id=row["execution_id"]).exists(): continue
+        _,portfolio=ensure_account(row.get("account")); instrument=ensure_instrument(row)
+        order=None
+        if row.get("permanent_id"): order=Order.objects.filter(broker_permanent_id=str(row["permanent_id"])).first()
+        if not order and row.get("broker_order_id"): order=Order.objects.filter(broker_order_id=str(row["broker_order_id"])).first()
+        if not order:
+            synthetic={**row,"internal_id":"","quantity":row.get("quantity"),"order_type":"MKT","time_in_force":"DAY","status":"Submitted"}
+            order=_external_order(synthetic,instrument,portfolio)
+        if order.status in {"CREATED","RISK_APPROVED","QUEUED","BROKER_BLOCKED","SUBMITTED","UNKNOWN"}:
+            OrderStatusHistory.objects.get_or_create(event_key=f"broker-execution-ready:{order.internal_id}",defaults={"order":order,"from_status":order.status,"to_status":"ACKNOWLEDGED","source":"broker_sync","reason":"Execution received from IBKR"})
+            order.status="ACKNOWLEDGED"; order.quantity=max(order.quantity,order.filled_quantity+dec(row.get("quantity"))); order.save(update_fields=["status","quantity","updated_at"])
+        executed_at=parse_datetime(row.get("executed_at") or "") or timezone.now()
+        apply_execution(order,{**row,"quantity":str(dec(row.get("quantity"))),"price":str(dec(row.get("price"))),"commission":str(dec(row.get("commission"))),"executed_at":executed_at})
+
+def process_snapshot(event):
+    event_type=event.get("event_type",""); rows=event.get("payload",{}).get("value",[])
+    if event_type=="snapshot.accounts": sync_accounts(rows)
+    elif event_type=="snapshot.account_summary": sync_account_summary(rows)
+    elif event_type=="snapshot.positions": sync_positions(rows)
+    elif event_type=="snapshot.open_orders": sync_orders(rows,"open")
+    elif event_type=="snapshot.completed_orders": sync_orders(rows,"completed")
+    elif event_type=="snapshot.executions": sync_executions(rows)
+
+def sync_events(client=None):
+    client=client or GatewayClient()
+    with transaction.atomic():
+        cursor,_=BrokerSyncCursor.objects.select_for_update().get_or_create(name="gateway-events")
+        events=client.events(cursor.last_sequence) or []
+        for event in events:
+            process_snapshot(event); cursor.last_sequence=event["id"]
+        cursor.last_synced_at=timezone.now(); cursor.last_error=""; cursor.save(update_fields=["last_sequence","last_synced_at","last_error"])
+    if events: client.ack_events(cursor.last_sequence)
+    return len(events)
