@@ -1,2 +1,2 @@
 export {default} from './app/App'
-export {appBasename} from './app/App'
+export {appBasename, normalizeBasename} from './app/App'
