@@ -51,6 +51,19 @@ def test_market_subscription_requires_exact_contract(client):
     good=client.post("/api/v1/market-data/subscriptions/",json.dumps(payload),content_type="application/json",**AUTH)
     assert good.status_code==202 and GatewayCommand.objects.get().command_type=="SUBSCRIBE_MARKET_DATA"
 
+def test_market_subscription_cancel_preserves_route_action(client):
+    response=client.post(
+        "/api/v1/market-data/subscriptions/cancel/",
+        json.dumps({"subscription_key":"1:1m"}),
+        content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="cancel-market-data:1:1m",
+        **AUTH,
+    )
+    assert response.status_code==202
+    command=GatewayCommand.objects.get(pk=response.json()["data"]["command_id"])
+    assert command.command_type=="CANCEL_MARKET_DATA"
+    assert command.payload=={"subscription_key":"1:1m"}
+
 def test_no_credential_leakage(client,settings):
     settings.IB_USERNAME="SECRET_USER"; settings.IB_PASSWORD="SECRET_PASSWORD"
     content=client.get("/api/v1/session/",**AUTH).content.decode()

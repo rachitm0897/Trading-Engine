@@ -9,6 +9,6 @@ api=[
  path("orders/",views.orders),path("orders/<str:internal_id>/",views.orders),path("orders/<str:internal_id>/cancel/",views.cancel),
  path("events/",views.events),path("events/ack/",views.ack),path("kill-switch/",views.kill_switch),
 ]
-urlpatterns=[path("healthz",views.healthz)]+[path(f"api/v1/{p.pattern}",p.callback) for p in api]
+urlpatterns=[path("healthz",views.healthz)]+[path(f"api/v1/{p.pattern}",p.callback,p.default_args) for p in api]
 if settings.APP_BASE_PATH:
- prefix=settings.APP_BASE_PATH.strip("/")+"/"; urlpatterns += [path(prefix+"healthz",views.healthz)]+[path(prefix+f"api/v1/{p.pattern}",p.callback) for p in api]
+ prefix=settings.APP_BASE_PATH.strip("/")+"/"; urlpatterns += [path(prefix+"healthz",views.healthz)]+[path(prefix+f"api/v1/{p.pattern}",p.callback,p.default_args) for p in api]
