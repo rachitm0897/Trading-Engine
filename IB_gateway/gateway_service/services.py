@@ -19,6 +19,8 @@ def process_command(command, adapter):
         result = adapter.connect(); state = adapter.refresh_state(); result.update(state)
     elif command.command_type == "SEARCH_CONTRACTS": result = {"results":adapter.search_contracts(command.payload["query"])}
     elif command.command_type == "QUALIFY": result = adapter.qualify_contract(command.payload)
+    elif command.command_type == "SUBSCRIBE_MARKET_DATA": result = adapter.subscribe_market_data(command.payload)
+    elif command.command_type == "CANCEL_MARKET_DATA": result = adapter.cancel_market_data(command.payload)
     elif command.command_type == "PLACE_ORDER": result = adapter.place_order(command.payload)
     elif command.command_type == "MODIFY_ORDER": result = adapter.modify_order(command.payload)
     elif command.command_type == "CANCEL_ORDER": result = adapter.cancel_order(command.payload)

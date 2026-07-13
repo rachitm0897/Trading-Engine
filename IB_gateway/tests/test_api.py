@@ -44,6 +44,13 @@ def test_contract_search_and_command_detail(client):
     detail=client.get(f"/api/v1/commands/{command.pk}/",**AUTH).json()["data"]
     assert detail["status"]=="COMPLETED" and detail["result"]["results"][0]["conid"]==123
 
+def test_market_subscription_requires_exact_contract(client):
+    bad=client.post("/api/v1/market-data/subscriptions/",json.dumps({"symbol":"AAPL"}),content_type="application/json",**AUTH)
+    assert bad.status_code==400
+    payload={"subscription_key":"1:1m","instrument_id":1,"conid":265598,"symbol":"AAPL","timeframe":"1m"}
+    good=client.post("/api/v1/market-data/subscriptions/",json.dumps(payload),content_type="application/json",**AUTH)
+    assert good.status_code==202 and GatewayCommand.objects.get().command_type=="SUBSCRIBE_MARKET_DATA"
+
 def test_no_credential_leakage(client,settings):
     settings.IB_USERNAME="SECRET_USER"; settings.IB_PASSWORD="SECRET_PASSWORD"
     content=client.get("/api/v1/session/",**AUTH).content.decode()

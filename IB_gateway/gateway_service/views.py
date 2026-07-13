@@ -24,7 +24,7 @@ def _key(request): return request.headers.get("Idempotency-Key") or str(uuid.uui
 @protected
 def health(request):
     session=GatewaySession.objects.filter(pk=1).first()
-    return response({"connected":bool(session and session.state=="CONNECTED"),"reconciled":bool(session and session.reconciled),"mode":settings.IBC_TRADING_MODE,"last_callback":session.last_callback_at if session else None,"worker":session.connection_owner if session else ""})
+    return response({"connected":bool(session and session.state=="CONNECTED"),"reconciled":bool(session and session.reconciled),"mode":settings.IBC_TRADING_MODE,"last_callback":session.last_callback_at if session else None,"worker":session.connection_owner if session else "","connection_generation":str(session.connection_generation) if session else ""})
 @protected
 def session(request):
     value=GatewaySession.objects.filter(pk=1).values().first() or {"state":"DISCONNECTED","mode":settings.IBC_TRADING_MODE,"reconciled":False}
@@ -58,6 +58,15 @@ def contract_search(request):
 @protected
 def qualify(request):
     command=enqueue("QUALIFY",_payload(request),_key(request)); return response({"command_id":command.pk,"status":command.status},202)
+@csrf_exempt
+@protected
+def market_subscription(request, action=None):
+    payload=_payload(request)
+    required=("subscription_key",) if action=="cancel" else ("subscription_key","instrument_id","conid","symbol","timeframe")
+    missing=[key for key in required if payload.get(key) in (None,"")]
+    if missing:return response(status=400,error={"code":"INVALID_SUBSCRIPTION","message":f"Missing fields: {','.join(missing)}","details":{}})
+    command=enqueue("CANCEL_MARKET_DATA" if action=="cancel" else "SUBSCRIBE_MARKET_DATA",payload,_key(request))
+    return response({"command_id":command.pk,"status":command.status},202)
 @csrf_exempt
 @protected
 def orders(request, internal_id=None):

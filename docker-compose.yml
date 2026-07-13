@@ -122,6 +122,7 @@ services:
       IBKR_CLIENT_ID: ${IBKR_CLIENT_ID:-17}
       BROKER_ADAPTER: ${BROKER_ADAPTER:-ib_async}
       BROKER_REFRESH_SECONDS: ${BROKER_REFRESH_SECONDS:-5}
+      GATEWAY_DB_PATH: /data/gateway.sqlite3
       TWS_MAJOR_VRSN: ${TWS_MAJOR_VRSN:-1045}
     volumes:
       - gateway_settings:/home/ibgateway/Jts

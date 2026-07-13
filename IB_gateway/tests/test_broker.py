@@ -28,6 +28,16 @@ def test_search_command_returns_multiple_exact_contracts():
     process_command(command,broker);command.refresh_from_db()
     assert command.status=="COMPLETED" and len(command.result["results"])==2
 
+def test_market_subscription_commands_are_idempotent():
+    broker=MockBrokerAdapter();broker.connect();payload={"subscription_key":"1:1m","instrument_id":1,"conid":123,
+        "symbol":"AAPL","timeframe":"1m","historical_bars":20}
+    first=GatewayCommand.objects.create(command_type="SUBSCRIBE_MARKET_DATA",idempotency_key="sub:1",payload=payload)
+    process_command(first,broker)
+    assert first.result["state"]=="ACTIVE" and len(broker.subscriptions)==1
+    cancel=GatewayCommand.objects.create(command_type="CANCEL_MARKET_DATA",idempotency_key="cancel:1",payload={"subscription_key":"1:1m"})
+    process_command(cancel,broker)
+    assert cancel.result["state"]=="INACTIVE" and not broker.subscriptions
+
 def test_kill_switch_blocks_submission():
     broker=MockBrokerAdapter(); broker.connect(); broker.killed=True
     with pytest.raises(RuntimeError): broker.place_order({"internal_id":"I1"})

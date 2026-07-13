@@ -1,4 +1,4 @@
-import fcntl, os, socket, time
+import fcntl, os, socket, time, uuid
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import close_old_connections
@@ -22,11 +22,15 @@ class Command(BaseCommand):
                 persist_event(f"snapshot:{key}:{stamp}",f"snapshot.{key}",{"value":state.get(key,[])})
             GatewaySession.objects.filter(pk=1).update(state="CONNECTED",reconciled=bool(state.get("reconciled")),last_callback_at=timezone.now())
             GatewayHealthSnapshot.objects.create(connected=True,reconciled=bool(state.get("reconciled")),details={"accounts":len(state.get("accounts",[])),"positions":len(state.get("positions",[])),"open_orders":len(state.get("open_orders",[])),"executions":len(state.get("executions",[]))})
+        def publish_market_events():
+            for payload in adapter.drain_market_events():
+                persist_event(f"market:{payload['source_event_id']}","market.raw",payload)
         while True:
             close_old_connections()
             try:
                 if not adapter.is_connected():
                     adapter.connect(); state=adapter.refresh_state()
+                    GatewaySession.objects.filter(pk=1).update(connection_generation=uuid.uuid4())
                     publish_snapshot(state); last_refresh=time.monotonic()
                     persist_event(f"connected:{time.time_ns()}","session.connected",{"reconciled":state.get("reconciled",False)})
                     backoff=1
@@ -37,8 +41,10 @@ class Command(BaseCommand):
                     try: process_command(command,adapter)
                     except Exception as exc:
                         command.status="FAILED"; command.error=str(exc)[:1000]; command.save(update_fields=["status","error","updated_at"])
-                        persist_event(f"command:{command.pk}:failed","command.failed",{"command_id":command.pk,"error":str(exc)[:500]})
+                        persist_event(f"command:{command.pk}:failed","command.failed",{"command_id":command.pk,"command_type":command.command_type,
+                            "payload":command.payload,"error":str(exc)[:500]})
                 else: adapter.wait(0.2)
+                publish_market_events()
             except Exception as exc:
                 GatewaySession.objects.filter(pk=1).update(state="DISCONNECTED",reconciled=False,last_callback_at=timezone.now())
                 GatewayHealthSnapshot.objects.create(connected=False,reconciled=False,details={"error":str(exc)[:500]})

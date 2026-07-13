@@ -1,10 +1,12 @@
 from django.conf import settings
+from collections import deque
+from datetime import date, datetime, time, timedelta, timezone
 from .base import BrokerAdapter
 
 class IBAsyncBrokerAdapter(BrokerAdapter):
     def __init__(self):
         from ib_async import IB
-        self.ib = IB(); self.contracts = {}; self.trades = {}
+        self.ib = IB(); self.contracts = {}; self.trades = {}; self.market_subscriptions={};self.market_events=deque()
     def connect(self):
         self.ib.connect("127.0.0.1", settings.TWS_PORT, clientId=settings.IBKR_CLIENT_ID, readonly=False, timeout=15)
         return {"connected":self.ib.isConnected()}
@@ -45,6 +47,54 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         if not qualified: raise RuntimeError("Contract qualification returned no result")
         contract = qualified[0]; self.contracts[str(contract.conId)] = contract
         return {**self._contract_data(contract, self._details(contract)), "qualified":True}
+    @staticmethod
+    def _timeframe(value):
+        mapping={"1m":("1 min",60),"5m":("5 mins",300),"15m":("15 mins",900),"1h":("1 hour",3600),"1d":("1 day",86400)}
+        if value not in mapping:raise ValueError(f"Unsupported IBKR market-data timeframe {value}")
+        return mapping[value]
+    @staticmethod
+    def _bar_time(bar):
+        value=getattr(bar,"date",None) or getattr(bar,"time",None)
+        if isinstance(value,date) and not isinstance(value,datetime):value=datetime.combine(value,time.min,tzinfo=timezone.utc)
+        if value.tzinfo is None:value=value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    def _market_payload(self,bar,payload,source,timeframe,seconds):
+        start=self._bar_time(bar);end=start+timedelta(seconds=seconds)
+        def field(primary,fallback=None):return getattr(bar,primary,getattr(bar,fallback,0) if fallback else 0)
+        stable=f"{payload['conid']}:{timeframe}:{start.isoformat()}"
+        return {"source_event_id":stable,"subscription_key":payload["subscription_key"],
+            "instrument_id":int(payload["instrument_id"]),"conid":int(payload["conid"]),"symbol":payload["symbol"],
+            "exchange":payload.get("exchange","SMART"),"currency":payload.get("currency","USD"),
+            "event_kind":"BAR","timeframe":timeframe,"event_time":end.isoformat(),"window_start":start.isoformat(),
+            "window_end":end.isoformat(),"open":str(field("open","open_")),"high":str(field("high","high")),
+            "low":str(field("low","low")),"close":str(field("close","close")),
+            "volume":str(max(0,field("volume","volume"))),"is_final":True,"source":source}
+    def subscribe_market_data(self,payload):
+        key=payload["subscription_key"]
+        if key in self.market_subscriptions:return {"subscription_key":key,"state":"ACTIVE","historical_bar_count":0,"reused":True}
+        qualified=self.ib.qualifyContracts(self._contract(payload))
+        if not qualified:raise RuntimeError("Selected IBKR contract could not be qualified for market data")
+        contract=qualified[0];self.contracts[str(contract.conId)]=contract
+        bar_size,seconds=self._timeframe(payload["timeframe"]);count=max(1,int(payload.get("historical_bars",1)))
+        days=max(1,(count*seconds+86399)//86400 + (2 if seconds>=86400 else 0))
+        historical=self.ib.reqHistoricalData(contract,endDateTime="",durationStr=f"{days} D",barSizeSetting=bar_size,
+            whatToShow=payload.get("what_to_show","TRADES"),useRTH=bool(payload.get("use_rth",False)),formatDate=2,keepUpToDate=False)
+        if not historical:raise RuntimeError("IBKR historical request returned no bars; check contract and market-data permissions")
+        for bar in list(historical)[-count:]:self.market_events.append(self._market_payload(bar,payload,"ibkr_historical",payload["timeframe"],seconds))
+        live=self.ib.reqRealTimeBars(contract,5,payload.get("what_to_show","TRADES"),bool(payload.get("use_rth",False)))
+        def on_update(bars,*_args):
+            if bars:self.market_events.append(self._market_payload(bars[-1],payload,"ibkr_live","5s",5))
+        live.updateEvent += on_update
+        self.market_subscriptions[key]={"live":live,"handler":on_update,"payload":dict(payload)}
+        return {"subscription_key":key,"state":"ACTIVE","historical_bar_count":min(len(historical),count),"conid":contract.conId}
+    def cancel_market_data(self,payload):
+        key=payload["subscription_key"];current=self.market_subscriptions.pop(key,None)
+        if current:self.ib.cancelRealTimeBars(current["live"])
+        return {"subscription_key":key,"state":"INACTIVE"}
+    def drain_market_events(self):
+        events=[]
+        while self.market_events:events.append(self.market_events.popleft())
+        return events
     def _order(self, payload):
         from ib_async import MarketOrder, LimitOrder, StopOrder, StopLimitOrder
         action, qty, tif = payload["side"], float(payload["quantity"]), payload.get("time_in_force", "DAY")

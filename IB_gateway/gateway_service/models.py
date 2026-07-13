@@ -1,15 +1,17 @@
 from django.db import models
+import uuid
 
 class GatewaySession(models.Model):
     state = models.CharField(max_length=32, default="DISCONNECTED")
     mode = models.CharField(max_length=8, default="paper")
     reconciled = models.BooleanField(default=False)
     connection_owner = models.CharField(max_length=128, blank=True)
+    connection_generation = models.UUIDField(default=uuid.uuid4)
     last_callback_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
 class GatewayCommand(models.Model):
-    TYPES = [(x,x) for x in ["RECONNECT","SEARCH_CONTRACTS","QUALIFY","PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER","KILL_SWITCH","REFRESH"]]
+    TYPES = [(x,x) for x in ["RECONNECT","SEARCH_CONTRACTS","QUALIFY","SUBSCRIBE_MARKET_DATA","CANCEL_MARKET_DATA","PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER","KILL_SWITCH","REFRESH"]]
     command_type = models.CharField(max_length=32, choices=TYPES)
     idempotency_key = models.CharField(max_length=128, unique=True)
     payload = models.JSONField(default=dict)
