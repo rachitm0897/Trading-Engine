@@ -138,7 +138,9 @@ services:
     restart: unless-stopped
 
   backend:
-    build: ./Backend
+    build:
+      context: .
+      dockerfile: Backend/Dockerfile
     environment:
       PORT: 8000
       APP_BASE_PATH: ${BACKEND_APP_BASE_PATH:-}
