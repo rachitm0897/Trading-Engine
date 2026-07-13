@@ -55,6 +55,28 @@ def apply_execution(order, execution):
     CashLedgerEntry.objects.create(portfolio=order.intent.portfolio, amount=cash, currency=fill.currency, kind="FILL", reference=fill.execution_id, idempotency_key=f"cash:{fill.execution_id}")
     position, _ = PortfolioPosition.objects.select_for_update().get_or_create(portfolio=order.intent.portfolio, instrument=order.intent.instrument)
     position.quantity += signed_qty; position.market_price = fill.price; position.save(update_fields=["quantity", "market_price", "updated_at"])
+    attributions=list(order.intent.attributions.select_for_update().select_related("strategy_instance"))
+    if attributions and order.quantity:
+        from apps.strategies.models import StrategyAttributedPosition
+        gross_allocated=sum((abs(Decimal(x.allocated_quantity)) for x in attributions),Decimal(0)) or Decimal(1)
+        for attribution in attributions:
+            fill_fraction=fill.quantity/Decimal(order.quantity)
+            attributed_signed=Decimal(attribution.allocated_quantity)*fill_fraction
+            cost_share=abs(Decimal(attribution.allocated_quantity))/gross_allocated
+            attribution.allocated_value+=abs(attributed_signed)*fill.price
+            attribution.allocated_cost+=fill.commission*cost_share
+            attribution.save(update_fields=["allocated_value","allocated_cost"])
+            if attribution.strategy_instance_id:
+                strategy_position,_=StrategyAttributedPosition.objects.select_for_update().get_or_create(
+                    strategy_instance=attribution.strategy_instance,portfolio=order.intent.portfolio,instrument=order.intent.instrument)
+                prior=Decimal(strategy_position.quantity);updated=prior+attributed_signed
+                if attributed_signed>0 and updated>0:
+                    strategy_position.average_cost=((Decimal(strategy_position.average_cost)*max(prior,Decimal(0)))+
+                        fill.price*attributed_signed)/updated
+                elif updated==0:
+                    strategy_position.average_cost=0
+                strategy_position.quantity=updated
+                strategy_position.save(update_fields=["quantity","average_cost","updated_at"])
     AuditEvent.objects.create(event_type="fill.recorded", actor="broker", aggregate_type="order", aggregate_id=order.internal_id, data={"execution_id": fill.execution_id}, idempotency_key=f"audit:fill:{fill.execution_id}")
     OutboxEvent.objects.create(topic="executions.events.v1",event_type="execution.recorded",aggregate_type="account",
         aggregate_id=order.intent.portfolio.account.account_id,partition_key=order.intent.portfolio.account.account_id,

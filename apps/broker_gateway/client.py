@@ -40,3 +40,4 @@ class GatewayClient:
     def place_order(self, payload, key): return self.request("POST", "orders/", json=payload, idempotency_key=key, retries=0)
     def modify_order(self, internal_id, payload, key): return self.request("PATCH", f"orders/{internal_id}/", json=payload, idempotency_key=key, retries=0)
     def cancel_order(self, internal_id, key): return self.request("POST", f"orders/{internal_id}/cancel/", json={}, idempotency_key=key, retries=0)
+    def qualify_contract(self, payload, key): return self.request("POST", "contracts/qualify/", json=payload, idempotency_key=key, retries=0)

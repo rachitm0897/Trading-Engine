@@ -53,15 +53,18 @@ def calculate_limits(*, target_quantity, entry_price, stop_price, nav, available
 
 @transaction.atomic
 def size_and_record(policy, instrument, side, target_quantity, entry_price, stop_price, nav,
-                    available_cash, adv, broker_limits=None, order_intent=None, idempotency_key=None):
+                    available_cash, adv, broker_limits=None, order_intent=None, idempotency_key=None,
+                    strategy_limits=None):
     if idempotency_key:
         existing = PositionSizingDecision.objects.filter(idempotency_key=idempotency_key).first()
         if existing:
             return existing
     broker_limits = broker_limits or {}
+    strategy_limits = strategy_limits or {}
     result = calculate_limits(target_quantity=target_quantity, entry_price=entry_price, stop_price=stop_price,
         nav=nav, available_cash=available_cash, adv=adv, lot_size=instrument.lot_size,
-        max_loss_fraction=policy.max_loss_fraction, max_weight=policy.max_instrument_weight,
+        multiplier=instrument.multiplier,max_loss_fraction=strategy_limits.get("max_loss_fraction",policy.max_loss_fraction),
+        max_weight=min(D(policy.max_instrument_weight),D(str(strategy_limits.get("max_weight",policy.max_instrument_weight)))),
         participation=policy.max_participation_rate, side=side,
         minimum_stop_fraction=policy.minimum_stop_fraction, **broker_limits)
     decision = PositionSizingDecision.objects.create(policy=policy, order_intent=order_intent, instrument=instrument,

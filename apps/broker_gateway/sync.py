@@ -113,7 +113,10 @@ def sync_executions(rows):
         apply_execution(order,{**row,"quantity":str(dec(row.get("quantity"))),"price":str(dec(row.get("price"))),"commission":str(dec(row.get("commission"))),"executed_at":executed_at})
 
 def process_snapshot(event):
-    event_type=event.get("event_type",""); rows=event.get("payload",{}).get("value",[])
+    event_type=event.get("event_type","");payload=event.get("payload",{})
+    if event_type=="command.qualify.completed":
+        ensure_instrument(payload);return
+    rows=payload.get("value",[])
     if event_type=="snapshot.accounts": sync_accounts(rows)
     elif event_type=="snapshot.account_summary": sync_account_summary(rows)
     elif event_type=="snapshot.positions": sync_positions(rows)

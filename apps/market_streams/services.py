@@ -18,6 +18,7 @@ def persist_bar(envelope):
         "close": Decimal(payload["close"]), "volume": Decimal(payload.get("volume", "0")),
         "is_final": payload.get("is_final", False), "source_event_count": payload.get("source_event_count", 0),
         "produced_at": _dt(envelope["produced_at"]),})
+    evaluate_ready_strategies(bar)
     return {"bar_id": bar.pk}
 
 
@@ -27,8 +28,50 @@ def persist_indicator(envelope):
         parameter_version=payload.get("parameter_version", 1), defaults={
             "instrument_id": payload["instrument_id"], "indicator": payload["indicator"],
             "value": Decimal(payload["value"]) if payload.get("value") is not None else None,
-            "parameters": payload.get("parameters", {}), "event_time": _dt(payload["event_time"])})
+            "previous_value": Decimal(payload["previous_value"]) if payload.get("previous_value") is not None else None,
+            "parameters": payload.get("parameters", {}), "parameters_hash": payload.get("parameters_hash", ""),
+            "timeframe": payload.get("timeframe", ""), "source_bar_id": payload.get("source_bar_id", ""),
+            "source_bar_version": payload.get("source_bar_version", 1), "is_final": payload.get("is_final", True),
+            "event_time": _dt(payload["event_time"])})
+    bar=MarketBar.objects.filter(bar_id=item.source_bar_id,version=item.source_bar_version,is_final=True).first()
+    if bar:evaluate_ready_strategies(bar)
     return {"indicator_id": item.pk}
+
+
+def _indicator_output_name(requirement):
+    role=requirement.parameters.get("role")
+    if requirement.name=="donchian":return "donchian_upper" if role=="entry" else "donchian_lower"
+    return f"{requirement.name}_{role}" if role else requirement.name
+
+
+def evaluate_ready_strategies(bar):
+    """Evaluate active versions only after their exact final-bar inputs are persisted."""
+    if not bar.is_final:return 0
+    from apps.strategies.framework import evaluate_instance
+    from apps.strategies.models import StrategyInstance
+    instances=StrategyInstance.objects.filter(enabled=True,instrument=bar.instrument,timeframe=bar.interval,
+        state__in=["WARMING_UP","FLAT","ENTRY_PENDING","PARTIALLY_LONG","LONG","EXIT_PENDING",
+                   "PARTIALLY_SHORT","SHORT"]).select_related("definition","instrument","portfolio","legacy_strategy")
+    evaluated=0
+    for instance in instances:
+        bindings=instance.input_bindings.filter(active=True,strategy_version__version=instance.version).select_related("requirement")
+        indicator_requirements=[x.requirement for x in bindings if x.requirement.input_type=="INDICATOR"]
+        values={};previous={};ready=True
+        for requirement in indicator_requirements:
+            value=IndicatorValue.objects.filter(instrument=instance.instrument,timeframe=instance.timeframe,
+                source_bar_id=bar.bar_id,source_bar_version=bar.version,parameters_hash=requirement.parameters_hash,
+                is_final=True).order_by("-created_at").first()
+            if value is None:ready=False;break
+            name=_indicator_output_name(requirement);values[name]=value.value;previous[name]=value.previous_value
+        if not ready:continue
+        payload={"bar_id":bar.bar_id,"event_id":f"{bar.bar_id}:{bar.version}","instrument_id":bar.instrument_id,
+            "interval":bar.interval,"window_start":bar.window_start.isoformat(),"window_end":bar.window_end.isoformat(),
+            "open":str(bar.open),"high":str(bar.high),"low":str(bar.low),"close":str(bar.close),"volume":str(bar.volume),
+            "version":bar.version,"is_final":True}
+        evaluate_instance(instance,bar=payload,indicators=values,previous_indicators=previous,
+            event_id=payload["event_id"],source_data_version=bar.version,event_time=bar.window_end)
+        evaluated+=1
+    return evaluated
 
 
 def persist_quality(envelope):

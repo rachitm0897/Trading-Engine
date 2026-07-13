@@ -105,6 +105,8 @@ class TargetPortfolioPosition(models.Model):
 class OrderIntentAttribution(models.Model):
     order_intent = models.ForeignKey("oms.OrderIntent", on_delete=models.PROTECT, related_name="attributions")
     strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.PROTECT)
+    strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.PROTECT, null=True, blank=True)
+    strategy_version = models.ForeignKey("strategies.StrategyVersion", on_delete=models.PROTECT, null=True, blank=True)
     target_delta = models.DecimalField(max_digits=24, decimal_places=8)
     allocated_quantity = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     allocated_value = models.DecimalField(max_digits=24, decimal_places=8, default=0)

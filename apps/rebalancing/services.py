@@ -15,12 +15,16 @@ def aggregate_targets(portfolio):
     allocations = StrategyAllocation.objects.filter(portfolio=portfolio, strategy__enabled=True,
         strategy__kill_switch=False).select_related("strategy")
     for allocation in allocations:
-        latest = allocation.strategy.runs.filter(status="COMPLETED").order_by("-completed_at").first()
-        if not latest:
-            continue
         nav=D(portfolio.account.net_liquidation)
         capital_share = D(allocation.strategy.allocated_capital)/nav if nav>0 and allocation.strategy.allocated_capital>0 else D(allocation.weight)
-        for target in latest.targets.all():
+        instance=getattr(allocation.strategy,"strategy_instance",None)
+        if instance:
+            latest_target=instance.targets.filter(run__status="COMPLETED",status="ACTIVE").order_by("-created_at").first()
+            targets=[latest_target] if latest_target else []
+        else:
+            latest=allocation.strategy.runs.filter(status="COMPLETED").order_by("-completed_at").first()
+            targets=list(latest.targets.all()) if latest else []
+        for target in targets:
             contribution = D(target.target_weight) * capital_share
             totals[target.instrument_id] = totals.get(target.instrument_id, D(0)) + contribution
             attribution.setdefault(target.instrument_id, {})[allocation.strategy_id] = contribution
@@ -48,6 +52,35 @@ def _reference_prices(portfolio, prices, strict):
         elif strict:
             unusable.add(state.instrument_id)
     return result, unusable
+
+
+def _net_order_policy(portfolio, contributions, reference_price, side):
+    """Select the highest-priority contributing policy for one net broker order."""
+    allocations=StrategyAllocation.objects.filter(portfolio=portfolio,strategy_id__in=contributions).select_related(
+        "strategy__strategy_instance__order_policy").order_by("priority","strategy_id")
+    for allocation in allocations:
+        instance=getattr(allocation.strategy,"strategy_instance",None)
+        policy=instance.order_policy if instance else None
+        if not policy:continue
+        limit=None
+        if policy.order_type=="LMT":
+            offset=D(policy.limit_offset_bps)/D(10000)
+            limit=reference_price*(D(1)+offset if side=="BUY" else D(1)-offset)
+        return policy.order_type,policy.time_in_force,limit
+    return "MKT","DAY",None
+
+
+def _net_strategy_risk_limits(portfolio, contributions, reference_price, target_weight):
+    policies=[]
+    for allocation in StrategyAllocation.objects.filter(portfolio=portfolio,strategy_id__in=contributions).select_related(
+            "strategy__strategy_instance__risk_policy"):
+        instance=getattr(allocation.strategy,"strategy_instance",None)
+        if instance and instance.risk_policy:policies.append(instance.risk_policy)
+    if not policies:return {},{}
+    maximum_quantity=min(min(D(x.maximum_quantity),D(x.maximum_notional)/reference_price) for x in policies)
+    broker={"broker_max_quantity":maximum_quantity,"short_available":target_weight>=0 or all(x.allow_short for x in policies)}
+    strategy={"max_weight":min(D(x.maximum_weight) for x in policies)}
+    return broker,strategy
 
 
 @transaction.atomic
@@ -134,8 +167,18 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
                 continue
             is_buy = item["delta"] > 0
             eligible = not (policy.sell_before_buy and is_buy and run.phase == "SELLS")
+            contributions = attribution.get(item["instrument"].pk, {})
+            order_type,tif,limit_price=_net_order_policy(portfolio,contributions,item["price"],"BUY" if is_buy else "SELL")
+            version_ids=[]
+            for strategy_id in contributions:
+                strategy=StrategyAllocation.objects.filter(portfolio=portfolio,strategy_id=strategy_id).select_related("strategy").first().strategy
+                instance=getattr(strategy,"strategy_instance",None)
+                if instance:
+                    version=instance.versions.filter(version=instance.version).first()
+                    if version:version_ids.append(version.pk)
             intent = OrderIntent.objects.create(rebalance=run, portfolio=portfolio, instrument=item["instrument"],
                 side="BUY" if is_buy else "SELL", quantity=abs(item["delta"]), reference_price=item["price"],
+                order_type=order_type,time_in_force=tif,limit_price=limit_price,strategy_version_snapshot=sorted(version_ids),
                 idempotency_key=f"rebalance:{run.pk}:instrument:{item['instrument'].pk}:v1", source="REBALANCE",
                 mode="PAPER", requires_fresh_price=True, execution_priority=item["target_row"].rank, eligible=eligible)
             if strict_market_state:
@@ -144,14 +187,20 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
                 from apps.market_streams.models import IndicatorValue
                 sizing_policy = PositionSizingPolicy.objects.filter(portfolio=portfolio, enabled=True).first() or PositionSizingPolicy.objects.create(portfolio=portfolio)
                 adv_record = IndicatorValue.objects.filter(instrument=item["instrument"], indicator="average_volume").order_by("-event_time").first()
+                broker_limits,strategy_limits=_net_strategy_risk_limits(portfolio,contributions,item["price"],item["weight"])
                 size_and_record(sizing_policy, item["instrument"], intent.side, intent.quantity, item["price"], None, nav,
                     portfolio.account.available_cash, adv_record.value if adv_record and adv_record.value is not None else 0,
-                    order_intent=intent, idempotency_key=f"sizing:rebalance:{run.pk}:instrument:{item['instrument'].pk}:v1")
-            contributions = attribution.get(item["instrument"].pk, {})
-            denom = sum(abs(value) for value in contributions.values()) or D(1)
+                    broker_limits=broker_limits,strategy_limits=strategy_limits,order_intent=intent,
+                    idempotency_key=f"sizing:rebalance:{run.pk}:instrument:{item['instrument'].pk}:v1")
+            net_contribution = sum(contributions.values()) or D(1)
             for strategy_id, contribution in contributions.items():
+                strategy = StrategyAllocation.objects.select_related("strategy").filter(
+                    portfolio=portfolio, strategy_id=strategy_id).first().strategy
+                instance = getattr(strategy, "strategy_instance", None)
                 OrderIntentAttribution.objects.create(order_intent=intent, strategy_id=strategy_id,
-                    target_delta=contribution, allocated_quantity=abs(item["delta"])*abs(contribution)/denom)
+                    strategy_instance=instance,
+                    strategy_version=instance.versions.filter(version=instance.version).first() if instance else None,
+                    target_delta=contribution, allocated_quantity=item["delta"]*contribution/net_contribution)
     OutboxEvent.objects.create(topic="portfolio.rebalance.planned.v1", event_type="portfolio.rebalance.planned",
         aggregate_type="portfolio", aggregate_id=str(portfolio.pk), partition_key=str(portfolio.pk),
         payload={"rebalance_run_id":run.pk,"mode":mode,"phase":run.phase,"turnover":str(turnover_used)},

@@ -5,6 +5,7 @@ from apps.event_bus import views as streaming_views
 from apps.allocation import views as allocation_views
 from apps.rebalancing import views as rebalancing_views
 from apps.position_sizing import views as sizing_views
+from apps.strategies import views as strategy_views
 
 api_patterns = [
     path("system/", views.system), path("gateway/", views.gateway), path("accounts/", views.accounts),
@@ -15,6 +16,18 @@ api_patterns = [
 ]
 urlpatterns = [path("healthz", views.health),path("metrics",streaming_views.prometheus_metrics)] + [path(f"api/v1/{p.pattern}", p.callback, p.default_args) for p in api_patterns]
 new_api = [
+    path("strategy-definitions/",strategy_views.definitions),path("strategy-definitions/<str:key>/",strategy_views.definitions),
+    path("strategy-instances/",strategy_views.instances),path("strategy-instances/<int:instance_id>/",strategy_views.instances),
+    path("strategy-instances/<int:instance_id>/enable/",strategy_views.action,{"action_name":"enable"}),
+    path("strategy-instances/<int:instance_id>/pause/",strategy_views.action,{"action_name":"pause"}),
+    path("strategy-instances/<int:instance_id>/evaluate/",strategy_views.action,{"action_name":"evaluate"}),
+    path("strategy-instances/<int:instance_id>/flatten/",strategy_views.action,{"action_name":"flatten"}),
+    path("strategy-instances/<int:instance_id>/state/",strategy_views.related,{"resource":"state"}),
+    path("strategy-instances/<int:instance_id>/signals/",strategy_views.related,{"resource":"signals"}),
+    path("strategy-instances/<int:instance_id>/runs/",strategy_views.related,{"resource":"runs"}),
+    path("strategy-instances/<int:instance_id>/targets/",strategy_views.related,{"resource":"targets"}),
+    path("strategy-instances/<int:instance_id>/execution-timeline/",strategy_views.related,{"resource":"execution-timeline"}),
+    path("strategy-policies/",strategy_views.policies),path("instruments/resolve/",strategy_views.resolve),
     path("streaming/health/",streaming_views.health),path("streaming/topics/",streaming_views.topics),
     path("streaming/consumer-lag/",streaming_views.consumer_lag),path("streaming/dead-letter/",streaming_views.dead_letter),
     path("streaming/replay/",streaming_views.replay),
