@@ -1,6 +1,7 @@
 import pytest
 from apps.instruments.models import BrokerContract, Instrument
 from apps.instruments.services import resolve_instrument, search_broker_instruments
+from apps.audit.models import OutboxEvent
 
 pytestmark=pytest.mark.django_db
 
@@ -26,3 +27,5 @@ def test_selected_conid_is_qualified_and_persisted_exactly():
     assert command is None and contract.conid==row["conid"] and contract.description==row["description"]
     assert instrument.primary_exchange=="ASX" and BrokerContract.objects.get(conid=12345).instrument==instrument
     assert Instrument.objects.count()==1
+    registry=OutboxEvent.objects.get(topic="instrument.registry.v1")
+    assert registry.payload["conid"]==12345 and registry.payload["instrument_id"]==instrument.pk

@@ -1,6 +1,7 @@
 from django.db import transaction
 from django.utils import timezone
 from apps.broker_gateway.client import GatewayClient
+from apps.audit.models import OutboxEvent
 from .models import BrokerContract, Instrument
 
 
@@ -20,11 +21,23 @@ def search_broker_instruments(query, gateway=None):
     return results
 
 
+def publish_instrument_registry(contract):
+    instrument=contract.instrument
+    event,_=OutboxEvent.objects.get_or_create(idempotency_key=f"instrument-registry:{contract.conid}",defaults={
+        "topic":"instrument.registry.v1","event_type":"instrument.registry.updated","aggregate_type":"instrument",
+        "aggregate_id":str(instrument.pk),"partition_key":str(contract.conid),"payload":{"instrument_id":instrument.pk,
+        "conid":contract.conid,"symbol":instrument.symbol,"local_symbol":contract.local_symbol,
+        "asset_class":instrument.asset_class,"exchange":instrument.exchange,"primary_exchange":contract.primary_exchange,
+        "currency":instrument.currency,"active":instrument.active and instrument.tradable}})
+    return event
+
+
 def resolve_instrument(*, instrument_id=None, ticker=None, asset_class="STK", exchange="SMART", currency="USD",
                        primary_exchange=None, conid=None, local_symbol=None, description=None, qualify=True, gateway=None):
     """Resolve operator input to a canonical instrument and qualified IBKR contract."""
     selected_contract=BrokerContract.objects.select_related("instrument").filter(conid=int(conid)).first() if conid else None
     if selected_contract:
+        publish_instrument_registry(selected_contract)
         return selected_contract.instrument,selected_contract,None
     if instrument_id:
         instrument = Instrument.objects.get(pk=instrument_id)
@@ -63,6 +76,7 @@ def resolve_instrument(*, instrument_id=None, ticker=None, asset_class="STK", ex
 def record_qualified_contract(instrument, result):
     if not result.get("conid"):
         raise ValueError("IBKR qualification result has no conId")
-    return BrokerContract.objects.update_or_create(instrument=instrument, defaults={"conid":int(result["conid"]),
+    contract=BrokerContract.objects.update_or_create(instrument=instrument, defaults={"conid":int(result["conid"]),
         "primary_exchange":result.get("primary_exchange", ""), "local_symbol":result.get("local_symbol", instrument.symbol),
         "description":result.get("description", ""),"qualified_at":timezone.now()})[0]
+    publish_instrument_registry(contract);return contract

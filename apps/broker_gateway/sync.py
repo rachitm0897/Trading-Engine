@@ -34,7 +34,9 @@ def ensure_instrument(row):
     conid=int(row.get("conid") or 0)
     if conid:
         existing=BrokerContract.objects.select_related("instrument").filter(conid=conid).first()
-        if existing: return existing.instrument
+        if existing:
+            from apps.instruments.services import publish_instrument_registry
+            publish_instrument_registry(existing);return existing.instrument
     symbol=row.get("symbol") or row.get("local_symbol") or (f"CONID-{conid}" if conid else "UNKNOWN")
     defaults={"asset_class":row.get("asset_class") or "STK","exchange":row.get("exchange") or row.get("primary_exchange") or "SMART",
         "primary_exchange":row.get("primary_exchange") or "","currency":row.get("currency") or "USD"}
@@ -43,9 +45,12 @@ def ensure_instrument(row):
     if instrument and defaults["primary_exchange"]:
         instrument.primary_exchange=defaults["primary_exchange"];instrument.save(update_fields=["primary_exchange"])
     if not instrument:instrument,_=Instrument.objects.get_or_create(symbol=symbol,**defaults)
-    if conid: BrokerContract.objects.get_or_create(instrument=instrument,defaults={"conid":conid,
+    if conid:
+        contract,_=BrokerContract.objects.get_or_create(instrument=instrument,defaults={"conid":conid,
         "primary_exchange":row.get("primary_exchange") or "","local_symbol":row.get("local_symbol") or symbol,
         "description":row.get("description") or "","qualified_at":timezone.now()})
+        from apps.instruments.services import publish_instrument_registry
+        publish_instrument_registry(contract)
     return instrument
 
 def sync_accounts(rows):
