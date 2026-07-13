@@ -3,7 +3,7 @@ import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {ExternalLink, Filter, Search, SlidersHorizontal} from 'lucide-react'
 import {mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
-import type {Execution, Order} from '../../api/types'
+import type {Execution, Order, OrderDetail, OrderStatusHistory} from '../../api/types'
 import {ActivityTimeline} from '../../components/ActivityTimeline'
 import {FillProgress} from '../../components/FillProgress'
 import {CollapsibleSection, ConfirmActionDialog, DataTable, DetailDrawer, ErrorState, Freshness, PageHeader, Panel, Skeleton, StatusBadge, formatDateTime, formatMoney, formatNumber} from '../../components/ui'
@@ -22,6 +22,7 @@ export function OrdersActivityPage() {
   const executions = useQuery(queries.executions({portfolioId: selectedPortfolioId, symbol}))
   const audit = useQuery(queries.audit({limit: 100}))
   const instruments = useQuery(queries.instruments())
+  const orderDetail = useQuery(queries.orderDetail(selectedOrder?.internal_id || ''))
   const rows = useMemo(() => (orders.data || []).filter((order) => !search || `${order.internal_id} ${order.broker_order_id} ${order.symbol} ${order.side}`.toLowerCase().includes(search.toLowerCase())), [orders.data, search])
 
   const refresh = async () => {
@@ -29,6 +30,7 @@ export function OrdersActivityPage() {
       queryClient.invalidateQueries({queryKey: ['orders']}),
       queryClient.invalidateQueries({queryKey: ['executions']}),
       queryClient.invalidateQueries({queryKey: ['audit']}),
+      queryClient.invalidateQueries({queryKey: ['order-detail']}),
     ])
   }
   const modify = useMutation({
@@ -71,15 +73,24 @@ export function OrdersActivityPage() {
     </Panel>
     <div className="activity-grid"><Panel title="Executions" description="Append-only broker fill ledger">{executions.isLoading ? <Skeleton lines={4} /> : executions.isError ? <ErrorState error={executions.error} onRetry={() => void executions.refetch()} compact /> : <DataTable rows={executions.data || []} columns={executionColumns} getRowKey={(fill) => fill.execution_id} emptyTitle="No executions" />}</Panel><Panel title="Operational activity" description="Recent audit events">{audit.isError ? <ErrorState error={audit.error} onRetry={() => void audit.refetch()} compact /> : <ActivityTimeline items={activity.slice(0, 12)} />}</Panel></div>
     <CollapsibleSection title="Manual order ticket" description="Advanced operator action. Manual orders still run pre-trade risk and use an idempotency key."><ManualOrderTicket instruments={instruments.data || []} pending={createOrder.isPending} error={createOrder.error} result={createOrder.data} onSubmit={(payload) => createOrder.mutate(payload)} /></CollapsibleSection>
-    <OrderDrawer order={selectedOrder} executions={(executions.data || []).filter((fill) => fill.order_id === selectedOrder?.internal_id)} modifying={modify.isPending} error={modify.error || cancel.error} onClose={() => setSelectedOrder(null)} onModify={(payload) => selectedOrder && modify.mutate({order: selectedOrder, payload})} onCancel={() => selectedOrder && setCancelOrder(selectedOrder)} />
+    <OrderDrawer order={selectedOrder} detail={orderDetail.data} detailLoading={orderDetail.isLoading} executions={(executions.data || []).filter((fill) => fill.order_id === selectedOrder?.internal_id)} modifying={modify.isPending} error={modify.error || cancel.error || orderDetail.error} onClose={() => setSelectedOrder(null)} onModify={(payload) => selectedOrder && modify.mutate({order: selectedOrder, payload})} onCancel={() => selectedOrder && setCancelOrder(selectedOrder)} />
     <ConfirmActionDialog open={Boolean(cancelOrder)} title={`Cancel ${cancelOrder?.symbol || ''} order?`} description="Cancellation is submitted through OMS and Gateway. A fill may still arrive while the cancel is pending." confirmLabel="Request cancellation" pending={cancel.isPending} onClose={() => setCancelOrder(null)} onConfirm={(reason) => {if (cancelOrder) cancel.mutate({order: cancelOrder, reason})}} />
   </div>
 }
 
-function OrderDrawer({order, executions, modifying, error, onClose, onModify, onCancel}: {order: Order | null; executions: Execution[]; modifying: boolean; error: unknown; onClose: () => void; onModify: (payload: Record<string, string>) => void; onCancel: () => void}) {
+function orderHistoryItem(item: OrderStatusHistory) {
+  const reason = item.reason || 'No broker reason received'
+  const code = item.reason_code ? `Code ${item.reason_code} · ` : ''
+  const broker = item.broker_status ? ` · IBKR ${item.broker_status}` : ''
+  const operator = item.operator_requested ? ' · operator requested' : ''
+  return {id:item.id,time:item.occurred_at,type:'ORDER_STATUS',title:`${item.from_status || 'START'} → ${item.to_status}`,
+    status:item.to_status,detail:`${code}${reason} · ${item.source}${broker}${operator}`}
+}
+
+function OrderDrawer({order, detail, detailLoading, executions, modifying, error, onClose, onModify, onCancel}: {order: Order | null; detail?: OrderDetail; detailLoading: boolean; executions: Execution[]; modifying: boolean; error: unknown; onClose: () => void; onModify: (payload: Record<string, string>) => void; onCancel: () => void}) {
   if (!order) return null
   const submit = (event: React.FormEvent<HTMLFormElement>) => {event.preventDefault(); const form = new FormData(event.currentTarget); const payload: Record<string, string> = {quantity: String(form.get('quantity')), time_in_force: String(form.get('time_in_force'))}; if (form.get('limit_price')) payload.limit_price = String(form.get('limit_price')); onModify(payload)}
-  return <DetailDrawer open title={`${order.symbol} ${order.side}`} subtitle={order.internal_id} onClose={onClose} footer={<div className="drawer-actions"><button className="button-danger-subtle" disabled={!canCancelOrder(order)} onClick={onCancel}>Cancel order</button></div>}><div className="order-summary"><StatusBadge status={order.status} /><FillProgress filled={order.filled_quantity} total={order.quantity} /><dl className="detail-list"><div><dt>Type</dt><dd>{order.order_type}</dd></div><div><dt>Time in force</dt><dd>{order.time_in_force}</dd></div><div><dt>Broker order ID</dt><dd><code>{order.broker_order_id || 'Pending'}</code></dd></div><div><dt>Average fill</dt><dd className="mono">{formatMoney(order.average_fill_price)}</dd></div><div><dt>Created</dt><dd>{formatDateTime(order.created_at)}</dd></div><div><dt>Updated</dt><dd>{formatDateTime(order.updated_at)}</dd></div></dl></div>{canModifyOrder(order) ? <form className="drawer-form" onSubmit={submit}><h3>Modify eligible fields</h3><label>Total quantity<input name="quantity" type="number" min={Number(order.filled_quantity)} step="any" defaultValue={String(order.quantity)} required /></label><label>Limit price<input name="limit_price" type="number" min="0" step="any" /></label><label>Time in force<select name="time_in_force" defaultValue={order.time_in_force}><option>DAY</option><option>GTC</option></select></label><button className="button-primary" disabled={modifying}>{modifying ? 'Submitting…' : 'Submit modification'}</button></form> : <div className="inline-note">This order’s current state does not permit modification.</div>}{error ? <ErrorState title="Order action failed" error={error} compact /> : null}<h3>Fills</h3><DataTable rows={executions} columns={[{id: 'id', header: 'Execution', cell: (fill) => <code>{fill.execution_id}</code>}, {id: 'qty', header: 'Quantity', cell: (fill) => formatNumber(fill.quantity)}, {id: 'price', header: 'Price', cell: (fill) => formatMoney(fill.price, fill.currency)}, {id: 'time', header: 'Time', cell: (fill) => formatDateTime(fill.executed_at)}]} getRowKey={(fill) => fill.execution_id} emptyTitle="No fills for this order" /></DetailDrawer>
+  return <DetailDrawer open title={`${order.symbol} ${order.side}`} subtitle={order.internal_id} onClose={onClose} footer={<div className="drawer-actions"><button className="button-danger-subtle" disabled={!canCancelOrder(order)} onClick={onCancel}>Cancel order</button></div>}><div className="order-summary"><StatusBadge status={order.status} /><FillProgress filled={order.filled_quantity} total={order.quantity} /><dl className="detail-list"><div><dt>Type</dt><dd>{order.order_type}</dd></div><div><dt>Time in force</dt><dd>{order.time_in_force}</dd></div><div><dt>Broker order ID</dt><dd><code>{order.broker_order_id || 'Pending'}</code></dd></div><div><dt>Average fill</dt><dd className="mono">{formatMoney(order.average_fill_price)}</dd></div><div><dt>Created</dt><dd>{formatDateTime(order.created_at)}</dd></div><div><dt>Updated</dt><dd>{formatDateTime(order.updated_at)}</dd></div></dl></div>{canModifyOrder(order) ? <form className="drawer-form" onSubmit={submit}><h3>Modify eligible fields</h3><label>Total quantity<input name="quantity" type="number" min={Number(order.filled_quantity)} step="any" defaultValue={String(order.quantity)} required /></label><label>Limit price<input name="limit_price" type="number" min="0" step="any" /></label><label>Time in force<select name="time_in_force" defaultValue={order.time_in_force}><option>DAY</option><option>GTC</option></select></label><button className="button-primary" disabled={modifying}>{modifying ? 'Submitting…' : 'Submit modification'}</button></form> : <div className="inline-note">This order’s current state does not permit modification.</div>}{error ? <ErrorState title="Order action failed" error={error} compact /> : null}<h3>Status timeline</h3>{detailLoading ? <Skeleton lines={3} /> : <ActivityTimeline items={(detail?.status_history || []).map(orderHistoryItem)} emptyDescription="No order status has been persisted." />}<h3>Fills</h3><DataTable rows={executions} columns={[{id: 'id', header: 'Execution', cell: (fill) => <code>{fill.execution_id}</code>}, {id: 'qty', header: 'Quantity', cell: (fill) => formatNumber(fill.quantity)}, {id: 'price', header: 'Price', cell: (fill) => formatMoney(fill.price, fill.currency)}, {id: 'time', header: 'Time', cell: (fill) => formatDateTime(fill.executed_at)}]} getRowKey={(fill) => fill.execution_id} emptyTitle="No fills for this order" /></DetailDrawer>
 }
 
 function ManualOrderTicket({instruments, pending, error, result, onSubmit}: {instruments: {id: number; symbol: string; exchange: string}[]; pending: boolean; error: unknown; result?: {internal_id: string; status: string; decision?: string}; onSubmit: (payload: Record<string, string | number>) => void}) {

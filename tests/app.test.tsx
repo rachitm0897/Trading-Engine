@@ -50,6 +50,17 @@ const data: Record<string, unknown> = {
     {id: 1, internal_id: 'active-order-123', account_id: 'DU-PRIMARY', portfolio_id: 10, symbol: 'NVDA', side: 'BUY', order_type: 'LMT', time_in_force: 'DAY', broker_order_id: '991', broker_permanent_id: '', status: 'ACKNOWLEDGED', quantity: 10, filled_quantity: 4, average_fill_price: 123, created_at: '2026-07-13T00:00:00Z', updated_at: '2026-07-13T01:00:00Z'},
     {id: 2, internal_id: 'filled-order-456', account_id: 'DU-PRIMARY', portfolio_id: 10, symbol: 'NVDA', side: 'BUY', order_type: 'MKT', time_in_force: 'DAY', broker_order_id: '992', broker_permanent_id: '', status: 'FILLED', quantity: 2, filled_quantity: 2, average_fill_price: 124, created_at: '2026-07-12T00:00:00Z', updated_at: '2026-07-12T01:00:00Z'},
   ],
+  'orders/active-order-123/detail': {
+    order: {},
+    status_history: [
+      {id: 101, from_status: 'SUBMITTED', to_status: 'REJECTED', broker_status: 'Inactive', reason_code: '201',
+        reason: 'Order rejected - insufficient available equity', source: 'ibkr', details: {why_held: ''},
+        occurred_at: '2026-07-13T01:00:00Z', operator_requested: false},
+      {id: 102, from_status: 'REJECTED', to_status: 'REJECTED', broker_status: 'Inactive', reason_code: '',
+        reason: '', source: 'ibkr', details: {}, occurred_at: '2026-07-13T01:00:01Z', operator_requested: false},
+    ],
+    broker_diagnostics: [], risk_decisions: [], fills: [], strategy_attribution: [],
+  },
   executions: [{id: 1, order_id: 'active-order-123', account_id: 'DU-PRIMARY', symbol: 'NVDA', execution_id: 'fill-1', quantity: 4, price: 123, commission: 1, currency: 'USD', executed_at: '2026-07-13T00:30:00Z'}],
   audit: [],
   risk: {kill_switches: [], decisions: []},
@@ -167,6 +178,15 @@ test('strategy detail maps backend chart data with no placeholder series', async
   await user.click(screen.getByRole('tab', {name: 'Chart'}))
   expect(await screen.findByText(/POSTGRES_MARKET_AND_EXECUTION_FACTS/)).toBeInTheDocument()
   expect(screen.getByRole('img', {name: /Strategy price, indicator, signal, target, order, and fill chart/})).toBeInTheDocument()
+})
+
+test('order drawer displays the exact broker rejection reason and explicit empty fallback', async () => {
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/activity')
+  render(<App />)
+  await user.click(await screen.findByRole('button', {name: 'active-order'}))
+  expect(await screen.findByText(/Code 201 · Order rejected - insufficient available equity · ibkr · IBKR Inactive/)).toBeInTheDocument()
+  expect(screen.getByText(/No broker reason received · ibkr · IBKR Inactive/)).toBeInTheDocument()
 })
 
 test('keeps the shell usable during a route-level partial failure', async () => {
