@@ -22,5 +22,6 @@ StrategyRun -> StrategyTarget -> allocation aggregation -> RebalanceRun
 
 Only the dedicated Gateway broker worker imports and owns `ib_async`. Nginx is the Gateway's sole public listener and routes API, noVNC, websockify, and health traffic. Supervisor runs the fixed process set; there is no Docker socket or dynamic container control.
 
-The exactly five strategy implementations are fixed-weight rebalance, SMA trend, RSI mean reversion, Donchian breakout, and volatility-target momentum. They return target weights and cannot submit orders.
+The strategy layer is plugin-based. The initial registered definitions are fixed-weight rebalance, SMA crossover, RSI mean reversion, Donchian breakout, and volatility-target momentum; additional reviewed plugins use the same interface. A `StrategyDefinition` describes the plugin, a `StrategyInstance` binds it to one canonical instrument/portfolio/configuration, and every material edit creates an immutable `StrategyVersion`.
 
+Active instances publish de-duplicated bar, indicator, parameter, and warm-up requirements to `strategy.inputs.v1`. Flink uses that registry to build requested instrument/timeframe bars and parameter-hashed indicators. Final persisted inputs invoke the plugin with versioned isolated state. Plugins return only signals and the common `StrategyTarget`; they cannot submit orders. Multiple instance targets are netted at portfolio/instrument level and every contribution/version is retained on the single resulting order intent.

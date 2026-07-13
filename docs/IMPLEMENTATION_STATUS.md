@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated 2026-07-11.
+Updated 2026-07-13.
 
 | Area | Status | Notes |
 |---|---|---|
@@ -9,9 +9,10 @@ Updated 2026-07-11.
 | Gateway command/event durability | Implemented | SQLite WAL, idempotent commands, ordered events, acknowledgement, mock/ib_async adapters. |
 | Backend financial domain | Implemented | Core models, ledgers, audit/outbox, OMS, fills, risk, reconciliation records. |
 | Strategies and allocation | Implemented | Exactly five engines, reproducible run hash, aggregation, lot rounding, notional suppression. |
+| Configurable streaming strategies | Implemented | Definition/instance/version domain, five plugins, schema validation, canonical contract resolution, shared input registry, dynamic bars/indicators, isolated state, common targets, netting/version attribution, management APIs, terminal builder and monitor. |
 | Frontend | Implemented | Ten terminal windows, Backend-only data access, QFS base path, controls and status. |
 | Automated unit tests | Implemented | Backend, Gateway, and Frontend suites use mocks and no real IBKR account. |
-| Kafka event foundation | Implemented | 20 private topics, versioned JSON schemas, acknowledged transactional outbox publishing, retry, idempotent consumption, DLQ, replay and Prometheus metrics. |
+| Kafka event foundation | Implemented | 21 private topics, including the active strategy-input registry; versioned envelopes, acknowledged transactional outbox publishing, retry, idempotent consumption, DLQ, replay and Prometheus metrics. |
 | PyFlink market processing | Implemented | Stable UIDs; normalization/dedup/DLQ; event-time 1m/5m/1d versioned OHLCV; indicators; stale timers; checkpoints/savepoints and checkpoint restore. |
 | Market persistence | Implemented | Dedicated Backend consumer persists versioned bars, parameter-versioned indicators and auditable price quality with replay-safe uniqueness. |
 | Flow allocation | Implemented | Deficit deposits, reserves/capacity/min/max/priority/rounding, staged withdrawals, five liquidation policies, capital snapshots and idempotent runs. |
@@ -42,3 +43,12 @@ Kafka/Flink/allocation extension verification on 2026-07-11:
 - `docs/compose_smoke.ps1` passed with eight running services and no public Kafka/Flink ports.
 
 New execution defaults to `SHADOW`. `NEW_EXECUTION_MODE=PAPER` permits planners to emit only `OrderIntent`; it never bypasses sizing, risk, OMS, Gateway, ledgers or reconciliation. Live mode is unsupported for the new workflows.
+
+Configurable strategy extension verification on 2026-07-13:
+
+- Backend: 49 tests passed. New coverage includes immutable version creation, default shadow mode, management APIs/live rejection, asynchronous IBKR conId qualification persistence, the TSLA RSI(14)/5-minute/30-to-65/5% paper target-to-intent example, target persistence across `HOLD` runs, RSI ticker portability (TSLA/AAPL), RSI/SMA strategy portability, shared indicators, final-input readiness, corrected-bar/replay idempotency, plugin exception isolation, multi-strategy paper netting, signed version attribution through partial and final fills, and attributed-position recovery. Existing restart/recovery, Kafka replay, risk, OMS, ledger, and reconciliation tests remain green.
+- Frontend: 5 tests passed and the TypeScript/Vite production build passed. The strategy builder renders plugin schemas, canonical ticker input, timeframe/target/risk/order controls, shadow/observe/paper modes, warm-up requirements, monitoring filters, and enable/pause/flatten controls. Live is not presented.
+- Streaming calculation tests pass with registry-parameterized indicator computation. Flink jobs contain no ticker filter and bar timeframes are parsed from active `strategy.inputs.v1` requirements rather than a fixed TSLA/5-minute branch.
+- Five built-in definitions are data-backed: RSI mean reversion, SMA crossover, Donchian breakout, volatility-target momentum, and fixed-weight rebalance. Plugins only return signals/targets and have no broker dependency.
+
+Operator paper certification still requires an authenticated IBKR paper session, qualified contracts, market-data permissions, and sufficient warm-up bars. No migration or API enables live trading.

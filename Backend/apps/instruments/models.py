@@ -6,8 +6,12 @@ class Instrument(models.Model):
     exchange = models.CharField(max_length=32, default="SMART")
     currency = models.CharField(max_length=8, default="USD")
     sector = models.CharField(max_length=64, blank=True)
+    multiplier = models.DecimalField(max_digits=20, decimal_places=8, default=1)
     lot_size = models.DecimalField(max_digits=20, decimal_places=8, default=1)
     min_tick = models.DecimalField(max_digits=20, decimal_places=8, default="0.01")
+    fractional_support = models.BooleanField(default=False)
+    trading_calendar = models.CharField(max_length=64, default="XNYS")
+    active = models.BooleanField(default=True)
     tradable = models.BooleanField(default=True)
 
     class Meta:
@@ -19,4 +23,3 @@ class BrokerContract(models.Model):
     primary_exchange = models.CharField(max_length=32, blank=True)
     local_symbol = models.CharField(max_length=64, blank=True)
     qualified_at = models.DateTimeField(null=True, blank=True)
-

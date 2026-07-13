@@ -48,6 +48,13 @@ class Command(BaseCommand):
             if label=="audit" and "audit_outboxevent" in existing:
                 with connection.cursor() as cursor:
                     cursor.execute("UPDATE audit_outboxevent SET status='PUBLISHED' WHERE published_at IS NOT NULL")
+                    columns={item.name for item in connection.introspection.get_table_description(cursor,"audit_outboxevent")}
+                    if "attempts" in columns and "attempt_count" in columns:
+                        if connection.vendor=="postgresql":
+                            cursor.execute("UPDATE audit_outboxevent SET attempt_count=GREATEST(COALESCE(attempt_count,0),COALESCE(attempts,0))")
+                        else:
+                            cursor.execute("UPDATE audit_outboxevent SET attempt_count=MAX(COALESCE(attempt_count,0),COALESCE(attempts,0))")
+                        cursor.execute("ALTER TABLE audit_outboxevent DROP COLUMN attempts")
             for name in migration_nodes:
                 recorder.record_applied(label,name)
             adopted.append(label)

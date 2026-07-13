@@ -25,6 +25,12 @@ def test_event_sequence_and_ack(client):
     client.post("/api/v1/events/ack/",json.dumps({"sequence":second.pk}),content_type="application/json",**AUTH)
     assert GatewayEvent.objects.filter(acknowledged=True).count()==2
 
+def test_event_sequence_recovers_when_backend_cursor_is_ahead(client):
+    event=GatewayEvent.objects.create(event_key="after-reset",event_type="command.qualify.completed",payload={"conid":1})
+    body=client.get("/api/v1/events/?after=999999",**AUTH).json()
+    assert body["meta"]["sequence_reset"] is True
+    assert [row["id"] for row in body["data"]]==[event.pk]
+
 def test_completed_orders_snapshot_endpoint(client):
     GatewayEvent.objects.create(event_key="completed",event_type="snapshot.completed_orders",payload={"value":[{"broker_order_id":"1"}]})
     body=client.get("/api/v1/completed-orders/",**AUTH).json()

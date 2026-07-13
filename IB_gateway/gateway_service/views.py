@@ -63,8 +63,12 @@ def cancel(request,internal_id):
     command=enqueue("CANCEL_ORDER",{"internal_id":internal_id},_key(request)); return response({"command_id":command.pk,"status":command.status},202)
 @protected
 def events(request):
-    after=int(request.GET.get("after",0)); rows=list(GatewayEvent.objects.filter(id__gt=after).order_by("id")[:500].values("id","event_type","payload","created_at"))
-    return response(rows,meta={"next_sequence":rows[-1]["id"] if rows else after})
+    requested_after=int(request.GET.get("after",0))
+    latest=GatewayEvent.objects.order_by("-id").values_list("id",flat=True).first() or 0
+    reset=requested_after>latest and latest>0
+    after=0 if reset else requested_after
+    rows=list(GatewayEvent.objects.filter(id__gt=after).order_by("id")[:500].values("id","event_type","payload","created_at"))
+    return response(rows,meta={"next_sequence":rows[-1]["id"] if rows else after,"latest_sequence":latest,"sequence_reset":reset})
 @csrf_exempt
 @protected
 def ack(request):

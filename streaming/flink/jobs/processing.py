@@ -90,6 +90,32 @@ def compute_indicators(bars, fast=20, slow=50, rsi_period=14, donchian=20, momen
         "realized_volatility": vol, "average_volume": _sma(volumes, adv_period), "reference_price": closes[-1]}
 
 
+def compute_indicator(bars, name, parameters):
+    """Compute one registry-declared indicator identity, independently of a strategy."""
+    ordered = sorted((x for x in bars if x.get("is_final", True)), key=lambda x: utc(x["window_end"]))
+    if not ordered:
+        return None
+    closes=[Decimal(str(x["close"])) for x in ordered];highs=[Decimal(str(x["high"])) for x in ordered]
+    lows=[Decimal(str(x["low"])) for x in ordered];volumes=[Decimal(str(x.get("volume",0))) for x in ordered]
+    window=int(parameters.get("window",20))
+    if name=="rsi":return _rsi(closes,window)
+    if name=="sma":return _sma(closes,window)
+    if name=="donchian":
+        use_upper=parameters.get("side",parameters.get("role","entry")) in {"upper","entry"}
+        prior=(highs if use_upper else lows)[:-1]
+        if len(prior)<window:return None
+        return max(prior[-window:]) if use_upper else min(prior[-window:])
+    if name=="momentum":return closes[-1]/closes[-window-1]-1 if len(closes)>window and closes[-window-1] else None
+    if name=="realized_volatility":
+        returns=[closes[i]/closes[i-1]-1 for i in range(max(1,len(closes)-window),len(closes)) if closes[i-1]]
+        if len(returns)<2:return None
+        mean=sum(returns)/Decimal(len(returns));variance=sum((x-mean)**2 for x in returns)/Decimal(len(returns)-1)
+        return Decimal(str(math.sqrt(float(variance))))*Decimal(str(math.sqrt(252)))
+    if name=="average_volume":return _sma(volumes,window)
+    if name=="reference_price":return closes[-1]
+    raise ValueError(f"unsupported indicator: {name}")
+
+
 def quality_state(latest_event_at, now, stale_after_seconds):
     if latest_event_at is None:
         return "UNAVAILABLE"
