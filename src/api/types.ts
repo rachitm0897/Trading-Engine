@@ -223,11 +223,37 @@ export interface FlinkJob {
 
 export interface StreamingHealth {
   kafka_enabled: boolean
+  data_path_status: string
+  data_path_reasons: string[]
+  gateway: {status: string; value: JsonRecord; observed_at: string | null}
+  consumer: {status: string; last_heartbeat: string | null; age_seconds?: number; value: JsonRecord}
   metrics: StreamMetric[]
   flink: {status?: string; jobs?: FlinkJob[]; error?: string}
+  strategies: StrategyStreamStatus[]
   outbox_pending: number
+  outbox_failed: number
   dead_letter_count: number
   stale_instrument_count: number
+}
+
+export interface StrategyStreamStatus {
+  strategy_id: number
+  strategy: string
+  symbol: string
+  timeframe: string
+  status: string
+  subscription_state: string
+  conid: number | null
+  last_raw_event: string | null
+  last_canonical_event: string | null
+  last_final_bar: string | null
+  warmup_progress: number
+  warmup_required: number
+  last_indicator: string | null
+  last_strategy_run: string | null
+  last_error: string
+  missing: string[]
+  stale_after_seconds: number
 }
 
 export interface ParameterProperty {
@@ -324,6 +350,7 @@ export interface StrategyInstance {
   active_order: string | null
   last_fill: string | null
   cooldown: string | null
+  streaming?: StrategyStreamStatus
   created_at: string
   updated_at: string
   versions?: StrategyVersion[]
