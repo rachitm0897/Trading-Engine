@@ -1,5 +1,8 @@
 import pytest
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from broker.base import BrokerAdapter
+from broker.ib_async_adapter import IBAsyncBrokerAdapter
 from broker.mock import MockBrokerAdapter
 from gateway_service.models import GatewayCommand, GatewayEvent
 from gateway_service.services import process_command
@@ -14,6 +17,8 @@ def test_mock_implements_adapter_and_order_lifecycle():
     assert qualified["qualified"] and qualified["conid"]==matches[0]["conid"] and placed["status"]=="Submitted"
     assert broker.modify_order({"internal_id":"I1","quantity":2})["quantity"]==2
     assert broker.cancel_order({"internal_id":"I1"})["status"]=="Cancelled"
+    cancellation=broker.drain_order_events()[0]
+    assert cancellation["broker_status"]=="Cancelled" and cancellation["operator_requested"] is True
     assert broker.refresh_state()["accounts"] == []
 
 def test_command_processing_persists_callback():
@@ -41,3 +46,17 @@ def test_market_subscription_commands_are_idempotent():
 def test_kill_switch_blocks_submission():
     broker=MockBrokerAdapter(); broker.connect(); broker.killed=True
     with pytest.raises(RuntimeError): broker.place_order({"internal_id":"I1"})
+
+def test_ibkr_order_event_preserves_exact_rejection_diagnostics():
+    adapter=IBAsyncBrokerAdapter.__new__(IBAsyncBrokerAdapter);adapter.operator_cancellations=set()
+    contract=SimpleNamespace(conId=265598,symbol="AAPL",localSymbol="AAPL",secType="STK",exchange="SMART",
+        primaryExchange="NASDAQ",currency="USD")
+    order=SimpleNamespace(orderRef="internal-1",account="DU1",orderId=881,permId=9901)
+    status=SimpleNamespace(status="Inactive",whyHeld="locate pending")
+    log=SimpleNamespace(time=datetime(2026,7,13,1,0,tzinfo=timezone.utc),status="Inactive",
+        message="Order rejected - insufficient equity",errorCode=201)
+    trade=SimpleNamespace(order=order,orderStatus=status,contract=contract,log=[log],advancedError='{"errorCode":201}')
+    event=adapter._order_event(trade)
+    assert event["error_code"]=="201" and event["error_message"]=="Order rejected - insufficient equity"
+    assert event["why_held"]=="locate pending" and event["advanced_reject"]=={"errorCode":201}
+    assert event["trade_log"][0]["status"]=="Inactive" and event["occurred_at"]=="2026-07-13T01:00:00+00:00"

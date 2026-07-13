@@ -109,6 +109,28 @@ export interface Order {
   updated_at: string
 }
 
+export interface OrderStatusHistory {
+  id: number
+  from_status: string
+  to_status: string
+  broker_status: string
+  reason_code: string
+  reason: string
+  source: string
+  details: JsonRecord
+  occurred_at: string
+  operator_requested: boolean
+}
+
+export interface OrderDetail {
+  order: Order
+  status_history: OrderStatusHistory[]
+  broker_diagnostics: OrderStatusHistory[]
+  risk_decisions: JsonRecord[]
+  fills: JsonRecord[]
+  strategy_attribution: JsonRecord[]
+}
+
 export interface Execution {
   id: number
   order_id: string

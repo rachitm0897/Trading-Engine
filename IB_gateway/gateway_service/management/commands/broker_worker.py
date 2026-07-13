@@ -25,6 +25,9 @@ class Command(BaseCommand):
         def publish_market_events():
             for payload in adapter.drain_market_events():
                 persist_event(f"market:{payload['source_event_id']}","market.raw",payload)
+        def publish_order_events():
+            for payload in adapter.drain_order_events():
+                persist_event(f"broker-order:{payload['source_event_id']}","broker.order",payload)
         while True:
             close_old_connections()
             try:
@@ -45,7 +48,10 @@ class Command(BaseCommand):
                             "payload":command.payload,"error":str(exc)[:500]})
                 else: adapter.wait(0.2)
                 publish_market_events()
+                publish_order_events()
             except Exception as exc:
                 GatewaySession.objects.filter(pk=1).update(state="DISCONNECTED",reconciled=False,last_callback_at=timezone.now())
                 GatewayHealthSnapshot.objects.create(connected=False,reconciled=False,details={"error":str(exc)[:500]})
+                persist_event(f"disconnected:{time.time_ns()}","session.disconnected",
+                    {"error":str(exc)[:500],"occurred_at":timezone.now().isoformat()})
                 time.sleep(min(backoff,30)); backoff=min(backoff*2,30)

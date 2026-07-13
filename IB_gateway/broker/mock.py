@@ -2,7 +2,7 @@ import time
 from .base import BrokerAdapter
 
 class MockBrokerAdapter(BrokerAdapter):
-    def __init__(self): self.connected = False; self.next_order_id = 1000; self.orders = {}; self.subscriptions = {}; self.market_events=[]; self.killed = False
+    def __init__(self): self.connected = False; self.next_order_id = 1000; self.orders = {}; self.subscriptions = {}; self.market_events=[]; self.order_events=[]; self.killed = False
     def connect(self): self.connected = True; return {"connected":True}
     def disconnect(self): self.connected = False
     def is_connected(self): return self.connected
@@ -30,6 +30,8 @@ class MockBrokerAdapter(BrokerAdapter):
         return {"subscription_key":key,"state":"INACTIVE"}
     def drain_market_events(self):
         events,self.market_events=self.market_events,[];return events
+    def drain_order_events(self):
+        events,self.order_events=self.order_events,[];return events
     def place_order(self, payload):
         if self.killed: raise RuntimeError("Gateway kill switch is active")
         self.next_order_id += 1; oid = str(self.next_order_id)
@@ -38,6 +40,11 @@ class MockBrokerAdapter(BrokerAdapter):
     def modify_order(self, payload):
         current = self.orders[payload["internal_id"]]; current.update(payload); current["status"]="Submitted"; return current
     def cancel_order(self, payload):
-        current = self.orders[payload["internal_id"]]; current["status"]="Cancelled"; return current
+        current = self.orders[payload["internal_id"]]; current["status"]="Cancelled"
+        self.order_events.append({"source_event_id":f"mock-cancel:{payload['internal_id']}","internal_id":payload["internal_id"],
+            "broker_order_id":current["broker_order_id"],"permanent_id":"","broker_status":"Cancelled","error_code":"",
+            "error_message":"","why_held":"","warning_text":"","advanced_reject":None,"trade_log":[],
+            "occurred_at":None,"operator_requested":True})
+        return current
     def refresh_state(self): return {"accounts":[], "account_summary":[], "positions":[], "open_orders":list(self.orders.values()), "completed_orders":[], "executions":[], "reconciled":True}
     def wait(self, seconds): time.sleep(seconds)

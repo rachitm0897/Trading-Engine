@@ -10,6 +10,7 @@ import type {
   GatewayStatus,
   Instrument,
   Order,
+  OrderDetail,
   Portfolio,
   PortfolioSeries,
   Position,
@@ -77,6 +78,12 @@ export const queries = {
       symbol: filters.symbol,
       limit: 250,
     })),
+    refetchInterval: POLL_INTERVAL,
+  }),
+  orderDetail: (internalId: string) => queryOptions({
+    queryKey: ['order-detail', internalId],
+    queryFn: () => request<OrderDetail>(`orders/${internalId}/detail/`),
+    enabled: Boolean(internalId),
     refetchInterval: POLL_INTERVAL,
   }),
   executions: (filters: {portfolioId?: number | null; symbol?: string} = {}) => queryOptions({
@@ -169,4 +176,3 @@ export const queries = {
     refetchInterval: POLL_INTERVAL,
   }),
 }
-

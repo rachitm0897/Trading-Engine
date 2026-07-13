@@ -1,4 +1,6 @@
 from decimal import Decimal, InvalidOperation
+import hashlib
+import json
 from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -7,7 +9,7 @@ from apps.audit.models import OutboxEvent
 from apps.execution.models import Fill
 from apps.instruments.models import BrokerContract, Instrument
 from apps.oms.models import Order, OrderIntent, OrderStatusHistory
-from apps.oms.services import apply_execution
+from apps.oms.services import ALLOWED, apply_execution
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
 from apps.market_streams.models import MarketDataSubscription
 from apps.strategies.models import StrategyInstance
@@ -18,7 +20,8 @@ TERMINAL={"FILLED","CANCELLED","REJECTED","EXPIRED"}
 STATUS_MAP={
     "PendingSubmit":"SUBMITTED","ApiPending":"SUBMITTED","PreSubmitted":"ACKNOWLEDGED",
     "Submitted":"ACKNOWLEDGED","PendingCancel":"CANCEL_PENDING","ApiCancelled":"CANCELLED",
-    "Cancelled":"CANCELLED","Inactive":"REJECTED","Filled":"FILLED",
+    "Cancelled":"CANCELLED","Inactive":"REJECTED","ValidationError":"REJECTED","Filled":"FILLED",
+    "Expired":"EXPIRED","Unknown":"UNKNOWN",
 }
 
 def dec(value, default="0"):
@@ -91,11 +94,24 @@ def _external_order(row, instrument, portfolio):
     if created: OrderStatusHistory.objects.create(order=order,from_status="",to_status="ACKNOWLEDGED",source="broker_import",reason="Discovered at IBKR",event_key=f"broker-import:{portfolio.account.account_id}:{identity}:ack")
     return order
 
-def _set_broker_status(order,target,event_key):
-    if not target or target=="FILLED" or order.status==target: return
-    if order.status in TERMINAL: return
-    OrderStatusHistory.objects.get_or_create(event_key=event_key,defaults={"order":order,"from_status":order.status,"to_status":target,"source":"broker_sync","reason":"IBKR order status"})
-    order.status=target; order.save(update_fields=["status","updated_at"])
+def _broker_reason(row):
+    return str(row.get("error_message") or row.get("why_held") or row.get("warning_text") or "")[:255]
+
+def _record_broker_status(order,row,event_key,source="ibkr",target_override=None):
+    broker_status=str(row.get("broker_status") or row.get("status") or "")
+    target=target_override or STATUS_MAP.get(broker_status)
+    details={"error_message":str(row.get("error_message") or ""),"why_held":str(row.get("why_held") or ""),
+        "warning_text":str(row.get("warning_text") or ""),"advanced_reject":row.get("advanced_reject"),
+        "trade_log":row.get("trade_log") or [],"broker_order_id":str(row.get("broker_order_id") or ""),
+        "permanent_id":str(row.get("permanent_id") or "")}
+    occurred=parse_datetime(str(row.get("occurred_at") or "")) or timezone.now()
+    history,_=OrderStatusHistory.objects.get_or_create(event_key=event_key[:128],defaults={"order":order,
+        "from_status":order.status,"to_status":target or order.status,"source":source,"broker_status":broker_status,
+        "reason_code":str(row.get("error_code") or "")[:64],"reason":_broker_reason(row),"details":details,
+        "occurred_at":occurred,"operator_requested":bool(row.get("operator_requested"))})
+    if target and target!="FILLED" and order.status not in TERMINAL and target in ALLOWED.get(order.status,set()):
+        order.status=target;order.save(update_fields=["status","updated_at"])
+    return history
 
 def sync_orders(rows, snapshot):
     for row in rows:
@@ -109,7 +125,37 @@ def sync_orders(rows, snapshot):
         order.broker_permanent_id=str(row.get("permanent_id") or order.broker_permanent_id)
         order.quantity=max(order.quantity,dec(row.get("quantity")))
         order.save(update_fields=["broker_order_id","broker_permanent_id","quantity","updated_at"])
-        _set_broker_status(order,STATUS_MAP.get(row.get("status")),f"broker-status:{snapshot}:{order.internal_id}:{row.get('status')}:{row.get('filled_quantity')}")
+        identity=json.dumps([snapshot,order.internal_id,row.get("status"),row.get("filled_quantity"),row.get("error_code"),
+            row.get("error_message"),row.get("why_held"),row.get("occurred_at")],default=str,separators=(",",":"))
+        _record_broker_status(order,row,f"broker-snapshot:{hashlib.sha256(identity.encode()).hexdigest()}")
+
+def sync_order_event(row):
+    order=None
+    if row.get("internal_id"):order=Order.objects.filter(internal_id=row["internal_id"]).first()
+    if not order and row.get("permanent_id"):order=Order.objects.filter(broker_permanent_id=str(row["permanent_id"])).first()
+    if not order and row.get("broker_order_id"):order=Order.objects.filter(broker_order_id=str(row["broker_order_id"])).first()
+    if not order:
+        _,portfolio=ensure_account(row.get("account"));instrument=ensure_instrument(row)
+        order=_external_order({**row,"status":row.get("broker_status")},instrument,portfolio)
+    order.broker_order_id=str(row.get("broker_order_id") or order.broker_order_id)
+    order.broker_permanent_id=str(row.get("permanent_id") or order.broker_permanent_id)
+    order.save(update_fields=["broker_order_id","broker_permanent_id","updated_at"])
+    source_id=str(row.get("source_event_id") or "")
+    if not source_id:
+        source_id=hashlib.sha256(json.dumps(row,sort_keys=True,default=str).encode()).hexdigest()
+    return _record_broker_status(order,row,f"broker-order:{source_id}")
+
+def record_gateway_command_failure(payload):
+    command_payload=payload.get("payload") or {};internal_id=str(command_payload.get("internal_id") or "")
+    order=Order.objects.filter(internal_id=internal_id).first()
+    if not order:return
+    command_type=str(payload.get("command_type") or "");target={"PLACE_ORDER":"BROKER_BLOCKED",
+        "MODIFY_ORDER":"UNKNOWN","CANCEL_ORDER":"UNKNOWN"}.get(command_type)
+    row={"broker_status":"GatewayCommandFailed","error_code":"GATEWAY_COMMAND_FAILED",
+        "error_message":str(payload.get("error") or "Gateway order command failed"),
+        "operator_requested":command_type=="CANCEL_ORDER","occurred_at":payload.get("occurred_at")}
+    _record_broker_status(order,row,f"gateway-command:{payload.get('command_id')}:{command_type}",source="gateway",
+        target_override=target)
 
 def sync_executions(rows):
     for row in rows:
@@ -131,6 +177,8 @@ def process_snapshot(event):
     event_type=event.get("event_type","");payload=event.get("payload",{})
     if event_type=="command.qualify.completed":
         ensure_instrument(payload);return
+    if event_type=="broker.order":
+        sync_order_event(payload);return
     if event_type=="market.raw":
         source_key=str(payload.get("source_event_id") or "")
         if not source_key:return
@@ -153,6 +201,15 @@ def process_snapshot(event):
             instrument_id,timeframe=key.split(":",1);reason=str(payload.get("error") or "Gateway market-data command failed")[:2000]
             MarketDataSubscription.objects.filter(instrument_id=instrument_id,timeframe=timeframe).update(state="ERROR",last_error=reason)
             StrategyInstance.objects.filter(enabled=True,instrument_id=instrument_id,timeframe=timeframe).update(state="BLOCKED",block_reason=reason[:255])
+        return
+    if event_type=="command.failed" and payload.get("command_type") in {"PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER"}:
+        record_gateway_command_failure(payload);return
+    if event_type=="session.disconnected":
+        reason=str(payload.get("error") or "IBKR connection lost")
+        occurred=payload.get("occurred_at")
+        for order in Order.objects.filter(status__in=["SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED","CANCEL_PENDING"]):
+            _record_broker_status(order,{"broker_status":"Unknown","error_code":"CONNECTION_LOST",
+                "error_message":reason,"occurred_at":occurred},f"broker-disconnect:{event.get('id')}:{order.internal_id}")
         return
     rows=payload.get("value",[])
     if event_type=="snapshot.accounts": sync_accounts(rows)

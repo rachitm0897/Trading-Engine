@@ -37,6 +37,14 @@ def _page(request, default=250, maximum=500):
         limit, offset = default, 0
     return limit, offset
 
+def _order_row(order):
+    return {"id":order.pk,"internal_id":order.internal_id,"account_id":order.intent.portfolio.account.account_id,
+        "portfolio_id":order.intent.portfolio_id,"symbol":order.intent.instrument.symbol,"side":order.intent.side,
+        "order_type":order.intent.order_type,"time_in_force":order.intent.time_in_force,"broker_order_id":order.broker_order_id,
+        "broker_permanent_id":order.broker_permanent_id,"status":order.status,"quantity":order.quantity,
+        "filled_quantity":order.filled_quantity,"average_fill_price":order.average_fill_price,
+        "created_at":order.created_at,"updated_at":order.updated_at}
+
 @csrf_exempt
 def gateway(request):
     from apps.broker_gateway.client import GatewayClient, GatewayError
@@ -105,6 +113,35 @@ def orders(request, internal_id=None, action=None):
     from apps.portfolios.models import TradingPortfolio
     from apps.risk.services import evaluate_intent
     if request.method == "GET":
+        if internal_id and action=="detail":
+            try:
+                order=Order.objects.select_related("intent__instrument","intent__portfolio__account","intent__strategy",
+                    "intent__strategy_instance","intent__strategy_version").get(internal_id=internal_id)
+            except Order.DoesNotExist:
+                return response(status=404,error={"code":"ORDER_NOT_FOUND","message":"Order was not found","details":{}})
+            history=[]
+            for item in order.status_history.all().order_by("occurred_at","id"):
+                history.append({"id":item.pk,"from_status":item.from_status,"to_status":item.to_status,
+                    "broker_status":item.broker_status,"reason_code":item.reason_code,"reason":item.reason,
+                    "source":item.source,"details":item.details,"occurred_at":item.occurred_at,
+                    "operator_requested":item.operator_requested})
+            fills=[{"execution_id":item.execution_id,"quantity":item.quantity,"price":item.price,
+                "commission":item.commission,"currency":item.currency,"executed_at":item.executed_at,
+                "raw_event":item.raw_event} for item in order.fills.all().order_by("executed_at","id")]
+            risks=[{"id":item.pk,"check_name":item.check_name,"decision":item.decision,"reason":item.reason,
+                "requested_quantity":item.requested_quantity,"approved_quantity":item.approved_quantity,
+                "details":item.details,"created_at":item.created_at}
+                for item in order.intent.risk_checks.all().order_by("created_at","id")]
+            attributions=[{"id":item.pk,"strategy_id":item.strategy_id,"strategy":item.strategy.name,
+                "strategy_instance_id":item.strategy_instance_id,
+                "strategy_instance":item.strategy_instance.name if item.strategy_instance else None,
+                "strategy_version_id":item.strategy_version_id,"target_delta":item.target_delta,
+                "allocated_quantity":item.allocated_quantity,"allocated_value":item.allocated_value,
+                "allocated_cost":item.allocated_cost,"realized_pnl":item.realized_pnl,"method":item.method}
+                for item in order.intent.attributions.select_related("strategy","strategy_instance","strategy_version").all()]
+            diagnostics=[item for item in history if item["broker_status"] or item["reason_code"] or item["source"] in {"ibkr","gateway"}]
+            return response({"order":_order_row(order),"status_history":history,"broker_diagnostics":diagnostics,
+                "risk_decisions":risks,"fills":fills,"strategy_attribution":attributions})
         limit,offset=_page(request)
         query=Order.objects.select_related("intent__instrument","intent__portfolio__account").order_by("-created_at")
         if request.GET.get("portfolio"):query=query.filter(intent__portfolio_id=request.GET["portfolio"])
@@ -113,12 +150,7 @@ def orders(request, internal_id=None, action=None):
         total=query.count()
         rows=[]
         for order in query[offset:offset+limit]:
-            rows.append({"id":order.pk,"internal_id":order.internal_id,"account_id":order.intent.portfolio.account.account_id,
-                "portfolio_id":order.intent.portfolio_id,"symbol":order.intent.instrument.symbol,"side":order.intent.side,
-                "order_type":order.intent.order_type,"time_in_force":order.intent.time_in_force,"broker_order_id":order.broker_order_id,
-                "broker_permanent_id":order.broker_permanent_id,"status":order.status,"quantity":order.quantity,
-                "filled_quantity":order.filled_quantity,"average_fill_price":order.average_fill_price,
-                "created_at":order.created_at,"updated_at":order.updated_at})
+            rows.append(_order_row(order))
         return response(rows,meta={"count":total,"limit":limit,"offset":offset})
     key=request.headers.get("Idempotency-Key")
     if not key: return response(status=400,error={"code":"IDEMPOTENCY_KEY_REQUIRED","message":"Idempotency-Key header is required","details":{}})
@@ -141,7 +173,9 @@ def orders(request, internal_id=None, action=None):
         order=Order.objects.select_related("intent").get(internal_id=internal_id); gateway=GatewayClient()
         if action=="cancel":
             if order.status not in {"QUEUED","SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED","UNKNOWN"}: raise ValueError("Order cannot be cancelled in its current state")
-            order=transition(order,"CANCEL_PENDING","operator",f"order:{order.internal_id}:cancel:{key}")
+            payload=json.loads(request.body or b"{}");operator_reason=str(payload.get("reason") or "")[:255]
+            order=transition(order,"CANCEL_PENDING","operator",f"order:{order.internal_id}:cancel:{key}",operator_reason,
+                reason_code="OPERATOR_CANCEL_REQUEST",details={"operator_reason":operator_reason},operator_requested=True)
             command=gateway.cancel_order(order.internal_id,key); return response({"internal_id":order.internal_id,"status":order.status,"gateway_command":command},status=202)
         payload=json.loads(request.body or b"{}")
         if order.status not in {"QUEUED","SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED"}: raise ValueError("Order cannot be modified in its current state")

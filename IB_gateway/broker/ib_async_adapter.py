@@ -1,12 +1,17 @@
 from django.conf import settings
 from collections import deque
 from datetime import date, datetime, time, timedelta, timezone
+import hashlib
+import json
 from .base import BrokerAdapter
 
 class IBAsyncBrokerAdapter(BrokerAdapter):
     def __init__(self):
         from ib_async import IB
         self.ib = IB(); self.contracts = {}; self.trades = {}; self.market_subscriptions={};self.market_events=deque()
+        self.order_events=deque();self.operator_cancellations=set()
+        self.ib.orderStatusEvent += self._on_order_status
+        self.ib.errorEvent += self._on_error
     def connect(self):
         self.ib.connect("127.0.0.1", settings.TWS_PORT, clientId=settings.IBKR_CLIENT_ID, readonly=False, timeout=15)
         return {"connected":self.ib.isConnected()}
@@ -95,6 +100,10 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         events=[]
         while self.market_events:events.append(self.market_events.popleft())
         return events
+    def drain_order_events(self):
+        events=[]
+        while self.order_events:events.append(self.order_events.popleft())
+        return events
     def _order(self, payload):
         from ib_async import MarketOrder, LimitOrder, StopOrder, StopLimitOrder
         action, qty, tif = payload["side"], float(payload["quantity"]), payload.get("time_in_force", "DAY")
@@ -123,10 +132,48 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
             if source in payload: setattr(trade.order, dest, float(payload[source]))
         trade = self.ib.placeOrder(trade.contract, trade.order); return {"broker_order_id":str(trade.order.orderId), "status":trade.orderStatus.status}
     def cancel_order(self, payload):
-        trade = self._find_trade(payload["internal_id"]); self.ib.cancelOrder(trade.order); return {"broker_order_id":str(trade.order.orderId), "status":"PendingCancel"}
+        trade = self._find_trade(payload["internal_id"]);self.operator_cancellations.add(payload["internal_id"])
+        self.ib.cancelOrder(trade.order); return {"broker_order_id":str(trade.order.orderId), "status":"PendingCancel"}
+    @staticmethod
+    def _log_data(entry):
+        occurred=getattr(entry,"time",None)
+        return {"time":occurred.isoformat() if occurred else None,"status":str(getattr(entry,"status","") or ""),
+            "message":str(getattr(entry,"message","") or ""),"error_code":str(getattr(entry,"errorCode","") or "")}
+    @staticmethod
+    def _advanced_reject(trade):
+        value=getattr(trade,"advancedError","") or ""
+        if not value:return None
+        try:return json.loads(value)
+        except (TypeError,json.JSONDecodeError):return value
+    def _order_event(self,trade,error_code=None,error_message=""):
+        order,status=trade.order,trade.orderStatus;logs=[self._log_data(item) for item in list(trade.log)]
+        latest=logs[-1] if logs else {};occurred_at=latest.get("time") or datetime.now(timezone.utc).isoformat()
+        log_code=latest.get("error_code") or "";log_message=latest.get("message") or ""
+        code=str(error_code if error_code not in (None,"") else log_code)
+        message=str(error_message or log_message or "")
+        why_held=str(getattr(status,"whyHeld","") or "")
+        internal_id=str(order.orderRef or "")
+        identity=json.dumps([internal_id,order.orderId,status.status,code,message,occurred_at],default=str,separators=(",",":"))
+        source_event_id=hashlib.sha256(identity.encode()).hexdigest()
+        return {**self._contract_data(trade.contract),"source_event_id":source_event_id,"internal_id":internal_id,
+            "account":order.account,"broker_order_id":str(order.orderId),"permanent_id":str(order.permId or ""),
+            "broker_status":str(status.status or ""),"error_code":code,"error_message":message,
+            "why_held":why_held,"warning_text":log_message,"advanced_reject":self._advanced_reject(trade),
+            "trade_log":logs,"occurred_at":occurred_at,"operator_requested":internal_id in self.operator_cancellations}
+    def _on_order_status(self,trade):
+        self.order_events.append(self._order_event(trade))
+    def _on_error(self,req_id,error_code,error_string,contract=None,*_args):
+        trade=next((candidate for candidate in self.ib.trades() if candidate.order.orderId==req_id),None)
+        if trade:self.order_events.append(self._order_event(trade,error_code,error_string))
     def _trade_data(self, trade):
         order, status = trade.order, trade.orderStatus
-        return {**self._contract_data(trade.contract),"account":order.account,"internal_id":order.orderRef,"broker_order_id":str(order.orderId),"permanent_id":str(order.permId or ""),"side":order.action,"quantity":str(order.totalQuantity),"order_type":order.orderType,"limit_price":None if order.lmtPrice in (0,1.7976931348623157e308) else str(order.lmtPrice),"stop_price":None if order.auxPrice in (0,1.7976931348623157e308) else str(order.auxPrice),"time_in_force":order.tif,"status":status.status,"filled_quantity":str(status.filled),"remaining_quantity":str(status.remaining),"average_fill_price":str(status.avgFillPrice or 0)}
+        diagnostic=self._order_event(trade)
+        return {**self._contract_data(trade.contract),"account":order.account,"internal_id":order.orderRef,"broker_order_id":str(order.orderId),"permanent_id":str(order.permId or ""),"side":order.action,"quantity":str(order.totalQuantity),"order_type":order.orderType,"limit_price":None if order.lmtPrice in (0,1.7976931348623157e308) else str(order.lmtPrice),"stop_price":None if order.auxPrice in (0,1.7976931348623157e308) else str(order.auxPrice),"time_in_force":order.tif,"status":status.status,"filled_quantity":str(status.filled),"remaining_quantity":str(status.remaining),"average_fill_price":str(status.avgFillPrice or 0),
+            "broker_status":diagnostic["broker_status"],"error_code":diagnostic["error_code"],
+            "error_message":diagnostic["error_message"],"why_held":diagnostic["why_held"],
+            "warning_text":diagnostic["warning_text"],"advanced_reject":diagnostic["advanced_reject"],
+            "trade_log":diagnostic["trade_log"],"occurred_at":diagnostic["occurred_at"],
+            "operator_requested":diagnostic["operator_requested"]}
     def refresh_state(self):
         summary=[]
         for value in self.ib.accountValues(): summary.append({"account":value.account,"tag":value.tag,"value":value.value,"currency":value.currency,"model_code":value.modelCode})

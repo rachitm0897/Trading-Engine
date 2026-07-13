@@ -30,9 +30,13 @@ def create_order(intent, quantity=None):
     return order
 
 @transaction.atomic
-def transition(order, new_status, source, event_key, reason=""):
+def transition(order, new_status, source, event_key, reason="", *, broker_status="", reason_code="", details=None,
+               occurred_at=None, operator_requested=False):
     order = Order.objects.select_for_update().get(pk=order.pk)
-    history, created = OrderStatusHistory.objects.get_or_create(event_key=event_key, defaults={"order": order, "from_status": order.status, "to_status": new_status, "source": source, "reason": reason})
+    history, created = OrderStatusHistory.objects.get_or_create(event_key=event_key, defaults={"order": order,
+        "from_status": order.status, "to_status": new_status, "source": source,"broker_status":broker_status,
+        "reason_code":reason_code,"reason":reason,"details":details or {},"occurred_at":occurred_at or timezone.now(),
+        "operator_requested":operator_requested})
     if not created: return order
     if new_status not in ALLOWED.get(order.status, set()): raise ValueError(f"Invalid order transition {order.status} -> {new_status}")
     order.status = new_status; order.save(update_fields=["status", "updated_at"])
