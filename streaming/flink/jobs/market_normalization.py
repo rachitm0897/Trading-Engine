@@ -27,8 +27,8 @@ class Validate(KeyedBroadcastProcessFunction):
                 canonical["source_event_id"],incoming,canonical["event_time"]),separators=(",",":"))
         except Exception as exc:
             payload={"source_topic":"market.raw.v1","reason":str(exc),"raw":value}
-            ctx.output(DLQ,json.dumps(envelope("dead-letter","stream","market.raw.v1",payload,
-                hashlib.sha256(value.encode()).hexdigest(),{}),separators=(",",":")))
+            yield DLQ,json.dumps(envelope("dead-letter","stream","market.raw.v1",payload,
+                hashlib.sha256(value.encode()).hexdigest(),{}),separators=(",",":"))
 
 
 class Deduplicate(KeyedProcessFunction):
