@@ -30,7 +30,7 @@ def reconcile_market_subscription(instrument,timeframe,gateway=None,force=False,
         if not force and subscription.state in {"SUBSCRIBING","ACTIVE"} and subscription.gateway_connection_generation==generation:
             subscription.save(update_fields=["conid","consumer_count","required_history_bars","updated_at"]);return subscription
         subscription.request_id=uuid.uuid4();subscription.state="SUBSCRIBING";subscription.requested_at=timezone.now()
-        subscription.gateway_connection_generation=generation;subscription.last_error=""
+        subscription.gateway_connection_generation=generation
         subscription.save()
         payload={"subscription_key":f"{instrument.pk}:{timeframe}","instrument_id":instrument.pk,"conid":contract.conid,
             "symbol":instrument.symbol,"asset_class":instrument.asset_class,"exchange":instrument.exchange,

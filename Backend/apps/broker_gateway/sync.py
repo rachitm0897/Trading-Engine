@@ -200,8 +200,9 @@ def process_snapshot(event):
         key=str(payload.get("subscription_key") or "")
         if ":" in key:
             instrument_id,timeframe=key.split(":",1)
-            MarketDataSubscription.objects.filter(instrument_id=instrument_id,timeframe=timeframe).update(
-                state="ACTIVE" if event_type=="command.subscribe_market_data.completed" else "INACTIVE",last_error="")
+            updates={"state":"ACTIVE" if event_type=="command.subscribe_market_data.completed" else "INACTIVE"}
+            if event_type=="command.cancel_market_data.completed":updates["last_error"]=""
+            MarketDataSubscription.objects.filter(instrument_id=instrument_id,timeframe=timeframe).update(**updates)
         return
     if event_type=="command.failed" and payload.get("command_type") in {"SUBSCRIBE_MARKET_DATA","CANCEL_MARKET_DATA"}:
         command_payload=payload.get("payload") or {};key=str(command_payload.get("subscription_key") or "")
