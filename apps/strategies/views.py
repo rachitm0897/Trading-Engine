@@ -39,6 +39,7 @@ def _instance(item, detail=False):
         "CREATED","RISK_APPROVED","QUEUED","SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED"]).select_related("order_intent__order").first()
     last_fill=Fill.objects.filter(order__intent__attributions__strategy_instance=item).order_by("-executed_at").first()
     latest_indicators={}
+    from apps.market_streams.health import strategy_stream_status
     # Portable across SQLite/PostgreSQL: select the first value for each declared indicator.
     for binding in item.input_bindings.filter(strategy_version__version=item.version,requirement__input_type="INDICATOR").select_related("requirement"):
         requirement=binding.requirement;value=IndicatorValue.objects.filter(instrument=item.instrument,timeframe=item.timeframe,
@@ -59,7 +60,7 @@ def _instance(item, detail=False):
         "attributed_quantity":attributed.quantity if attributed else 0,
         "active_order":active_attribution.order_intent.order.internal_id if active_attribution else None,
         "last_fill":last_fill.execution_id if last_fill else None,"cooldown":item.state_data.get("cooldown_until"),
-        "created_at":item.created_at,"updated_at":item.updated_at}
+        "streaming":strategy_stream_status(item),"created_at":item.created_at,"updated_at":item.updated_at}
     if detail:
         row["versions"]=[{"id":x.pk,"version":x.version,"parameter_hash":x.parameter_hash,"configuration_snapshot":x.configuration_snapshot,
             "created_at":x.created_at,"activated_at":x.activated_at,"retired_at":x.retired_at} for x in item.versions.order_by("-version")]

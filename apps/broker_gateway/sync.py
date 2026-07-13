@@ -179,6 +179,14 @@ def process_snapshot(event):
         ensure_instrument(payload);return
     if event_type=="broker.order":
         sync_order_event(payload);return
+    if event_type=="market.error":
+        key=str(payload.get("subscription_key") or "");reason=f"IBKR error {payload.get('error_code')}: {payload.get('error_message')}"[:2000]
+        if ":" in key:
+            instrument_id,timeframe=key.split(":",1)
+            MarketDataSubscription.objects.filter(instrument_id=instrument_id,timeframe=timeframe).update(state="ERROR",last_error=reason)
+            StrategyInstance.objects.filter(enabled=True,instrument_id=instrument_id,timeframe=timeframe).update(
+                state="BLOCKED",block_reason=reason[:255])
+        return
     if event_type=="market.raw":
         source_key=str(payload.get("source_event_id") or "")
         if not source_key:return
@@ -186,7 +194,7 @@ def process_snapshot(event):
             "event_type":"market.raw","aggregate_type":"instrument","aggregate_id":str(payload["instrument_id"]),
             "partition_key":str(payload["instrument_id"]),"payload":payload})
         MarketDataSubscription.objects.filter(instrument_id=payload.get("instrument_id"),timeframe=payload.get("timeframe")).update(
-            state="ACTIVE",last_event_at=parse_datetime(payload.get("event_time") or "") or timezone.now(),last_error="")
+            state="ACTIVE",last_event_at=parse_datetime(str(event.get("created_at") or "")) or timezone.now(),last_error="")
         return
     if event_type in {"command.subscribe_market_data.completed","command.cancel_market_data.completed"}:
         key=str(payload.get("subscription_key") or "")
