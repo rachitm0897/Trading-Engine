@@ -52,6 +52,7 @@ def _instance(item, detail=False):
         "parameters":item.parameters,"target_configuration":item.target_configuration,"risk_policy_id":item.risk_policy_id,
         "order_policy_id":item.order_policy_id,"execution_mode":item.execution_mode,"state":item.state,"enabled":item.enabled,
         "version":item.version,"warmup_progress":item.warmup_progress,"warmup_required":plugin.warmup_bars(item.parameters),
+        "warmup_started_at":item.warmup_started_at,"warmup_last_progress_at":item.warmup_last_progress_at,
         "block_reason":item.block_reason,"effective_from":item.effective_from,"effective_to":item.effective_to,
         "last_final_bar":latest_bar.window_end if latest_bar else None,"latest_indicators":latest_indicators,
         "latest_signal":latest_signal.signal_type if latest_signal else None,"current_target":latest_target.target_weight if latest_target else None,

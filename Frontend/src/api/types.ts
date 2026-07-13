@@ -289,6 +289,8 @@ export interface StrategyInstance {
   version: number
   warmup_progress: number
   warmup_required: number
+  warmup_started_at: string | null
+  warmup_last_progress_at: string | null
   block_reason: string
   effective_from: string | null
   effective_to: string | null

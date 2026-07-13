@@ -42,6 +42,7 @@ CELERY_BEAT_SCHEDULE = {
     "publish-outbox": {"task": "apps.event_bus.tasks.publish_outbox_events", "schedule": 2.0},
     "stream-health": {"task": "apps.event_bus.tasks.check_stream_health", "schedule": 30.0},
     "restore-market-subscriptions": {"task": "apps.market_streams.tasks.restore_active_market_subscriptions", "schedule": 15.0},
+    "warmup-timeouts": {"task": "apps.market_streams.tasks.check_warmup_timeouts", "schedule": 30.0},
     "recover-rebalances": {"task": "apps.rebalancing.tasks.recover_incomplete_rebalances", "schedule": 60.0},
 }
 IB_GATEWAY_SERVICE_URL = os.getenv("IB_GATEWAY_SERVICE_URL", "http://localhost:8080/api/v1")
@@ -56,4 +57,5 @@ if NEW_EXECUTION_MODE not in {"SHADOW", "PAPER"}:
     raise RuntimeError("NEW_EXECUTION_MODE must be SHADOW or PAPER")
 MARKET_PRICE_STALE_SECONDS = int(os.getenv("MARKET_PRICE_STALE_SECONDS", "300"))
 WARMUP_SAFETY_BARS = int(os.getenv("WARMUP_SAFETY_BARS", "5"))
+WARMUP_TIMEOUT_SECONDS = int(os.getenv("WARMUP_TIMEOUT_SECONDS", "300"))
 FLINK_REST_URL = os.getenv("FLINK_REST_URL", "http://localhost:8081")
