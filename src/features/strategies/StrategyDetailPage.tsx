@@ -1,10 +1,10 @@
 import {useMemo, useState} from 'react'
-import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
+import {useMutation, useQuery, useQueryClient, type UseQueryResult} from '@tanstack/react-query'
 import {ArrowLeft, CirclePause, Power, SlidersHorizontal} from 'lucide-react'
 import {Link, useParams, useSearchParams} from 'react-router-dom'
 import {mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
-import type {StrategyInstance, StrategyTimelineItem} from '../../api/types'
+import type {StrategyChartData, StrategyInstance, StrategyTimelineItem} from '../../api/types'
 import {ActivityTimeline} from '../../components/ActivityTimeline'
 import {TimeSeriesChart, type ChartLine, type ChartMarker} from '../../components/charts/TimeSeriesChart'
 import {ConfirmActionDialog, DataTable, EmptyState, ErrorState, Freshness, MetricCard, PageHeader, Panel, Skeleton, StatusBadge, formatCompact, formatDateTime, formatNumber, formatPercent} from '../../components/ui'
@@ -74,7 +74,7 @@ function OverviewTab({strategy, timeline, timelineLoading}: {strategy: StrategyI
   </div>
 }
 
-function ChartTab({query}: {query: ReturnType<typeof useQuery<ReturnType<never>>> | {isLoading: boolean; isError: boolean; error: unknown; data?: import('../../api/types').StrategyChartData; refetch: () => unknown}}) {
+function ChartTab({query}: {query: UseQueryResult<StrategyChartData, Error>}) {
   if (query.isLoading) return <Panel><Skeleton height={420} /></Panel>
   if (query.isError || !query.data) return <ErrorState title="Strategy chart is unavailable" error={query.error} onRetry={() => void query.refetch()} />
   const grouped = new Map<string, ChartLine>()
@@ -87,7 +87,7 @@ function ChartTab({query}: {query: ReturnType<typeof useQuery<ReturnType<never>>
   return <Panel title="Market, indicators & execution markers" description={`Source: ${query.data.source}. No production series is hardcoded.`}><div className="chart-legend"><span><i className="marker signal" />Signal</span><span><i className="marker target" />Target</span><span><i className="marker order" />Order</span><span><i className="marker fill" />Fill</span></div><TimeSeriesChart height={420} candles={query.data.bars.map((bar) => ({time: bar.time, open: Number(bar.open), high: Number(bar.high), low: Number(bar.low), close: Number(bar.close)}))} lines={[...grouped.values()]} markers={markers} ariaLabel="Strategy price, indicator, signal, target, order, and fill chart" /></Panel>
 }
 
-function ActivityTab({query}: {query: {isLoading: boolean; isError: boolean; error: unknown; data?: StrategyTimelineItem[]; refetch: () => unknown}}) {
+function ActivityTab({query}: {query: UseQueryResult<StrategyTimelineItem[], Error>}) {
   if (query.isLoading) return <Skeleton lines={6} />
   if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />
   return <Panel title="Complete execution timeline" description="Runs, signals, targets, order intents, orders, and fills in reverse chronological order"><ActivityTimeline items={(query.data || []).map(timelineItem)} /></Panel>

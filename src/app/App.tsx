@@ -3,10 +3,13 @@ import {BrowserRouter} from 'react-router-dom'
 import {queryClient} from './queryClient'
 import {AppRoutes} from '../routes/AppRoutes'
 
-export function appBasename() {
-  const configured = import.meta.env.VITE_APP_BASE_PATH || import.meta.env.BASE_URL || '/'
+export function normalizeBasename(configured: string) {
   const normalized = configured.startsWith('/') ? configured : `/${configured}`
   return normalized === '/' ? '/' : normalized.replace(/\/$/, '')
+}
+
+export function appBasename() {
+  return normalizeBasename(import.meta.env.VITE_APP_BASE_PATH || import.meta.env.BASE_URL || '/')
 }
 
 export default function App() {
@@ -18,4 +21,3 @@ export default function App() {
     </QueryClientProvider>
   )
 }
-

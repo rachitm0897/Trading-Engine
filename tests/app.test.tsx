@@ -1,6 +1,6 @@
 import {render, screen, waitFor, within} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import App, {appBasename} from '../src/App'
+import App, {appBasename, normalizeBasename} from '../src/App'
 import {queryClient} from '../src/app/queryClient'
 import {usePreferencesStore} from '../src/stores/preferences'
 
@@ -178,6 +178,7 @@ test('uses the API and application base path contracts', async () => {
   await waitFor(() => expect(fetch).toHaveBeenCalled())
   expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain('/api/v1/')
   expect(appBasename()).toBe('/')
+  expect(normalizeBasename('/trading_eng_frontend/')).toBe('/trading_eng_frontend')
 })
 
 test('responsive navigation has an accessible mobile toggle', async () => {
