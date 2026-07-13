@@ -7,6 +7,7 @@ The implementation proceeds with these safe defaults:
 - Decimal quantities support fractional shares, while each instrument's configured lot size controls rounding.
 - Strategy configurations carry their own version; changing parameters should create a new version operationally.
 - Controlled 15-second polling is used for the first frontend release rather than SSE.
+- NAV/P&L history is reconstructed from persisted market bars and current holdings, anchored to the latest broker NAV; production history requires certified TimescaleDB snapshots and retention policies.
 - Sector limits apply only where instrument sector metadata exists.
 - New flow/rebalance execution defaults to `SHADOW`; `PAPER` must be selected explicitly and live is rejected.
 - A portfolio flow represents settled cash; approved strategy-capital changes commit atomically with the run and outbox fact.

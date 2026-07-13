@@ -10,7 +10,7 @@ Updated 2026-07-13.
 | Backend financial domain | Implemented | Core models, ledgers, audit/outbox, OMS, fills, risk, reconciliation records. |
 | Strategies and allocation | Implemented | Exactly five engines, reproducible run hash, aggregation, lot rounding, notional suppression. |
 | Configurable streaming strategies | Implemented | Definition/instance/version domain, five plugins, schema validation, canonical contract resolution, shared input registry, dynamic bars/indicators, isolated state, common targets, netting/version attribution, management APIs, terminal builder and monitor. |
-| Frontend | Implemented | Ten terminal windows, Backend-only data access, QFS base path, controls and status. |
+| Frontend | Implemented | Five bookmarkable operator sections, typed route queries, schema-driven strategy creation, real persisted charts, responsive layouts, QFS base path, controls and status. |
 | Automated unit tests | Implemented | Backend, Gateway, and Frontend suites use mocks and no real IBKR account. |
 | Kafka event foundation | Implemented | 21 private topics, including the active strategy-input registry; versioned envelopes, acknowledged transactional outbox publishing, retry, idempotent consumption, DLQ, replay and Prometheus metrics. |
 | PyFlink market processing | Implemented | Stable UIDs; normalization/dedup/DLQ; event-time 1m/5m/1d versioned OHLCV; indicators; stale timers; checkpoints/savepoints and checkpoint restore. |

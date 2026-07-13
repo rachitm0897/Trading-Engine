@@ -42,7 +42,7 @@ Wait-FlinkCheckpoints -Jobs $afterTaskManager
 docker compose restart flink-jobmanager
 $afterJobManager = @(Wait-FlinkHealthy)
 
-$expected = @("market-normalization-v1","bar-aggregation-v1","indicator-computation-v1","stale-price-detection-v1","stream-health-v1") | Sort-Object
+$expected = @("market-normalization-v1","bar-aggregation-v2","indicator-computation-v2","stale-price-detection-v1","stream-health-v1") | Sort-Object
 if (Compare-Object $expected @($afterJobManager.name | Sort-Object)) { throw "Recovered Flink job set differs" }
 
 Write-Output "Streaming recovery smoke test passed"

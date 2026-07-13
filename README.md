@@ -5,7 +5,7 @@ A paper-first execution platform that turns deterministic strategy targets into 
 ## Applications
 
 - `Backend/` — Django/DRF, PostgreSQL, Redis, Celery, strategy/allocation/risk/OMS/execution/reconciliation.
-- `Frontend/` — React/TypeScript terminal UI served by Nginx.
+- `Frontend/` — React/TypeScript operator application served by Nginx.
 - `IB_gateway/` — one-port Django, IBC, IB Gateway, Xvfb/Fluxbox, VNC/noVNC, Nginx, Supervisor, and the sole `ib_async` worker.
 
 `streaming/` contains private Kafka contracts and PyFlink jobs; it is infrastructure, not a fourth public application. PostgreSQL remains the financial source of truth. Strategies, Kafka, Flink and the Frontend cannot access the TWS socket; only the Gateway worker connects to `127.0.0.1:4001/4002`.
@@ -43,7 +43,7 @@ docker compose ps
 powershell -NoProfile -File docs/streaming_recovery_smoke.ps1
 ```
 
-See [local development](docs/LOCAL_DEVELOPMENT.md) and each application README for isolated commands.
+See [local development](docs/LOCAL_DEVELOPMENT.md), the [frontend redesign guide](docs/FRONTEND_REDESIGN.md), and each application README for isolated commands.
 
 ## QFS
 
