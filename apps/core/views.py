@@ -29,6 +29,14 @@ def _serialize(queryset, fields):
         rows.append(row)
     return rows
 
+def _page(request, default=250, maximum=500):
+    try:
+        limit = min(max(int(request.GET.get("limit", default)), 1), maximum)
+        offset = max(int(request.GET.get("offset", 0)), 0)
+    except (TypeError, ValueError):
+        limit, offset = default, 0
+    return limit, offset
+
 @csrf_exempt
 def gateway(request):
     from apps.broker_gateway.client import GatewayClient, GatewayError
@@ -47,12 +55,21 @@ def instruments(request):
 
 def portfolios(request):
     from apps.portfolios.models import TradingPortfolio
-    return response(_serialize(TradingPortfolio.objects.select_related("account"), ["name", "cash_buffer_pct", "margin_buffer_pct", "minimum_notional", "minimum_quantity", "minimum_drift", "kill_switch"]))
+    rows=[]
+    for item in TradingPortfolio.objects.select_related("account"):
+        rows.append({"id":item.pk,"name":item.name,"account_id":item.account_id,"account":item.account.account_id,
+            "cash_buffer_pct":item.cash_buffer_pct,"margin_buffer_pct":item.margin_buffer_pct,
+            "minimum_notional":item.minimum_notional,"minimum_quantity":item.minimum_quantity,
+            "minimum_drift":item.minimum_drift,"kill_switch":item.kill_switch})
+    return response(rows)
 
 def positions(request):
     from apps.portfolios.models import PortfolioPosition
     rows=[]
-    for item in PortfolioPosition.objects.select_related("instrument","portfolio__account"):
+    query=PortfolioPosition.objects.select_related("instrument","portfolio__account")
+    if request.GET.get("portfolio"):query=query.filter(portfolio_id=request.GET["portfolio"])
+    if request.GET.get("symbol"):query=query.filter(instrument__symbol__iexact=request.GET["symbol"])
+    for item in query:
         rows.append({"id":item.pk,"portfolio_id":item.portfolio_id,"portfolio":item.portfolio.name,"account_id":item.portfolio.account.account_id,"instrument_id":item.instrument_id,"symbol":item.instrument.symbol,"asset_class":item.instrument.asset_class,"currency":item.instrument.currency,"quantity":item.quantity,"average_cost":item.average_cost,"market_price":item.market_price,"market_value":item.quantity*item.market_price,"updated_at":item.updated_at})
     return response(rows)
 
@@ -88,10 +105,21 @@ def orders(request, internal_id=None, action=None):
     from apps.portfolios.models import TradingPortfolio
     from apps.risk.services import evaluate_intent
     if request.method == "GET":
+        limit,offset=_page(request)
+        query=Order.objects.select_related("intent__instrument","intent__portfolio__account").order_by("-created_at")
+        if request.GET.get("portfolio"):query=query.filter(intent__portfolio_id=request.GET["portfolio"])
+        if request.GET.get("status"):query=query.filter(status=request.GET["status"].upper())
+        if request.GET.get("symbol"):query=query.filter(intent__instrument__symbol__iexact=request.GET["symbol"])
+        total=query.count()
         rows=[]
-        for order in Order.objects.select_related("intent__instrument","intent__portfolio__account").order_by("-created_at")[:250]:
-            rows.append({"id":order.pk,"internal_id":order.internal_id,"account_id":order.intent.portfolio.account.account_id,"symbol":order.intent.instrument.symbol,"side":order.intent.side,"order_type":order.intent.order_type,"time_in_force":order.intent.time_in_force,"broker_order_id":order.broker_order_id,"broker_permanent_id":order.broker_permanent_id,"status":order.status,"quantity":order.quantity,"filled_quantity":order.filled_quantity,"average_fill_price":order.average_fill_price,"created_at":order.created_at,"updated_at":order.updated_at})
-        return response(rows)
+        for order in query[offset:offset+limit]:
+            rows.append({"id":order.pk,"internal_id":order.internal_id,"account_id":order.intent.portfolio.account.account_id,
+                "portfolio_id":order.intent.portfolio_id,"symbol":order.intent.instrument.symbol,"side":order.intent.side,
+                "order_type":order.intent.order_type,"time_in_force":order.intent.time_in_force,"broker_order_id":order.broker_order_id,
+                "broker_permanent_id":order.broker_permanent_id,"status":order.status,"quantity":order.quantity,
+                "filled_quantity":order.filled_quantity,"average_fill_price":order.average_fill_price,
+                "created_at":order.created_at,"updated_at":order.updated_at})
+        return response(rows,meta={"count":total,"limit":limit,"offset":offset})
     key=request.headers.get("Idempotency-Key")
     if not key: return response(status=400,error={"code":"IDEMPOTENCY_KEY_REQUIRED","message":"Idempotency-Key header is required","details":{}})
     try:
@@ -127,14 +155,26 @@ def orders(request, internal_id=None, action=None):
 
 def executions(request):
     from apps.execution.models import Fill
+    limit,offset=_page(request)
+    query=Fill.objects.select_related("order__intent__instrument","order__intent__portfolio__account").order_by("-executed_at")
+    if request.GET.get("portfolio"):query=query.filter(order__intent__portfolio_id=request.GET["portfolio"])
+    if request.GET.get("symbol"):query=query.filter(order__intent__instrument__symbol__iexact=request.GET["symbol"])
+    total=query.count()
     rows=[]
-    for fill in Fill.objects.select_related("order__intent__instrument","order__intent__portfolio__account").order_by("-executed_at")[:250]:
+    for fill in query[offset:offset+limit]:
         rows.append({"id":fill.pk,"order_id":fill.order.internal_id,"account_id":fill.order.intent.portfolio.account.account_id,"symbol":fill.order.intent.instrument.symbol,"execution_id":fill.execution_id,"quantity":fill.quantity,"price":fill.price,"commission":fill.commission,"currency":fill.currency,"executed_at":fill.executed_at})
-    return response(rows)
+    return response(rows,meta={"count":total,"limit":limit,"offset":offset})
 
 def reconciliation(request):
     from apps.reconciliation.models import ReconciliationRun, ReconciliationBreak
-    return response({"runs": _serialize(ReconciliationRun.objects.all().order_by("-started_at")[:50], ["trigger", "status", "started_at", "completed_at"]), "breaks": _serialize(ReconciliationBreak.objects.filter(resolved=False).order_by("-created_at")[:100], ["run_id", "category", "severity", "internal_value", "broker_value", "material", "resolved", "resolution", "created_at"])})
+    limit,_=_page(request,100)
+    runs=ReconciliationRun.objects.all().order_by("-started_at")
+    breaks=ReconciliationBreak.objects.filter(resolved=False).order_by("-created_at")
+    if request.GET.get("status"):runs=runs.filter(status=request.GET["status"].upper())
+    if request.GET.get("category"):breaks=breaks.filter(category=request.GET["category"])
+    if request.GET.get("severity"):breaks=breaks.filter(severity=request.GET["severity"].upper())
+    return response({"runs": _serialize(runs[:limit], ["trigger", "status", "started_at", "completed_at"]),
+        "breaks": _serialize(breaks[:limit], ["run_id", "category", "severity", "internal_value", "broker_value", "material", "resolved", "resolution", "created_at"])})
 
 @csrf_exempt
 def risk(request):
@@ -147,4 +187,10 @@ def risk(request):
 
 def audit(request):
     from apps.audit.models import AuditEvent
-    return response(_serialize(AuditEvent.objects.all().order_by("-created_at")[:250], ["event_type", "actor", "aggregate_type", "aggregate_id", "data", "created_at"]))
+    limit,offset=_page(request)
+    query=AuditEvent.objects.all().order_by("-created_at")
+    if request.GET.get("event_type"):query=query.filter(event_type=request.GET["event_type"])
+    if request.GET.get("actor"):query=query.filter(actor=request.GET["actor"])
+    total=query.count()
+    return response(_serialize(query[offset:offset+limit], ["event_type", "actor", "aggregate_type", "aggregate_id", "data", "created_at"]),
+        meta={"count":total,"limit":limit,"offset":offset})

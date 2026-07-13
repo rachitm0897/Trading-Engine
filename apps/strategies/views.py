@@ -126,6 +126,11 @@ def action(request, instance_id, action_name):
                 run=evaluate_instance(item,bar=payload.get("bar",{"is_final":True}),indicators=payload.get("indicators",{}),
                     previous_indicators=payload.get("previous_indicators",{}),event_id=payload.get("event_id"),
                     source_data_version=int(payload.get("source_data_version",1)),force=bool(payload.get("force",False)))
+            if action_name=="flatten" and payload.get("reason"):
+                from apps.audit.models import AuditEvent
+                AuditEvent.objects.get_or_create(idempotency_key=f"audit:strategy:{item.pk}:flatten:{run.pk}",defaults={
+                    "event_type":"strategy.flatten.requested","actor":"frontend_operator","aggregate_type":"strategy_instance",
+                    "aggregate_id":str(item.pk),"data":{"reason":payload["reason"],"strategy_run_id":run.pk}})
             return response({"id":run.pk,"status":run.status,"error":run.error,"target_ids":list(run.targets.values_list("pk",flat=True))},status=201)
         return response(status=404,error={"code":"NOT_FOUND","message":"Unknown action","details":{}})
     except (ValueError,StrategyInstance.DoesNotExist) as exc:
@@ -150,9 +155,57 @@ def related(request, instance_id, resource):
         for run in item.runs.order_by("-started_at")[:100]:rows.append({"time":run.started_at,"type":"RUN","id":run.pk,"status":run.status,"version":run.strategy_version.version if run.strategy_version else None})
         for signal in item.signals.order_by("-signal_time")[:100]:rows.append({"time":signal.signal_time,"type":"SIGNAL","id":signal.pk,"status":signal.signal_type,"version":signal.strategy_version.version})
         for target in item.targets.order_by("-created_at")[:100]:rows.append({"time":target.created_at,"type":"TARGET","id":target.pk,"status":target.status,"version":target.strategy_version.version if target.strategy_version else None})
-        for attribution in item.legacy_strategy.orderintentattribution_set.select_related("order_intent").all():rows.append({"time":attribution.order_intent.created_at,"type":"ORDER_INTENT","id":attribution.order_intent_id,"status":"ELIGIBLE" if attribution.order_intent.eligible else "HELD","version":attribution.strategy_version.version if attribution.strategy_version else None})
+        for attribution in item.legacy_strategy.orderintentattribution_set.select_related("order_intent__order").all():
+            intent=attribution.order_intent
+            rows.append({"time":intent.created_at,"type":"ORDER_INTENT","id":intent.pk,
+                "status":"ELIGIBLE" if intent.eligible else "HELD","version":attribution.strategy_version.version if attribution.strategy_version else None,
+                "detail":f"{intent.side} {intent.quantity} {item.instrument.symbol}"})
+            order=getattr(intent,"order",None)
+            if order:
+                rows.append({"time":order.created_at,"type":"ORDER","id":order.pk,"status":order.status,
+                    "version":attribution.strategy_version.version if attribution.strategy_version else None,"detail":order.internal_id})
+                for fill in order.fills.all():
+                    rows.append({"time":fill.executed_at,"type":"FILL","id":fill.pk,"status":"FILLED",
+                        "version":attribution.strategy_version.version if attribution.strategy_version else None,
+                        "detail":f"{fill.quantity} @ {fill.price}"})
         return response(sorted(rows,key=lambda x:x["time"],reverse=True))
     return response(status=404,error={"code":"NOT_FOUND","message":"Unknown resource","details":{}})
+
+
+def chart(request, instance_id):
+    from apps.market_streams.models import IndicatorValue, MarketBar
+    try:
+        item=_get(instance_id)
+    except StrategyInstance.DoesNotExist:
+        return response(status=404,error={"code":"NOT_FOUND","message":"Strategy instance not found","details":{}})
+    raw_bars=list(MarketBar.objects.filter(instrument=item.instrument,interval=item.timeframe,is_final=True)
+        .order_by("-window_end","-version")[:500])
+    latest={}
+    for bar in raw_bars:
+        if bar.bar_id not in latest:latest[bar.bar_id]=bar
+    bars=sorted(latest.values(),key=lambda x:x.window_end)
+    start=bars[0].window_start if bars else None
+    indicators=IndicatorValue.objects.filter(instrument=item.instrument,timeframe=item.timeframe,is_final=True)
+    if start:indicators=indicators.filter(event_time__gte=start)
+    indicators=indicators.order_by("event_time")[:2000]
+    markers=[]
+    for signal in item.signals.order_by("signal_time"):
+        markers.append({"time":signal.signal_time,"type":"SIGNAL","label":f"Signal {signal.signal_type}"})
+    for target in item.targets.order_by("created_at"):
+        markers.append({"time":target.created_at,"type":"TARGET","label":f"Target {target.target_weight}","value":target.target_weight})
+    for attribution in item.legacy_strategy.orderintentattribution_set.select_related("order_intent__order").all():
+        order=getattr(attribution.order_intent,"order",None)
+        if not order:continue
+        markers.append({"time":order.created_at,"type":"ORDER","label":f"Order {attribution.order_intent.side} {order.status}","value":order.quantity})
+        for fill in order.fills.all():
+            markers.append({"time":fill.executed_at,"type":"FILL","label":f"Fill {fill.quantity} @ {fill.price}","value":fill.price})
+    return response({
+        "bars":[{"time":bar.window_end,"open":bar.open,"high":bar.high,"low":bar.low,"close":bar.close,
+            "volume":bar.volume,"version":bar.version} for bar in bars],
+        "indicators":[{"time":value.event_time,"name":value.indicator,"value":value.value} for value in indicators if value.value is not None],
+        "markers":sorted(markers,key=lambda x:x["time"]),
+        "source":"POSTGRES_MARKET_AND_EXECUTION_FACTS",
+    })
 
 
 def policies(request):

@@ -6,6 +6,7 @@ from apps.allocation import views as allocation_views
 from apps.rebalancing import views as rebalancing_views
 from apps.position_sizing import views as sizing_views
 from apps.strategies import views as strategy_views
+from apps.core import analytics as analytics_views
 
 api_patterns = [
     path("system/", views.system), path("gateway/", views.gateway), path("accounts/", views.accounts),
@@ -16,6 +17,7 @@ api_patterns = [
 ]
 urlpatterns = [path("healthz", views.health),path("metrics",streaming_views.prometheus_metrics)] + [path(f"api/v1/{p.pattern}", p.callback, p.default_args) for p in api_patterns]
 new_api = [
+    path("dashboard/summary/",analytics_views.dashboard_summary),path("portfolios/series/",analytics_views.portfolio_series),
     path("strategy-definitions/",strategy_views.definitions),path("strategy-definitions/<str:key>/",strategy_views.definitions),
     path("strategy-instances/",strategy_views.instances),path("strategy-instances/<int:instance_id>/",strategy_views.instances),
     path("strategy-instances/<int:instance_id>/enable/",strategy_views.action,{"action_name":"enable"}),
@@ -27,6 +29,7 @@ new_api = [
     path("strategy-instances/<int:instance_id>/runs/",strategy_views.related,{"resource":"runs"}),
     path("strategy-instances/<int:instance_id>/targets/",strategy_views.related,{"resource":"targets"}),
     path("strategy-instances/<int:instance_id>/execution-timeline/",strategy_views.related,{"resource":"execution-timeline"}),
+    path("strategy-instances/<int:instance_id>/chart/",strategy_views.chart),
     path("strategy-policies/",strategy_views.policies),path("instruments/resolve/",strategy_views.resolve),
     path("streaming/health/",streaming_views.health),path("streaming/topics/",streaming_views.topics),
     path("streaming/consumer-lag/",streaming_views.consumer_lag),path("streaming/dead-letter/",streaming_views.dead_letter),
