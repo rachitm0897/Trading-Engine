@@ -1,6 +1,7 @@
 import hashlib
 import json
 from decimal import Decimal
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from apps.audit.models import OutboxEvent
@@ -147,7 +148,7 @@ def register_inputs(instance, version=None):
 
 
 @transaction.atomic
-def enable_instance(instance):
+def enable_instance(instance,gateway=None):
     if not hasattr(instance.instrument,"broker_contract"):
         instance.state="BLOCKED";instance.block_reason="Instrument does not have a qualified IBKR contract"
         instance.save(update_fields=["state","block_reason","updated_at"]);raise ValueError(instance.block_reason)
@@ -156,14 +157,21 @@ def enable_instance(instance):
     instance.legacy_strategy.enabled=True;instance.legacy_strategy.kill_switch=False;instance.legacy_strategy.save(update_fields=["enabled","kill_switch"])
     StrategyVersion.objects.filter(pk=current_version(instance).pk).update(activated_at=now)
     register_inputs(instance)
+    if settings.KAFKA_ENABLED or gateway is not None:
+        from apps.market_streams.subscriptions import reconcile_market_subscription
+        reconcile_market_subscription(instance.instrument,instance.timeframe,gateway)
     return instance
 
 
 @transaction.atomic
-def pause_instance(instance):
+def pause_instance(instance,gateway=None):
     instance.enabled=False;instance.state="PAUSED";instance.effective_to=timezone.now();instance.save(update_fields=["enabled","state","effective_to","updated_at"])
     instance.legacy_strategy.enabled=False;instance.legacy_strategy.save(update_fields=["enabled"])
-    deactivate_inputs(instance);return instance
+    deactivate_inputs(instance)
+    if settings.KAFKA_ENABLED or gateway is not None:
+        from apps.market_streams.subscriptions import reconcile_market_subscription
+        reconcile_market_subscription(instance.instrument,instance.timeframe,gateway)
+    return instance
 
 
 def _latest_target_weight(instance):

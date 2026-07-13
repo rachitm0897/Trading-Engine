@@ -3,11 +3,14 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from apps.accounts.models import BrokerAccount
+from apps.audit.models import OutboxEvent
 from apps.execution.models import Fill
 from apps.instruments.models import BrokerContract, Instrument
 from apps.oms.models import Order, OrderIntent, OrderStatusHistory
 from apps.oms.services import apply_execution
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
+from apps.market_streams.models import MarketDataSubscription
+from apps.strategies.models import StrategyInstance
 from .client import GatewayClient
 from .models import BrokerSyncCursor
 
@@ -123,6 +126,29 @@ def process_snapshot(event):
     event_type=event.get("event_type","");payload=event.get("payload",{})
     if event_type=="command.qualify.completed":
         ensure_instrument(payload);return
+    if event_type=="market.raw":
+        source_key=str(payload.get("source_event_id") or "")
+        if not source_key:return
+        OutboxEvent.objects.get_or_create(idempotency_key=f"gateway-market:{source_key}",defaults={"topic":"market.raw.v1",
+            "event_type":"market.raw","aggregate_type":"instrument","aggregate_id":str(payload["instrument_id"]),
+            "partition_key":str(payload["instrument_id"]),"payload":payload})
+        MarketDataSubscription.objects.filter(instrument_id=payload.get("instrument_id"),timeframe=payload.get("timeframe")).update(
+            state="ACTIVE",last_event_at=parse_datetime(payload.get("event_time") or "") or timezone.now(),last_error="")
+        return
+    if event_type in {"command.subscribe_market_data.completed","command.cancel_market_data.completed"}:
+        key=str(payload.get("subscription_key") or "")
+        if ":" in key:
+            instrument_id,timeframe=key.split(":",1)
+            MarketDataSubscription.objects.filter(instrument_id=instrument_id,timeframe=timeframe).update(
+                state="ACTIVE" if event_type=="command.subscribe_market_data.completed" else "INACTIVE",last_error="")
+        return
+    if event_type=="command.failed" and payload.get("command_type") in {"SUBSCRIBE_MARKET_DATA","CANCEL_MARKET_DATA"}:
+        command_payload=payload.get("payload") or {};key=str(command_payload.get("subscription_key") or "")
+        if ":" in key:
+            instrument_id,timeframe=key.split(":",1);reason=str(payload.get("error") or "Gateway market-data command failed")[:2000]
+            MarketDataSubscription.objects.filter(instrument_id=instrument_id,timeframe=timeframe).update(state="ERROR",last_error=reason)
+            StrategyInstance.objects.filter(enabled=True,instrument_id=instrument_id,timeframe=timeframe).update(state="BLOCKED",block_reason=reason[:255])
+        return
     rows=payload.get("value",[])
     if event_type=="snapshot.accounts": sync_accounts(rows)
     elif event_type=="snapshot.account_summary": sync_account_summary(rows)
