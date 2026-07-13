@@ -58,3 +58,5 @@ class GatewayClient:
     def qualify_contract_exact(self, payload, key):
         queued=self.qualify_contract(payload,key)
         return self.wait_for_command(queued)
+    def subscribe_market_data(self,payload,key):return self.request("POST","market-data/subscriptions/",json=payload,idempotency_key=key,retries=0)
+    def cancel_market_data(self,payload,key):return self.request("POST","market-data/subscriptions/cancel/",json=payload,idempotency_key=key,retries=0)

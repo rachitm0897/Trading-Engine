@@ -1,4 +1,26 @@
 from django.db import models
+import uuid
+
+
+class MarketDataSubscription(models.Model):
+    STATES=[(x,x) for x in ["PENDING","SUBSCRIBING","ACTIVE","DEGRADED","ERROR","CANCELLING","INACTIVE"]]
+    instrument=models.ForeignKey("instruments.Instrument",on_delete=models.PROTECT,related_name="market_subscriptions")
+    conid=models.BigIntegerField()
+    timeframe=models.CharField(max_length=16)
+    state=models.CharField(max_length=24,choices=STATES,default="PENDING")
+    consumer_count=models.PositiveIntegerField(default=0)
+    required_history_bars=models.PositiveIntegerField(default=0)
+    request_id=models.UUIDField(default=uuid.uuid4)
+    gateway_command_id=models.BigIntegerField(null=True,blank=True)
+    gateway_connection_generation=models.CharField(max_length=64,blank=True)
+    requested_at=models.DateTimeField(null=True,blank=True)
+    last_event_at=models.DateTimeField(null=True,blank=True)
+    last_error=models.TextField(blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=["instrument","timeframe"],name="unique_market_data_subscription")]
 
 
 class MarketBar(models.Model):

@@ -9,9 +9,9 @@ from apps.oms.models import Order, OrderIntent
 from apps.oms.services import apply_execution
 from apps.portfolios.models import TradingPortfolio
 from apps.rebalancing.services import aggregate_targets, plan_rebalance
-from apps.market_streams.models import IndicatorValue, MarketBar
+from apps.market_streams.models import IndicatorValue, MarketBar, MarketDataSubscription
 from apps.market_streams.services import evaluate_ready_strategies
-from apps.strategies.framework import create_instance, enable_instance, evaluate_instance, update_instance
+from apps.strategies.framework import create_instance, enable_instance, evaluate_instance, pause_instance, update_instance
 from apps.strategies.models import StrategyAttributedPosition, StrategyDefinition, StrategyInputRequirement, StrategyTarget, StrategyVersion
 
 pytestmark=pytest.mark.django_db
@@ -181,3 +181,18 @@ def test_async_ibkr_qualification_event_records_canonical_contract():
     process_snapshot({"event_type":"command.qualify.completed","payload":{"command_id":12,"qualified":True,
         "conid":4815747,"symbol":"NVDA","asset_class":"STK","exchange":"SMART","primary_exchange":"NASDAQ","currency":"USD"}})
     item.refresh_from_db();assert item.broker_contract.conid==4815747 and item.broker_contract.primary_exchange=="NASDAQ"
+
+
+def test_shared_strategies_reuse_and_reference_count_market_subscription(portfolio):
+    class Gateway:
+        def __init__(self):self.subscribes=[];self.cancels=[]
+        def health(self):return {"connected":True,"connection_generation":"session-1"}
+        def subscribe_market_data(self,payload,key):self.subscribes.append((payload,key));return {"command_id":10,"status":"PENDING"}
+        def cancel_market_data(self,payload,key):self.cancels.append((payload,key));return {"command_id":11,"status":"PENDING"}
+    gateway=Gateway();item=instrument("SHARED",321)
+    first=make(portfolio,item,"FIXED_WEIGHT_REBALANCE","SHARED_A",{"direction":"LONG"})
+    second=make(portfolio,item,"FIXED_WEIGHT_REBALANCE","SHARED_B",{"direction":"LONG"})
+    enable_instance(first,gateway);enable_instance(second,gateway)
+    subscription=MarketDataSubscription.objects.get();assert subscription.consumer_count==2 and len(gateway.subscribes)==1
+    pause_instance(first,gateway);assert MarketDataSubscription.objects.get().consumer_count==1 and not gateway.cancels
+    pause_instance(second,gateway);assert MarketDataSubscription.objects.get().consumer_count==0 and len(gateway.cancels)==1
