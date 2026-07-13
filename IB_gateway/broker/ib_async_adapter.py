@@ -9,7 +9,7 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
     def __init__(self):
         from ib_async import IB
         self.ib = IB(); self.contracts = {}; self.trades = {}; self.market_subscriptions={};self.market_events=deque()
-        self.order_events=deque();self.operator_cancellations=set()
+        self.order_events=deque();self.operator_cancellations=set();self.market_request_ids={};self.recent_errors=deque(maxlen=50)
         self.ib.orderStatusEvent += self._on_order_status
         self.ib.errorEvent += self._on_error
     def connect(self):
@@ -81,20 +81,28 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         if not qualified:raise RuntimeError("Selected IBKR contract could not be qualified for market data")
         contract=qualified[0];self.contracts[str(contract.conId)]=contract
         bar_size,seconds=self._timeframe(payload["timeframe"]);count=max(1,int(payload.get("historical_bars",1)))
-        days=max(1,(count*seconds+86399)//86400 + (2 if seconds>=86400 else 0))
+        trading_days=max(1,(count*seconds+23399)//23400)
+        days=max(4,(trading_days*8+4)//5+2)
         historical=self.ib.reqHistoricalData(contract,endDateTime="",durationStr=f"{days} D",barSizeSetting=bar_size,
             whatToShow=payload.get("what_to_show","TRADES"),useRTH=bool(payload.get("use_rth",False)),formatDate=2,keepUpToDate=False)
-        if not historical:raise RuntimeError("IBKR historical request returned no bars; check contract and market-data permissions")
+        if not historical:
+            recent=next((item for item in reversed(self.recent_errors) if item.get("conid") in (None,contract.conId)),None)
+            detail=f"IBKR error {recent['error_code']}: {recent['error_message']}" if recent else "IBKR historical request returned no bars"
+            raise RuntimeError(detail)
         for bar in list(historical)[-count:]:self.market_events.append(self._market_payload(bar,payload,"ibkr_historical",payload["timeframe"],seconds))
         live=self.ib.reqRealTimeBars(contract,5,payload.get("what_to_show","TRADES"),bool(payload.get("use_rth",False)))
+        request_id=getattr(live,"reqId",None)
+        if request_id is not None:self.market_request_ids[int(request_id)]=dict(payload)
         def on_update(bars,*_args):
             if bars:self.market_events.append(self._market_payload(bars[-1],payload,"ibkr_live","5s",5))
         live.updateEvent += on_update
-        self.market_subscriptions[key]={"live":live,"handler":on_update,"payload":dict(payload)}
+        self.market_subscriptions[key]={"live":live,"handler":on_update,"payload":dict(payload),"request_id":request_id}
         return {"subscription_key":key,"state":"ACTIVE","historical_bar_count":min(len(historical),count),"conid":contract.conId}
     def cancel_market_data(self,payload):
         key=payload["subscription_key"];current=self.market_subscriptions.pop(key,None)
-        if current:self.ib.cancelRealTimeBars(current["live"])
+        if current:
+            self.ib.cancelRealTimeBars(current["live"])
+            if current.get("request_id") is not None:self.market_request_ids.pop(int(current["request_id"]),None)
         return {"subscription_key":key,"state":"INACTIVE"}
     def drain_market_events(self):
         events=[]
@@ -164,7 +172,17 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         self.order_events.append(self._order_event(trade))
     def _on_error(self,req_id,error_code,error_string,contract=None,*_args):
         trade=next((candidate for candidate in self.ib.trades() if candidate.order.orderId==req_id),None)
-        if trade:self.order_events.append(self._order_event(trade,error_code,error_string))
+        if trade:self.order_events.append(self._order_event(trade,error_code,error_string));return
+        if int(error_code) in {2104,2106,2107,2108,2158}:return
+        now=datetime.now(timezone.utc).isoformat();conid=getattr(contract,"conId",None) if contract else None
+        self.recent_errors.append({"request_id":req_id,"error_code":str(error_code),"error_message":str(error_string),
+            "conid":conid,"occurred_at":now})
+        payload=self.market_request_ids.get(int(req_id)) if isinstance(req_id,int) and req_id>=0 else None
+        if payload:
+            identity=json.dumps([req_id,error_code,error_string,now],separators=(",",":"))
+            self.market_events.append({**payload,"source_event_id":hashlib.sha256(identity.encode()).hexdigest(),
+                "event_kind":"ERROR","error_code":str(error_code),"error_message":str(error_string),
+                "occurred_at":now,"source":"ibkr"})
     def _trade_data(self, trade):
         order, status = trade.order, trade.orderStatus
         diagnostic=self._order_event(trade)

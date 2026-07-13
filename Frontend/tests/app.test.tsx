@@ -20,6 +20,10 @@ const strategy = {
   block_reason: '', effective_from: '2026-07-13T00:00:00Z', effective_to: null, last_final_bar: '2026-07-13T01:00:00Z',
   latest_indicators: {channel: 123}, latest_signal: 'ENTER_LONG', current_target: 0.1, attributed_quantity: 4,
   active_order: 'order-active', last_fill: 'fill-1', cooldown: null, created_at: '2026-07-12T00:00:00Z', updated_at: '2026-07-13T01:00:00Z',
+  streaming: {strategy_id: 7, strategy: 'Portable breakout', symbol: 'NVDA', timeframe: '15m', status: 'HEALTHY',
+    subscription_state: 'ACTIVE', conid: 4815747, last_raw_event: '2026-07-13T01:00:01Z',
+    last_canonical_event: '2026-07-13T01:00:02Z', last_final_bar: '2026-07-13T01:00:00Z', warmup_progress: 22,
+    warmup_required: 22, last_indicator: '2026-07-13T01:00:03Z', last_strategy_run: '2026-07-13T01:00:04Z', last_error: '', missing: [], stale_after_seconds: 1800},
   versions: [{id: 2, version: 2, parameter_hash: 'abcdef1234567890', configuration_snapshot: {}, created_at: '2026-07-13T00:00:00Z', activated_at: '2026-07-13T00:05:00Z', retired_at: null}],
   requirements: [{identity_hash: 'input-1', input_type: 'INDICATOR', name: 'channel', parameters: {window: 21}, parameters_hash: 'hash', warmup_bars: 22, shared_by: 1, active: true}],
 }
@@ -65,7 +69,11 @@ const data: Record<string, unknown> = {
   audit: [],
   risk: {kill_switches: [], decisions: []},
   reconciliation: {runs: [], breaks: []},
-  'streaming/health': {kafka_enabled: true, metrics: [], flink: {status: 'HEALTHY', jobs: []}, outbox_pending: 0, dead_letter_count: 0, stale_instrument_count: 0},
+  'streaming/health': {kafka_enabled: true, data_path_status: 'HEALTHY', data_path_reasons: [],
+    gateway: {status: 'HEALTHY', value: {connected: true, reconciled: true}, observed_at: '2026-07-13T01:00:00Z'},
+    consumer: {status: 'HEALTHY', last_heartbeat: '2026-07-13T01:00:00Z', value: {}}, metrics: [],
+    flink: {status: 'HEALTHY', jobs: []}, strategies: [strategy.streaming], outbox_pending: 0, outbox_failed: 0,
+    dead_letter_count: 0, stale_instrument_count: 0},
   'allocations/policies': [{id: 1, portfolio_id: 10, portfolio: 'Primary paper', strategy_id: 1, strategy: 'Portable breakout', target_share: 1, minimum_share: 0, maximum_share: 1, capacity: null, minimum_allocation: 0, priority: 100, enabled: true}],
   'allocations/runs': [], 'rebalancing/policies': [], 'rebalancing/runs': [],
 }
@@ -168,6 +176,8 @@ test('kill switch requires confirmation and an audit reason', async () => {
   await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/risk/'), expect.objectContaining({method: 'POST'})))
   const call = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).includes('/risk/') && init?.method === 'POST')
   expect(String(call?.[1]?.body)).toContain('Broker state is inconsistent')
+  expect(screen.getByText('Active strategy data paths')).toBeInTheDocument()
+  expect(screen.getByText('22 / 22')).toBeInTheDocument()
 })
 
 test('strategy detail maps backend chart data with no placeholder series', async () => {

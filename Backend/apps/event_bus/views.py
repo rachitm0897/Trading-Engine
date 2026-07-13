@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse
 from apps.core.views import response, _serialize
@@ -8,16 +9,49 @@ from .models import DeadLetterEvent, ReplayRequest, StreamHealthMetric
 def health(request):
     from apps.audit.models import OutboxEvent
     from apps.market_streams.models import InstrumentMarketState
-    metrics = _serialize(StreamHealthMetric.objects.all(), ["component","metric","status","value","observed_at"])
+    metric_objects=list(StreamHealthMetric.objects.all())
+    metrics = _serialize(metric_objects, ["component","metric","status","value","observed_at"])
+    heartbeat=next((item for item in metric_objects if item.component=="backend-market-consumer" and item.metric=="heartbeat"),None)
+    consumer={"status":"UNKNOWN","last_heartbeat":None,"value":{}}
+    if heartbeat:
+        age=(timezone.now()-heartbeat.observed_at).total_seconds()
+        status=heartbeat.status if age<=settings.MARKET_CONSUMER_HEARTBEAT_STALE_SECONDS else "STALE"
+        consumer={"status":status,"last_heartbeat":heartbeat.observed_at,"age_seconds":round(age,1),"value":heartbeat.value}
+        for row in metrics:
+            if row["component"]=="backend-market-consumer" and row["metric"]=="heartbeat":row["status"]=status
     flink = {"status":"UNKNOWN"}
     try:
         import requests
         value = requests.get(settings.FLINK_REST_URL + "/jobs/overview", timeout=2).json()
-        flink = {"status":"HEALTHY", "jobs": value.get("jobs", [])}
+        jobs=value.get("jobs",[])
+        flink = {"status":"HEALTHY" if jobs and all(job.get("state")=="RUNNING" for job in jobs) else "DEGRADED", "jobs": jobs}
     except Exception as exc:
         flink = {"status":"DEGRADED" if settings.KAFKA_ENABLED else "DISABLED", "error":str(exc)[:120]}
-    return response({"kafka_enabled":settings.KAFKA_ENABLED,"metrics":metrics,"flink":flink,
-        "outbox_pending":OutboxEvent.objects.exclude(status="PUBLISHED").count(),
+    from apps.strategies.models import StrategyInstance
+    from apps.market_streams.health import strategy_stream_status
+    strategies=[strategy_stream_status(item) for item in StrategyInstance.objects.filter(enabled=True).select_related(
+        "definition","instrument__broker_contract").order_by("name")]
+    gateway_metric=next((item for item in metric_objects if item.component=="gateway" and item.metric=="connectivity"),None)
+    gateway={"status":gateway_metric.status if gateway_metric else "UNKNOWN",
+        "value":gateway_metric.value if gateway_metric else {},"observed_at":gateway_metric.observed_at if gateway_metric else None}
+    kafka_metric=next((item for item in metric_objects if item.component=="kafka" and item.metric=="connectivity"),None)
+    lag_metric=next((item for item in metric_objects if item.component=="backend-market-consumer" and item.metric=="topic_lag"),None)
+    reasons=[]
+    if not settings.KAFKA_ENABLED:reasons.append("Kafka is disabled")
+    elif not kafka_metric or kafka_metric.status!="HEALTHY":reasons.append("Kafka connectivity is not healthy")
+    if gateway["status"]!="HEALTHY":reasons.append("Gateway is not connected and reconciled")
+    if flink["status"]!="HEALTHY":reasons.append("One or more Flink jobs are not running")
+    if consumer["status"]!="HEALTHY":reasons.append("Backend market consumer heartbeat is not healthy")
+    if lag_metric and lag_metric.status=="DEGRADED":reasons.append("Kafka consumer lag exceeds the configured threshold")
+    broken=[item for item in strategies if item["status"]!="HEALTHY"]
+    if broken:reasons.append(f"{len(broken)} active strategy data path(s) are not healthy")
+    outbox_pending=OutboxEvent.objects.exclude(status="PUBLISHED").count()
+    outbox_failed=OutboxEvent.objects.filter(status="FAILED").count()
+    if outbox_failed:reasons.append(f"{outbox_failed} outbox event(s) failed publication")
+    data_path_status="DISABLED" if not settings.KAFKA_ENABLED else ("HEALTHY" if not reasons else "DEGRADED")
+    return response({"kafka_enabled":settings.KAFKA_ENABLED,"data_path_status":data_path_status,
+        "data_path_reasons":reasons,"gateway":gateway,"consumer":consumer,"metrics":metrics,"flink":flink,
+        "strategies":strategies,"outbox_pending":outbox_pending,"outbox_failed":outbox_failed,
         "dead_letter_count":DeadLetterEvent.objects.count(),
         "stale_instrument_count":InstrumentMarketState.objects.exclude(status="FRESH").count()})
 

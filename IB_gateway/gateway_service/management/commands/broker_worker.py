@@ -24,7 +24,8 @@ class Command(BaseCommand):
             GatewayHealthSnapshot.objects.create(connected=True,reconciled=bool(state.get("reconciled")),details={"accounts":len(state.get("accounts",[])),"positions":len(state.get("positions",[])),"open_orders":len(state.get("open_orders",[])),"executions":len(state.get("executions",[]))})
         def publish_market_events():
             for payload in adapter.drain_market_events():
-                persist_event(f"market:{payload['source_event_id']}","market.raw",payload)
+                event_type="market.error" if payload.get("event_kind")=="ERROR" else "market.raw"
+                persist_event(f"market:{payload['source_event_id']}",event_type,payload)
         def publish_order_events():
             for payload in adapter.drain_order_events():
                 persist_event(f"broker-order:{payload['source_event_id']}","broker.order",payload)

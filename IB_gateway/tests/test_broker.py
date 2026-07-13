@@ -1,4 +1,5 @@
 import pytest
+from collections import deque
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from broker.base import BrokerAdapter
@@ -60,3 +61,13 @@ def test_ibkr_order_event_preserves_exact_rejection_diagnostics():
     assert event["error_code"]=="201" and event["error_message"]=="Order rejected - insufficient equity"
     assert event["why_held"]=="locate pending" and event["advanced_reject"]=={"errorCode":201}
     assert event["trade_log"][0]["status"]=="Inactive" and event["occurred_at"]=="2026-07-13T01:00:00+00:00"
+
+def test_ibkr_async_market_error_retains_exact_permission_reason():
+    adapter=IBAsyncBrokerAdapter.__new__(IBAsyncBrokerAdapter)
+    adapter.ib=SimpleNamespace(trades=lambda:[]);adapter.order_events=deque();adapter.market_events=deque()
+    adapter.recent_errors=deque(maxlen=50);adapter.market_request_ids={42:{"subscription_key":"5:1m",
+        "instrument_id":5,"conid":265598,"symbol":"AAPL","timeframe":"1m"}}
+    adapter._on_error(42,354,"Requested market data is not subscribed",SimpleNamespace(conId=265598))
+    event=adapter.drain_market_events()[0]
+    assert event["event_kind"]=="ERROR" and event["error_code"]=="354"
+    assert event["error_message"]=="Requested market data is not subscribed" and event["subscription_key"]=="5:1m"
