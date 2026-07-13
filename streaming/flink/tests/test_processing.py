@@ -12,6 +12,8 @@ def test_normalization_and_validation():
         "timeframe":"1m","event_time":"2026-01-01T00:00:00Z","window_start":"2026-01-01T00:00:00Z",
         "window_end":"2026-01-01T00:01:00Z","open":"10","high":"12","low":"9","close":"11","volume":"5"},{})
     assert bar["event_kind"]=="BAR" and bar["instrument_id"]=="7" and bar["price"]=="11"
+    mapped=normalize_market_event({"source_event_id":"2","conid":99,"symbol":"AAPL","event_time":"2026-01-01T00:00:01Z","price":"10"},{"99":7})
+    assert mapped["instrument_id"]=="7"
 
 
 def test_event_time_ohlcv_and_corrected_version():

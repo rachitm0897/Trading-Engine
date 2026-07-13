@@ -71,7 +71,6 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       AUTO_SUBMIT_FLINK_JOBS: "true"
-      INSTRUMENT_SYMBOL_MAP: ${INSTRUMENT_SYMBOL_MAP:-{}}
       MARKET_PRICE_STALE_SECONDS: ${MARKET_PRICE_STALE_SECONDS:-300}
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
