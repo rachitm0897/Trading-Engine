@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 
 ORDER_STATES = [x for x in "CREATED RISK_APPROVED QUEUED BROKER_BLOCKED SUBMITTED ACKNOWLEDGED PARTIALLY_FILLED FILLED CANCEL_PENDING CANCELLED REJECTED EXPIRED UNKNOWN".split()]
 
@@ -42,6 +43,11 @@ class OrderStatusHistory(models.Model):
     from_status = models.CharField(max_length=24, blank=True)
     to_status = models.CharField(max_length=24)
     source = models.CharField(max_length=32)
+    broker_status = models.CharField(max_length=64, blank=True)
+    reason_code = models.CharField(max_length=64, blank=True)
     reason = models.CharField(max_length=255, blank=True)
+    details = models.JSONField(default=dict)
+    occurred_at = models.DateTimeField(default=timezone.now)
+    operator_requested = models.BooleanField(default=False)
     event_key = models.CharField(max_length=128, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
