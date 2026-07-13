@@ -11,16 +11,40 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
     def disconnect(self): self.ib.disconnect()
     def is_connected(self): return self.ib.isConnected()
     def _contract(self, payload):
-        from ib_async import Stock, Forex, Future
+        from ib_async import Contract, Stock, Forex, Future
+        if payload.get("conid"):
+            return Contract(conId=int(payload["conid"]), exchange=payload.get("exchange", ""), currency=payload.get("currency", ""))
         asset = payload.get("asset_class", "STK")
         if asset == "CASH": return Forex(payload["symbol"], exchange=payload.get("exchange", "IDEALPRO"))
         if asset == "FUT": return Future(payload["symbol"], payload.get("expiry", ""), exchange=payload["exchange"], currency=payload.get("currency", "USD"))
         return Stock(payload["symbol"], payload.get("exchange", "SMART"), payload.get("currency", "USD"))
+    @staticmethod
+    def _contract_data(contract, details=None):
+        return {"conid":contract.conId,"symbol":contract.symbol,"local_symbol":contract.localSymbol,
+            "asset_class":contract.secType,"exchange":contract.exchange or contract.primaryExchange,
+            "primary_exchange":contract.primaryExchange,"currency":contract.currency,
+            "description":getattr(details,"longName","") or getattr(details,"marketName","") or ""}
+    def _details(self, contract):
+        details = self.ib.reqContractDetails(contract)
+        return next((item for item in details if item.contract.conId == contract.conId), details[0] if details else None)
+    def search_contracts(self, query):
+        matches = self.ib.reqMatchingSymbols(str(query).strip())
+        results = []
+        seen = set()
+        for match in matches:
+            contract = match.contract
+            if not contract.conId or contract.conId in seen:
+                continue
+            seen.add(contract.conId)
+            details = self._details(contract)
+            exact = details.contract if details else contract
+            results.append(self._contract_data(exact, details))
+        return results
     def qualify_contract(self, payload):
         contract = self._contract(payload); qualified = self.ib.qualifyContracts(contract)
         if not qualified: raise RuntimeError("Contract qualification returned no result")
         contract = qualified[0]; self.contracts[str(contract.conId)] = contract
-        return {"conid":contract.conId, "symbol":contract.symbol, "exchange":contract.exchange, "currency":contract.currency, "qualified":True}
+        return {**self._contract_data(contract, self._details(contract)), "qualified":True}
     def _order(self, payload):
         from ib_async import MarketOrder, LimitOrder, StopOrder, StopLimitOrder
         action, qty, tif = payload["side"], float(payload["quantity"]), payload.get("time_in_force", "DAY")
@@ -50,9 +74,6 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         trade = self.ib.placeOrder(trade.contract, trade.order); return {"broker_order_id":str(trade.order.orderId), "status":trade.orderStatus.status}
     def cancel_order(self, payload):
         trade = self._find_trade(payload["internal_id"]); self.ib.cancelOrder(trade.order); return {"broker_order_id":str(trade.order.orderId), "status":"PendingCancel"}
-    @staticmethod
-    def _contract_data(contract):
-        return {"conid":contract.conId,"symbol":contract.symbol,"local_symbol":contract.localSymbol,"asset_class":contract.secType,"exchange":contract.exchange or contract.primaryExchange,"primary_exchange":contract.primaryExchange,"currency":contract.currency}
     def _trade_data(self, trade):
         order, status = trade.order, trade.orderStatus
         return {**self._contract_data(trade.contract),"account":order.account,"internal_id":order.orderRef,"broker_order_id":str(order.orderId),"permanent_id":str(order.permId or ""),"side":order.action,"quantity":str(order.totalQuantity),"order_type":order.orderType,"limit_price":None if order.lmtPrice in (0,1.7976931348623157e308) else str(order.lmtPrice),"stop_price":None if order.auxPrice in (0,1.7976931348623157e308) else str(order.auxPrice),"time_in_force":order.tif,"status":status.status,"filled_quantity":str(status.filled),"remaining_quantity":str(status.remaining),"average_fill_price":str(status.avgFillPrice or 0)}

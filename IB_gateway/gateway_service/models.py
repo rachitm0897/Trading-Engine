@@ -9,7 +9,7 @@ class GatewaySession(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 class GatewayCommand(models.Model):
-    TYPES = [(x,x) for x in ["RECONNECT","QUALIFY","PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER","KILL_SWITCH","REFRESH"]]
+    TYPES = [(x,x) for x in ["RECONNECT","SEARCH_CONTRACTS","QUALIFY","PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER","KILL_SWITCH","REFRESH"]]
     command_type = models.CharField(max_length=32, choices=TYPES)
     idempotency_key = models.CharField(max_length=128, unique=True)
     payload = models.JSONField(default=dict)
@@ -40,4 +40,3 @@ class GatewayHealthSnapshot(models.Model):
     broker_time = models.DateTimeField(null=True, blank=True)
     details = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
-

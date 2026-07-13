@@ -6,9 +6,22 @@ class MockBrokerAdapter(BrokerAdapter):
     def connect(self): self.connected = True; return {"connected":True}
     def disconnect(self): self.connected = False
     def is_connected(self): return self.connected
+    def search_contracts(self, query):
+        symbol = str(query).strip().upper()
+        rows = [{"symbol":symbol,"local_symbol":symbol,"conid":abs(hash((symbol,"NASDAQ"))) % 2_000_000_000,
+            "asset_class":"STK","exchange":"SMART","primary_exchange":"NASDAQ","currency":"USD",
+            "description":f"{symbol} mock corporation"}]
+        if symbol == "BHP":
+            rows.append({"symbol":"BHP","local_symbol":"BHP","conid":abs(hash((symbol,"ASX"))) % 2_000_000_000,
+                "asset_class":"STK","exchange":"SMART","primary_exchange":"ASX","currency":"AUD",
+                "description":"BHP Group Limited"})
+        return rows
     def qualify_contract(self, payload):
         symbol = payload["symbol"]
-        return {**payload, "conid": abs(hash((symbol, payload.get("exchange","SMART")))) % 2_000_000_000, "qualified":True}
+        return {**payload, "local_symbol":payload.get("local_symbol") or symbol,
+            "conid":int(payload.get("conid") or abs(hash((symbol, payload.get("exchange","SMART")))) % 2_000_000_000),
+            "primary_exchange":payload.get("primary_exchange") or "NASDAQ",
+            "description":payload.get("description") or f"{symbol} mock corporation","qualified":True}
     def place_order(self, payload):
         if self.killed: raise RuntimeError("Gateway kill switch is active")
         self.next_order_id += 1; oid = str(self.next_order_id)

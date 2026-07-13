@@ -17,6 +17,7 @@ def process_command(command, adapter):
     if command.command_type == "RECONNECT":
         if adapter.is_connected(): adapter.disconnect()
         result = adapter.connect(); state = adapter.refresh_state(); result.update(state)
+    elif command.command_type == "SEARCH_CONTRACTS": result = {"results":adapter.search_contracts(command.payload["query"])}
     elif command.command_type == "QUALIFY": result = adapter.qualify_contract(command.payload)
     elif command.command_type == "PLACE_ORDER": result = adapter.place_order(command.payload)
     elif command.command_type == "MODIFY_ORDER": result = adapter.modify_order(command.payload)
@@ -29,4 +30,3 @@ def process_command(command, adapter):
     command.result=result; command.status="COMPLETED"; command.save(update_fields=["result","status","updated_at"])
     persist_event(f"command:{command.pk}:completed", f"command.{command.command_type.lower()}.completed", {"command_id":command.pk, **result})
     return result
-

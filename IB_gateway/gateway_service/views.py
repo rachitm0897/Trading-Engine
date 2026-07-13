@@ -49,6 +49,13 @@ def completed_orders(request): return response(_latest("snapshot.completed_order
 def executions(request): return response(_latest("snapshot.executions",[]))
 @csrf_exempt
 @protected
+def contract_search(request):
+    payload=_payload(request)
+    query=str(payload.get("query","")).strip()
+    if not query: return response(status=400,error={"code":"QUERY_REQUIRED","message":"Instrument search query is required","details":{}})
+    command=enqueue("SEARCH_CONTRACTS",{"query":query},_key(request)); return response({"command_id":command.pk,"status":command.status},202)
+@csrf_exempt
+@protected
 def qualify(request):
     command=enqueue("QUALIFY",_payload(request),_key(request)); return response({"command_id":command.pk,"status":command.status},202)
 @csrf_exempt
@@ -77,3 +84,9 @@ def ack(request):
 @protected
 def kill_switch(request):
     command=enqueue("KILL_SWITCH",_payload(request),_key(request)); return response({"command_id":command.pk,"status":command.status},202)
+@protected
+def command_detail(request, command_id):
+    try: command=GatewayCommand.objects.get(pk=command_id)
+    except GatewayCommand.DoesNotExist:return response(status=404,error={"code":"NOT_FOUND","message":"Gateway command not found","details":{}})
+    return response({"command_id":command.pk,"command_type":command.command_type,"status":command.status,
+        "result":command.result,"error":command.error,"attempts":command.attempts,"updated_at":command.updated_at})

@@ -36,6 +36,14 @@ def test_completed_orders_snapshot_endpoint(client):
     body=client.get("/api/v1/completed-orders/",**AUTH).json()
     assert body["data"][0]["broker_order_id"]=="1"
 
+def test_contract_search_and_command_detail(client):
+    response=client.post("/api/v1/contracts/search/",json.dumps({"query":"BHP"}),content_type="application/json",**AUTH)
+    assert response.status_code==202
+    command=GatewayCommand.objects.get(pk=response.json()["data"]["command_id"])
+    command.status="COMPLETED";command.result={"results":[{"symbol":"BHP","conid":123,"primary_exchange":"ASX"}]};command.save()
+    detail=client.get(f"/api/v1/commands/{command.pk}/",**AUTH).json()["data"]
+    assert detail["status"]=="COMPLETED" and detail["result"]["results"][0]["conid"]==123
+
 def test_no_credential_leakage(client,settings):
     settings.IB_USERNAME="SECRET_USER"; settings.IB_PASSWORD="SECRET_PASSWORD"
     content=client.get("/api/v1/session/",**AUTH).content.decode()
