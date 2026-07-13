@@ -65,7 +65,7 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         return {"source_event_id":stable,"subscription_key":payload["subscription_key"],
             "instrument_id":int(payload["instrument_id"]),"conid":int(payload["conid"]),"symbol":payload["symbol"],
             "exchange":payload.get("exchange","SMART"),"currency":payload.get("currency","USD"),
-            "event_kind":"BAR","timeframe":timeframe,"event_time":end.isoformat(),"window_start":start.isoformat(),
+            "event_kind":"BAR","timeframe":timeframe,"event_time":start.isoformat(),"window_start":start.isoformat(),
             "window_end":end.isoformat(),"open":str(field("open","open_")),"high":str(field("high","high")),
             "low":str(field("low","low")),"close":str(field("close","close")),
             "volume":str(max(0,field("volume","volume"))),"is_final":True,"source":source}

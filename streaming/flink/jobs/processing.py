@@ -16,20 +16,28 @@ def utc(value):
 
 
 def normalize_market_event(raw, symbol_map):
-    required = ["source_event_id", "symbol", "event_time", "price"]
+    kind=raw.get("event_kind","TICK").upper()
+    required = ["source_event_id", "symbol", "event_time"] + (["open","high","low","close"] if kind=="BAR" else ["price"])
     missing = [key for key in required if raw.get(key) in (None, "")]
     if missing:
         raise ValueError(f"missing fields: {','.join(missing)}")
-    instrument_id = symbol_map.get(raw["symbol"])
+    instrument_id = raw.get("instrument_id") or symbol_map.get(str(raw.get("conid"))) or symbol_map.get(raw["symbol"])
     if instrument_id is None:
-        raise ValueError("unknown symbol")
-    price, volume = Decimal(str(raw["price"])), Decimal(str(raw.get("volume", 0)))
+        raise ValueError("unknown instrument mapping")
+    price, volume = Decimal(str(raw.get("price",raw.get("close")))), Decimal(str(raw.get("volume", 0)))
     if price <= 0 or volume < 0:
         raise ValueError("price must be positive and volume non-negative")
-    return {"source_event_id": str(raw["source_event_id"]), "instrument_id": str(instrument_id),
+    result={"source_event_id": str(raw["source_event_id"]), "instrument_id": str(instrument_id),"conid":raw.get("conid"),
         "symbol": raw["symbol"], "event_time": utc(raw["event_time"]).isoformat(),
         "exchange": raw.get("exchange", "SMART"), "currency": raw.get("currency", "USD"),
-        "price": str(price), "volume": str(volume), "source": raw.get("source", "ibkr")}
+        "price": str(price), "volume": str(volume), "source": raw.get("source", "ibkr"),"event_kind":kind}
+    if kind=="BAR":
+        values={key:Decimal(str(raw[key])) for key in ("open","high","low","close")}
+        if min(values.values())<=0 or values["low"]>values["high"]:raise ValueError("invalid OHLC values")
+        result.update({key:str(value) for key,value in values.items()})
+        result.update({"timeframe":raw["timeframe"],"window_start":utc(raw["window_start"]).isoformat(),
+            "window_end":utc(raw["window_end"]).isoformat(),"is_final":bool(raw.get("is_final",True))})
+    return result
 
 
 def window_start(event_time, seconds):
@@ -45,11 +53,14 @@ def aggregate_bars(events, interval="1m", seconds=60, prior_versions=None, final
     prior_versions = prior_versions or {}
     for (instrument_id, start), ticks in sorted(grouped.items()):
         ticks.sort(key=lambda x: (utc(x["event_time"]), x["source_event_id"]))
-        prices = [Decimal(str(x["price"])) for x in ticks]
+        opens=[Decimal(str(x.get("open",x["price"]))) for x in ticks]
+        highs=[Decimal(str(x.get("high",x["price"]))) for x in ticks]
+        lows=[Decimal(str(x.get("low",x["price"]))) for x in ticks]
+        closes=[Decimal(str(x.get("close",x["price"]))) for x in ticks]
         bar_id = hashlib.sha256(f"{instrument_id}:{interval}:{start.isoformat()}".encode()).hexdigest()
         result.append({"bar_id": bar_id, "instrument_id": instrument_id, "interval": interval,
             "window_start": start.isoformat(), "window_end": datetime.fromtimestamp(start.timestamp()+seconds, tz=timezone.utc).isoformat(),
-            "open": str(prices[0]), "high": str(max(prices)), "low": str(min(prices)), "close": str(prices[-1]),
+            "open": str(opens[0]), "high": str(max(highs)), "low": str(min(lows)), "close": str(closes[-1]),
             "volume": str(sum(Decimal(str(x.get("volume", 0))) for x in ticks)),
             "source_event_count": len(ticks), "version": prior_versions.get(bar_id, 0) + 1, "is_final": final})
     return result

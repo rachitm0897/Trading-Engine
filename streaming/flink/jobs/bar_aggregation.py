@@ -1,5 +1,6 @@
 import json
 import os
+import hashlib
 from datetime import datetime
 from pyflink.common import Duration, Types, WatermarkStrategy
 from pyflink.common.watermark_strategy import TimestampAssigner
@@ -44,6 +45,14 @@ class RegistryBars(KeyedBroadcastProcessFunction):
         for identity_hash,encoded in ctx.get_broadcast_state(REQUIREMENTS).items():
             requirement=json.loads(encoded)
             if requirement["instrument_id"]!=str(tick["instrument_id"]):continue
+            if tick.get("event_kind")=="BAR" and tick.get("timeframe")==requirement["timeframe"] and tick.get("is_final",True):
+                bar_id=hashlib.sha256(f"{tick['instrument_id']}:{requirement['timeframe']}:{tick['window_start']}".encode()).hexdigest()
+                bar={"bar_id":bar_id,"instrument_id":str(tick["instrument_id"]),"interval":requirement["timeframe"],
+                    "window_start":tick["window_start"],"window_end":tick["window_end"],"open":tick["open"],"high":tick["high"],
+                    "low":tick["low"],"close":tick["close"],"volume":tick.get("volume","0"),"source_event_count":1,"version":1,"is_final":True}
+                yield json.dumps(envelope("market.bar","instrument",bar["instrument_id"],bar,
+                    f"{bar_id}:1",source_event,bar["window_end"]),separators=(",",":"))
+                continue
             seconds=timeframe_seconds(requirement["timeframe"]);start=stamp-stamp%seconds
             key=f"{identity_hash}:{start}";bucket=stored.get(key,{"ticks":[],"version":0,"timeframe":requirement["timeframe"],"seconds":seconds,"end":start+seconds})
             bucket["ticks"]=[x for x in bucket["ticks"] if x["source_event_id"]!=tick["source_event_id"]]+[tick];stored[key]=bucket
