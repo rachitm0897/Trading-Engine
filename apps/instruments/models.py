@@ -4,6 +4,7 @@ class Instrument(models.Model):
     symbol = models.CharField(max_length=32)
     asset_class = models.CharField(max_length=24, default="STK")
     exchange = models.CharField(max_length=32, default="SMART")
+    primary_exchange = models.CharField(max_length=32, blank=True)
     currency = models.CharField(max_length=8, default="USD")
     sector = models.CharField(max_length=64, blank=True)
     multiplier = models.DecimalField(max_digits=20, decimal_places=8, default=1)
@@ -15,11 +16,12 @@ class Instrument(models.Model):
     tradable = models.BooleanField(default=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["symbol", "asset_class", "exchange", "currency"], name="unique_instrument")]
+        constraints = [models.UniqueConstraint(fields=["symbol", "asset_class", "exchange", "primary_exchange", "currency"], name="unique_instrument")]
 
 class BrokerContract(models.Model):
     instrument = models.OneToOneField(Instrument, on_delete=models.PROTECT, related_name="broker_contract")
     conid = models.BigIntegerField(unique=True)
     primary_exchange = models.CharField(max_length=32, blank=True)
     local_symbol = models.CharField(max_length=64, blank=True)
+    description = models.CharField(max_length=255, blank=True)
     qualified_at = models.DateTimeField(null=True, blank=True)

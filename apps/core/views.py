@@ -51,7 +51,7 @@ def accounts(request):
 
 def instruments(request):
     from apps.instruments.models import Instrument
-    return response(_serialize(Instrument.objects.all(), ["symbol", "asset_class", "exchange", "currency", "sector", "multiplier", "lot_size", "min_tick", "fractional_support", "trading_calendar", "active", "tradable"]))
+    return response(_serialize(Instrument.objects.all(), ["symbol", "asset_class", "exchange", "primary_exchange", "currency", "sector", "multiplier", "lot_size", "min_tick", "fractional_support", "trading_calendar", "active", "tradable"]))
 
 def portfolios(request):
     from apps.portfolios.models import TradingPortfolio
