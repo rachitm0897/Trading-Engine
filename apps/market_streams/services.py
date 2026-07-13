@@ -1,5 +1,6 @@
 from decimal import Decimal
 from django.db import transaction
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from apps.event_bus.services import consume_once
 from .models import IndicatorValue, InstrumentMarketState, MarketBar
@@ -18,7 +19,7 @@ def persist_bar(envelope):
         "close": Decimal(payload["close"]), "volume": Decimal(payload.get("volume", "0")),
         "is_final": payload.get("is_final", False), "source_event_count": payload.get("source_event_count", 0),
         "produced_at": _dt(envelope["produced_at"]),})
-    evaluate_ready_strategies(bar)
+    update_warmup_progress(bar);evaluate_ready_strategies(bar)
     return {"bar_id": bar.pk}
 
 
@@ -42,6 +43,23 @@ def _indicator_output_name(requirement):
     role=requirement.parameters.get("role")
     if requirement.name=="donchian":return "donchian_upper" if role=="entry" else "donchian_lower"
     return f"{requirement.name}_{role}" if role else requirement.name
+
+
+def update_warmup_progress(bar):
+    if not bar.is_final:return 0
+    from apps.strategies.models import StrategyInstance
+    from apps.strategies.plugins import get_plugin
+    instances=StrategyInstance.objects.filter(enabled=True,instrument=bar.instrument,timeframe=bar.interval).select_related("definition")
+    progress=MarketBar.objects.filter(instrument=bar.instrument,interval=bar.interval,is_final=True).values("bar_id").distinct().count()
+    changed=0
+    for instance in instances:
+        required=get_plugin(instance.definition).warmup_bars(instance.parameters);value=min(progress,required)
+        fields=[]
+        if value!=instance.warmup_progress:instance.warmup_progress=value;instance.warmup_last_progress_at=timezone.now();fields += ["warmup_progress","warmup_last_progress_at"]
+        if instance.state=="BLOCKED" and instance.block_reason.startswith("Warm-up timeout:"):
+            instance.state="WARMING_UP";instance.block_reason="";fields += ["state","block_reason"]
+        if fields:instance.save(update_fields=[*fields,"updated_at"]);changed+=1
+    return changed
 
 
 def evaluate_ready_strategies(bar):

@@ -87,6 +87,8 @@ class StrategyInstance(models.Model):
     legacy_strategy = models.OneToOneField(TradingStrategy, on_delete=models.PROTECT, related_name="strategy_instance", null=True, blank=True)
     state_data = models.JSONField(default=dict)
     warmup_progress = models.PositiveIntegerField(default=0)
+    warmup_started_at = models.DateTimeField(null=True, blank=True)
+    warmup_last_progress_at = models.DateTimeField(null=True, blank=True)
     block_reason = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

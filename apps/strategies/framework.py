@@ -82,7 +82,7 @@ def update_instance(instance, changes):
     if material & set(changes):
         retire_version(instance)
         instance.version += 1
-        instance.state="WARMING_UP";instance.warmup_progress=0
+        instance.state="WARMING_UP";instance.warmup_progress=0;instance.warmup_started_at=timezone.now();instance.warmup_last_progress_at=instance.warmup_started_at
     if "instrument" in changes and not hasattr(instance.instrument,"broker_contract"):
         instance.enabled=False;instance.state="BLOCKED";instance.block_reason="Instrument does not have a qualified IBKR contract"
     instance.clean();instance.save()
@@ -153,7 +153,8 @@ def enable_instance(instance,gateway=None):
         instance.state="BLOCKED";instance.block_reason="Instrument does not have a qualified IBKR contract"
         instance.save(update_fields=["state","block_reason","updated_at"]);raise ValueError(instance.block_reason)
     now=timezone.now();instance.enabled=True;instance.state="WARMING_UP";instance.block_reason="";instance.effective_from=now;instance.effective_to=None
-    instance.save(update_fields=["enabled","state","block_reason","effective_from","effective_to","updated_at"])
+    instance.warmup_started_at=now;instance.warmup_last_progress_at=now;instance.warmup_progress=0
+    instance.save(update_fields=["enabled","state","block_reason","effective_from","effective_to","warmup_started_at","warmup_last_progress_at","warmup_progress","updated_at"])
     instance.legacy_strategy.enabled=True;instance.legacy_strategy.kill_switch=False;instance.legacy_strategy.save(update_fields=["enabled","kill_switch"])
     StrategyVersion.objects.filter(pk=current_version(instance).pk).update(activated_at=now)
     register_inputs(instance)
@@ -212,8 +213,10 @@ def evaluate_instance(instance, *, bar, indicators, previous_indicators=None, ev
         from apps.market_streams.models import MarketBar
         required=get_plugin(instance.definition).warmup_bars(instance.parameters)
         progress=MarketBar.objects.filter(instrument=instance.instrument,interval=instance.timeframe,is_final=True).values("bar_id").distinct().count()
-        instance.state=decision.next_state;instance.state_data=decision.state_data;instance.warmup_progress=min(progress,required)
-        instance.save(update_fields=["state","state_data","warmup_progress","updated_at"])
+        old_progress=instance.warmup_progress;instance.state=decision.next_state;instance.state_data=decision.state_data;instance.warmup_progress=min(progress,required)
+        fields=["state","state_data","warmup_progress","updated_at"]
+        if instance.warmup_progress>old_progress:instance.warmup_last_progress_at=timezone.now();fields.append("warmup_last_progress_at")
+        instance.save(update_fields=fields)
         run.status="COMPLETED";run.completed_at=timezone.now();run.save(update_fields=["status","completed_at"])
         OutboxEvent.objects.create(topic="strategy.targets.v1",event_type="strategy.evaluated",aggregate_type="strategy_instance",
             aggregate_id=str(instance.pk),partition_key=str(instance.instrument_id),payload={"strategy_run_id":run.pk,

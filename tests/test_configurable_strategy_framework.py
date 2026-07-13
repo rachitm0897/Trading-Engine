@@ -10,7 +10,7 @@ from apps.oms.services import apply_execution
 from apps.portfolios.models import TradingPortfolio
 from apps.rebalancing.services import aggregate_targets, plan_rebalance
 from apps.market_streams.models import IndicatorValue, MarketBar, MarketDataSubscription
-from apps.market_streams.services import evaluate_ready_strategies
+from apps.market_streams.services import evaluate_ready_strategies, persist_bar
 from apps.strategies.framework import create_instance, enable_instance, evaluate_instance, pause_instance, update_instance
 from apps.strategies.models import StrategyAttributedPosition, StrategyDefinition, StrategyInputRequirement, StrategyTarget, StrategyVersion
 
@@ -196,3 +196,13 @@ def test_shared_strategies_reuse_and_reference_count_market_subscription(portfol
     subscription=MarketDataSubscription.objects.get();assert subscription.consumer_count==2 and len(gateway.subscribes)==1
     pause_instance(first,gateway);assert MarketDataSubscription.objects.get().consumer_count==1 and not gateway.cancels
     pause_instance(second,gateway);assert MarketDataSubscription.objects.get().consumer_count==0 and len(gateway.cancels)==1
+
+
+def test_real_final_bar_advances_strategy_warmup(portfolio):
+    item=instrument("WARM",654);instance=make(portfolio,item,"FIXED_WEIGHT_REBALANCE","WARMUP_FINAL",{"direction":"LONG"})
+    enable_instance(instance)
+    persist_bar({"produced_at":"2026-07-13T00:01:01+00:00","payload":{"bar_id":"warm-1","instrument_id":item.pk,
+        "interval":"5m","window_start":"2026-07-13T00:00:00+00:00","window_end":"2026-07-13T00:05:00+00:00",
+        "open":"10","high":"11","low":"9","close":"10.5","volume":"100","is_final":True,"version":1}})
+    instance.refresh_from_db()
+    assert instance.warmup_progress==1 and instance.warmup_last_progress_at is not None and instance.state!="WARMING_UP"
