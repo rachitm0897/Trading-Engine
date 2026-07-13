@@ -3,7 +3,7 @@ from django.db import IntegrityError
 from django.views.decorators.csrf import csrf_exempt
 from apps.core.views import response
 from apps.instruments.models import Instrument
-from apps.instruments.services import resolve_instrument
+from apps.instruments.services import resolve_instrument, search_broker_instruments
 from apps.portfolios.models import TradingPortfolio
 from .framework import create_instance, enable_instance, evaluate_instance, flatten_instance, pause_instance, update_instance
 from .models import OrderPolicy, StrategyDefinition, StrategyInstance, StrategyRiskPolicy
@@ -223,8 +223,14 @@ def resolve(request):
         payload=json.loads(request.body or b"{}") if request.method=="POST" else request.GET
         instrument,contract,command=resolve_instrument(instrument_id=payload.get("instrument_id"),ticker=payload.get("ticker"),
             asset_class=payload.get("asset_class","STK"),exchange=payload.get("exchange","SMART"),currency=payload.get("currency","USD"),
-            primary_exchange=payload.get("primary_exchange"),qualify=bool(payload.get("qualify",request.method=="POST")))
+            primary_exchange=payload.get("primary_exchange"),conid=payload.get("conid"),local_symbol=payload.get("local_symbol"),
+            description=payload.get("description"),qualify=bool(payload.get("qualify",request.method=="POST")))
         return response({"instrument_id":instrument.pk,"symbol":instrument.symbol,"asset_class":instrument.asset_class,
             "exchange":instrument.exchange,"currency":instrument.currency,"conid":contract.conid if contract else None,
             "primary_exchange":contract.primary_exchange if contract else None,"qualification_command":command})
     except Exception as exc:return response(status=400,error={"code":"INSTRUMENT_RESOLUTION_FAILED","message":str(exc),"details":{}})
+
+
+def search_instruments(request):
+    try:return response(search_broker_instruments(request.GET.get("query")))
+    except Exception as exc:return response(status=502,error={"code":"INSTRUMENT_SEARCH_FAILED","message":str(exc),"details":{}})

@@ -1,4 +1,5 @@
 import time
+import hashlib
 import requests
 from django.conf import settings
 
@@ -35,9 +36,25 @@ class GatewayClient:
     def account_summary(self): return self.request("GET", "account-summary/")
     def open_orders(self): return self.request("GET", "open-orders/")
     def completed_orders(self): return self.request("GET", "completed-orders/")
+    def command(self, command_id): return self.request("GET", f"commands/{int(command_id)}/")
+    def wait_for_command(self, queued, timeout=20):
+        command_id=int(queued["command_id"]);deadline=time.monotonic()+timeout
+        current=queued
+        while current.get("status") not in {"COMPLETED","FAILED"} and time.monotonic()<deadline:
+            time.sleep(0.1);current=self.command(command_id)
+        if current.get("status")=="FAILED":raise GatewayError(current.get("error") or f"Gateway command {command_id} failed")
+        if current.get("status")!="COMPLETED":raise GatewayError(f"Gateway command {command_id} timed out")
+        return current.get("result") or {}
+    def search_contracts(self, query):
+        query=str(query).strip();digest=hashlib.sha256(query.casefold().encode()).hexdigest()[:32]
+        queued=self.request("POST", "contracts/search/", json={"query":query},idempotency_key=f"contract-search:{digest}",retries=0)
+        return self.wait_for_command(queued).get("results",[])
     def events(self, after=0): return self.request("GET", f"events/?after={int(after)}")
     def ack_events(self, sequence): return self.request("POST", "events/ack/", json={"sequence":int(sequence)}, idempotency_key=f"events-ack:{int(sequence)}", retries=0)
     def place_order(self, payload, key): return self.request("POST", "orders/", json=payload, idempotency_key=key, retries=0)
     def modify_order(self, internal_id, payload, key): return self.request("PATCH", f"orders/{internal_id}/", json=payload, idempotency_key=key, retries=0)
     def cancel_order(self, internal_id, key): return self.request("POST", f"orders/{internal_id}/cancel/", json={}, idempotency_key=key, retries=0)
     def qualify_contract(self, payload, key): return self.request("POST", "contracts/qualify/", json=payload, idempotency_key=key, retries=0)
+    def qualify_contract_exact(self, payload, key):
+        queued=self.qualify_contract(payload,key)
+        return self.wait_for_command(queued)
