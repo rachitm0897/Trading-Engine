@@ -1,10 +1,10 @@
-import {useMemo, useState} from 'react'
+import {useEffect, useMemo, useState} from 'react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {ArrowLeft, ArrowRight, Check, CircleCheck, Radar, ShieldCheck} from 'lucide-react'
 import {Link, useNavigate} from 'react-router-dom'
-import {mutationOptions, request} from '../../api/client'
+import {mutationOptions, request, withQuery} from '../../api/client'
 import {queries} from '../../api/queries'
-import type {InstrumentResolution, ParameterProperty, Scalar, StrategyDefinition, StrategyInstance} from '../../api/types'
+import type {InstrumentResolution, InstrumentSearchResult, ParameterProperty, Scalar, StrategyDefinition, StrategyInstance} from '../../api/types'
 import {CollapsibleSection, ErrorState, PageHeader, Panel, Skeleton, StatusBadge, formatCompact} from '../../components/ui'
 import {useSelection} from '../../stores/useSelection'
 
@@ -51,21 +51,37 @@ export function CreateStrategyPage() {
   const [draft, setDraft] = useState<Draft>(initialDraft)
   const [validation, setValidation] = useState<string | null>(null)
   const [resolution, setResolution] = useState<InstrumentResolution | null>(null)
+  const [selectedContract, setSelectedContract] = useState<InstrumentSearchResult | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
   const definition = definitions.data?.find((item) => item.key === draft.definitionKey) || null
   const exchanges = useMemo(() => [...new Set(['SMART', ...(instruments.data || []).map((item) => item.exchange).filter(Boolean)])], [instruments.data])
 
+  useEffect(() => {
+    const timer=window.setTimeout(() => setSearchQuery(draft.ticker.trim()), 350)
+    return () => window.clearTimeout(timer)
+  }, [draft.ticker])
+  const contractSearch=useQuery({
+    queryKey: ['instrument-search', searchQuery],
+    queryFn: () => request<InstrumentSearchResult[]>(withQuery('instruments/search/', {query: searchQuery})),
+    enabled: searchQuery.length > 0,
+    staleTime: 60_000,
+  })
+
   const resolveContract = useMutation({
-    mutationFn: () => request<InstrumentResolution>('instruments/resolve/', mutationOptions('POST', {ticker: draft.ticker.trim().toUpperCase(), exchange: draft.exchange, qualify: true}, true)),
+    mutationFn: () => {
+      if (!selectedContract) throw new Error('Select an exact IBKR contract first.')
+      return request<InstrumentResolution>('instruments/resolve/', mutationOptions('POST', {...selectedContract, ticker: selectedContract.symbol, qualify: true}, true))
+    },
     onSuccess: (data) => {setResolution(data); setValidation(null)},
   })
   const create = useMutation({
     mutationFn: () => request<StrategyInstance>('strategy-instances/', mutationOptions('POST', {
-      name: draft.name.trim(), definition_key: draft.definitionKey, ticker: draft.ticker.trim().toUpperCase(), exchange: draft.exchange,
+      name: draft.name.trim(), definition_key: draft.definitionKey, instrument_id: resolution?.instrument_id,
       portfolio_id: selectedPortfolioId, timeframe: draft.timeframe, parameters: draft.parameters,
       target_configuration: {target_weight: Number(draft.targetWeight), capital_share: Number(draft.capitalShare), priority: Number(draft.priority)},
       risk_policy_id: draft.riskPolicyId ? Number(draft.riskPolicyId) : null,
       order_policy_id: draft.orderPolicyId ? Number(draft.orderPolicyId) : null,
-      execution_mode: draft.executionMode,
+      execution_mode: draft.executionMode, qualify: false,
     }, true)),
     onSuccess: async (data) => {
       await queryClient.invalidateQueries({queryKey: ['strategy-instances']})
@@ -80,6 +96,8 @@ export function CreateStrategyPage() {
   const validateStep = () => {
     let error = ''
     if (step === 0 && !draft.ticker.trim()) error = 'Enter a ticker before continuing.'
+    else if (step === 0 && !selectedContract) error = 'Select an exact IBKR contract before continuing.'
+    else if (step === 0 && selectedContract && (!resolution?.conid || resolution.conid !== selectedContract.conid)) error = 'Qualify the selected IBKR contract before continuing.'
     if (step === 1 && (!draft.name.trim() || !draft.definitionKey || !draft.timeframe)) error = 'Choose a definition and timeframe, and name this instance.'
     if (step === 2 && definition) {
       const missing = (definition.parameter_schema.required || []).filter((key) => draft.parameters[key] === undefined || draft.parameters[key] === null || draft.parameters[key] === '')
@@ -98,15 +116,25 @@ export function CreateStrategyPage() {
     <PageHeader eyebrow="Strategies / New" title="Create a strategy" description={`Build for ${portfolio?.name || 'the selected portfolio'}. New instances default to SHADOW and are never offered LIVE mode.`} actions={<Link className="button-secondary" to="/strategies"><ArrowLeft />Back to strategies</Link>} />
     <ol className="wizard-steps" aria-label="Create strategy progress">{steps.map((label, index) => <li key={label} className={index === step ? 'active' : index < step ? 'complete' : ''}><span>{index < step ? <Check /> : index + 1}</span><strong>{label}</strong></li>)}</ol>
     <Panel className="wizard-panel">
-      {step === 0 && <WizardInstrument draft={draft} setDraft={setDraft} instruments={instruments.data || []} exchanges={exchanges} resolution={resolution} resolving={resolveContract.isPending} onResolve={() => {if (draft.ticker.trim()) resolveContract.mutate(); else setValidation('Enter a ticker before checking the contract.')}} />}
+      {step === 0 && <BrokerInstrumentSearch draft={draft} setDraft={setDraft} instruments={instruments.data || []} exchanges={exchanges}
+        results={contractSearch.data || []} searching={contractSearch.isFetching} selected={selectedContract} resolution={resolution}
+        resolving={resolveContract.isPending} onTicker={(ticker) => {setSelectedContract(null);setResolution(null);setDraft((current) => ({...current,ticker:ticker.toUpperCase()}))}}
+        onSelect={(contract) => {setSelectedContract(contract);setResolution(null);setDraft((current) => ({...current,ticker:contract.symbol,exchange:contract.exchange}))}}
+        onResolve={() => {if (selectedContract) resolveContract.mutate(); else setValidation('Select an exact IBKR contract before qualification.')}} />}
       {step === 1 && <WizardDefinition draft={draft} setDraft={setDraft} definitions={definitions.data || []} definition={definition} onDefinition={selectDefinition} />}
       {step === 2 && <WizardParameters draft={draft} setDraft={setDraft} definition={definition} />}
       {step === 3 && <WizardExecution draft={draft} setDraft={setDraft} policies={policies.data} />}
       {step === 4 && <WizardReview draft={draft} definition={definition} resolution={resolution} portfolioName={portfolio?.name} />}
-      {(validation || resolveContract.isError || create.isError) && <ErrorState title={validation ? 'Complete this step' : create.isError ? 'Strategy validation failed' : 'Contract check failed'} error={validation ? new Error(validation) : create.error || resolveContract.error} compact />}
+      {(validation || contractSearch.isError || resolveContract.isError || create.isError) && <ErrorState title={validation ? 'Complete this step' : create.isError ? 'Strategy validation failed' : contractSearch.isError ? 'Instrument search failed' : 'Contract check failed'} error={validation ? new Error(validation) : create.error || contractSearch.error || resolveContract.error} compact />}
       <div className="wizard-footer"><button className="button-secondary" disabled={step === 0 || create.isPending} onClick={() => {setValidation(null); setStep((value) => Math.max(0, value - 1))}}><ArrowLeft />Back</button><span>Step {step + 1} of {steps.length}</span>{step < 4 ? <button className="button-primary" onClick={next}>Continue<ArrowRight /></button> : <button className="button-primary" disabled={create.isPending || !selectedPortfolioId} onClick={() => {if (validateStep()) create.mutate()}}><ShieldCheck />{create.isPending ? 'Validating…' : 'Validate & create'}</button>}</div>
     </Panel>
   </div>
+}
+
+function BrokerInstrumentSearch({draft, setDraft, instruments, exchanges, results, searching, selected, resolution, resolving, onTicker, onSelect, onResolve}: {draft: Draft; setDraft: React.Dispatch<React.SetStateAction<Draft>>; instruments: {id: number; symbol: string}[]; exchanges: string[]; results: InstrumentSearchResult[]; searching: boolean; selected: InstrumentSearchResult | null; resolution: InstrumentResolution | null; resolving: boolean; onTicker: (ticker: string) => void; onSelect: (contract: InstrumentSearchResult) => void; onResolve: () => void}) {
+  return <div className="wizard-content"><div className="wizard-heading"><span>1</span><div><h2>Choose the instrument</h2><p>Search IBKR by ticker or company name, then select the exact broker contract.</p></div></div><div className="form-grid two-columns"><label>IBKR instrument search<input aria-label="Ticker" value={draft.ticker} list="instrument-symbols" placeholder="Ticker or company name" onChange={(event) => onTicker(event.target.value)} autoFocus /><datalist id="instrument-symbols">{instruments.map((item) => <option key={item.id} value={item.symbol} />)}</datalist></label><label>Routing exchange<select aria-label="Exchange" value={draft.exchange} disabled={Boolean(selected)} onChange={(event) => setDraft((current) => ({...current, exchange: event.target.value}))}>{exchanges.map((exchange) => <option key={exchange}>{exchange}</option>)}</select></label></div>
+    <div className="contract-search-results" aria-live="polite">{searching && <p>Searching IBKR contracts...</p>}{!searching && draft.ticker && !results.length && <p>No matching IBKR contracts.</p>}{results.map((contract) => <button type="button" className={selected?.conid===contract.conid?'selected':''} key={contract.conid} aria-label={`Select ${contract.symbol} ${contract.primary_exchange || contract.exchange} ${contract.currency}`} onClick={() => onSelect(contract)}><span><strong>{contract.symbol}</strong><small>{contract.description || contract.local_symbol}</small></span><span><code>{contract.local_symbol}</code><small>{contract.asset_class} / {contract.exchange} / {contract.primary_exchange || 'No primary'} / {contract.currency}</small></span><code>conId {contract.conid}</code></button>)}</div>
+    <div className="contract-card"><div><Radar /><div><strong>Exact IBKR contract qualification</strong><p>{resolution?.conid ? `${resolution.symbol} conId ${resolution.conid} qualified on ${resolution.primary_exchange || resolution.exchange}.` : selected ? `${selected.symbol} on ${selected.primary_exchange || selected.exchange} is selected and ready to qualify.` : 'Select one search result. Ambiguous matches are never chosen automatically.'}</p></div></div><StatusBadge status={resolution?.conid ? 'QUALIFIED' : selected ? 'SELECTED' : 'NOT SELECTED'} /><button className="button-secondary" disabled={resolving || !selected} onClick={onResolve}>{resolving ? 'Qualifying...' : 'Qualify selected contract'}</button>{selected && <code>conId {selected.conid}</code>}</div></div>
 }
 
 function WizardInstrument({draft, setDraft, instruments, exchanges, resolution, resolving, onResolve}: {draft: Draft; setDraft: React.Dispatch<React.SetStateAction<Draft>>; instruments: {id: number; symbol: string}[]; exchanges: string[]; resolution: InstrumentResolution | null; resolving: boolean; onResolve: () => void}) {

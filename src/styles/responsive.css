@@ -48,6 +48,7 @@
   .wizard-footer { flex-wrap: wrap; }
   .contract-card { align-items: flex-start; flex-wrap: wrap; }
   .contract-card > div:first-child { width: 100%; }
+  .contract-search-results > button { grid-template-columns: 1fr; }
   .danger-zone { align-items: flex-start; flex-direction: column; }
   .job-list { grid-template-columns: 1fr; }
   .confirm-dialog footer { flex-direction: column-reverse; }
