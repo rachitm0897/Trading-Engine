@@ -270,3 +270,85 @@ path rather than HTTP/process liveness alone.
   paper-first gates.
 - Configurable strategies continue to reject LIVE mode, and
   `ALLOW_LIVE_TRADING` remains false.
+
+## Post-fix runtime verification
+
+Verified on 2026-07-13 after the phase-by-phase implementation and a clean rebuild
+of every Compose image.
+
+### Confirmed repaired paths
+
+- Real IBKR search for `SHOP` returned 21 distinct contracts. Exact selection of
+  conId `195014116` resolved and persisted the NASDAQ/USD stock contract instead
+  of guessing from the ticker.
+- The qualified contract published to the compacted `instrument.registry.v1`
+  topic. The registry end offset advanced from 4 to 5 before the strategy was
+  enabled, and Flink resolved subsequent raw events by conId.
+- Enabling SHADOW strategy instance 31 created a durable, reference-counted
+  subscription. Real IBKR historical data traversed Gateway, Kafka, Flink, and
+  Backend persistence: 20 final SHOP 5-minute bars and 20 RSI values were stored.
+- Warm-up advanced from real final bars and indicators to `15/15`. The latest RSI
+  was `50.0000000000`; the strategy did not evaluate or place an order because the
+  live subscription was unavailable.
+- IBKR returned exact API market-data error 10089:
+
+  ```text
+  Requested market data requires additional subscription for API. See link in
+  'Market Data Connections' dialog for more details.
+  ```
+
+  The subscription, strategy detail, block reason, and streaming-health payload
+  retained that reason. AAPL also returned exact error 354, and other attempted
+  contracts returned error 420, proving broker errors no longer disappear behind
+  an endless warm-up.
+- Pausing the two diagnostic strategies reduced their input reference counts to
+  zero. A routing-default defect found during this cleanup was fixed; the durable
+  cancel command then completed and the SHOP subscription became `INACTIVE` with
+  an empty error field.
+- The Backend outbox recovered all 156 baseline schema-package failures. At final
+  verification it contained 302 published events, zero pending events, and zero
+  failed events. Backend consumer topic lag was zero.
+- The Gateway was restarted and returned with a new connection generation,
+  `connected=true`, `reconciled=true`, and `mode=paper`. Active subscriptions were
+  reissued for the new generation while diagnostic errors remained visible.
+- Backend and both Flink containers were restarted after the SHOP events. Counts
+  remained 20 final bars, 20 indicators, and 40 consumed events, with no duplicate
+  rows. All five Flink jobs returned to `RUNNING` with all tasks running.
+- Final HTTP smoke returned 200 for Backend health, instruments, strategy detail,
+  orders, and streaming health; Frontend root and health; and Gateway health.
+- Compose exposes only Gateway HTTP target port 8080 for `ib_gateway`, not raw TWS
+  ports 4001/4002. `ALLOW_LIVE_TRADING=false` and the default execution mode is
+  `SHADOW`.
+
+### Final automated results
+
+- Backend: `66 passed in 8.52s`; Django system check passed; no missing migrations.
+- Gateway: `18 passed in 0.26s`; Django system check passed.
+- Frontend: `12 passed in 7.28s`; TypeScript/Vite production build passed
+  (`478.15 kB` JavaScript bundle, `147.14 kB` gzip).
+- Flink calculation tests: `3 passed in 0.02s`; Python bytecode compilation passed.
+- `docker compose config --quiet` and a full `docker compose build` passed.
+- All long-running Compose services were up; health-enabled services were healthy;
+  all five Flink jobs were `RUNNING` with all tasks running.
+
+### Verification boundary and remaining paper-account checks
+
+The complete real live-bar-to-strategy-run path was **not** exercised. The paper
+account currently lacks the IBKR API market-data subscription needed for live
+SHOP/AAPL/MSFT/AMD data. Historical final bars and indicators completed, but the
+strategy correctly blocked before evaluation on the exact broker error, so there
+were zero SHOP strategy runs and zero orders.
+
+After enabling the required paper-account market-data entitlement (or confirmed
+API delayed-data access), repeat the test during an applicable market session and
+verify a live final bar, indicator, strategy run, and SHADOW target in order. A
+real paper order should also be deliberately cancelled or rejected to confirm a
+new IBKR callback populates reason code, message, structured diagnostics, and the
+Frontend order timeline. Existing historical cancelled orders predate this change
+and still contain the former generic `IBKR order status` row; they were not
+rewritten because order history is append-only.
+
+The Frontend behavior is covered by unit tests, production build, API/detail
+smoke, and Nginx HTTP smoke. An in-app interactive browser walkthrough could not
+be run because this session did not expose the browser-use skill's required Node
+runtime; no alternate browser driver was substituted.
