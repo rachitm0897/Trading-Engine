@@ -33,7 +33,7 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         seen = set()
         for match in matches:
             contract = match.contract
-            if not contract.conId or contract.conId in seen:
+            if contract.conId <= 0 or contract.conId in seen:
                 continue
             seen.add(contract.conId)
             details = self._details(contract)

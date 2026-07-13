@@ -11,7 +11,7 @@ def search_broker_instruments(query, gateway=None):
     results=[]
     for row in rows:
         conid=int(row.get("conid") or 0)
-        if not conid:continue
+        if conid<=0 or not row.get("symbol"):continue
         existing=BrokerContract.objects.select_related("instrument").filter(conid=conid).first()
         results.append({"symbol":row.get("symbol") or "","local_symbol":row.get("local_symbol") or row.get("symbol") or "",
             "conid":conid,"asset_class":row.get("asset_class") or "","exchange":row.get("exchange") or "",
