@@ -38,6 +38,9 @@ def test_async_ibkr_market_error_blocks_strategy_with_exact_reason():
     instance.refresh_from_db();subscription=MarketDataSubscription.objects.get(instrument=instrument,timeframe="1m")
     assert subscription.state=="ERROR" and subscription.last_error=="IBKR error 354: Requested market data is not subscribed"
     assert instance.state=="BLOCKED" and instance.block_reason==subscription.last_error
+    process_snapshot({"event_type":"command.subscribe_market_data.completed","payload":{"subscription_key":f"{instrument.pk}:1m"}})
+    subscription.refresh_from_db()
+    assert subscription.state=="ACTIVE" and subscription.last_error=="IBKR error 354: Requested market data is not subscribed"
 
 
 def test_stalled_warmup_becomes_visibly_blocked(settings):
