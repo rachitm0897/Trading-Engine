@@ -93,6 +93,10 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         live=self.ib.reqRealTimeBars(contract,5,payload.get("what_to_show","TRADES"),bool(payload.get("use_rth",False)))
         request_id=getattr(live,"reqId",None)
         if request_id is not None:self.market_request_ids[int(request_id)]=dict(payload)
+        recent=next((item for item in reversed(self.recent_errors) if request_id is not None and item.get("request_id")==request_id),None)
+        if recent:
+            self.market_request_ids.pop(int(request_id),None);self.ib.cancelRealTimeBars(live)
+            raise RuntimeError(f"IBKR error {recent['error_code']}: {recent['error_message']}")
         def on_update(bars,*_args):
             if bars:self.market_events.append(self._market_payload(bars[-1],payload,"ibkr_live","5s",5))
         live.updateEvent += on_update
@@ -179,6 +183,7 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
             "conid":conid,"occurred_at":now})
         payload=self.market_request_ids.get(int(req_id)) if isinstance(req_id,int) and req_id>=0 else None
         if payload:
+            self.market_request_ids.pop(int(req_id),None);self.market_subscriptions.pop(payload["subscription_key"],None)
             identity=json.dumps([req_id,error_code,error_string,now],separators=(",",":"))
             self.market_events.append({**payload,"source_event_id":hashlib.sha256(identity.encode()).hexdigest(),
                 "event_kind":"ERROR","error_code":str(error_code),"error_message":str(error_string),
