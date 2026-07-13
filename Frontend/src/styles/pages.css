@@ -49,6 +49,12 @@
 .contract-card strong, .definition-card strong, .safety-path strong { font-size: .78rem; }
 .contract-card p, .definition-card p, .safety-path p { margin: .18rem 0 0; font-size: .7rem; }
 .contract-card code { padding: .35rem .45rem; border-radius: 5px; background: #e8ebf0; }
+.contract-search-results { display: grid; gap: .55rem; margin-top: 1rem; }
+.contract-search-results > p { margin: 0; padding: .8rem; color: var(--text-muted); border: 1px dashed var(--border); border-radius: var(--radius); }
+.contract-search-results > button { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(220px, 1.5fr) auto; align-items: center; gap: .8rem; width: 100%; padding: .8rem; color: inherit; text-align: left; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer; }
+.contract-search-results > button:hover, .contract-search-results > button.selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.contract-search-results span { display: grid; gap: .18rem; }
+.contract-search-results small { color: var(--text-muted); }
 .definition-card { align-items: flex-start; }
 .definition-card > div > div { display: flex; gap: .35rem; margin-top: .55rem; }
 .review-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .7rem; }
@@ -83,4 +89,3 @@
 .job-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; margin: 0; padding: 0; list-style: none; }
 .job-list li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .7rem; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .job-list strong { font-size: .72rem; }
-

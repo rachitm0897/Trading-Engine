@@ -45,6 +45,7 @@ const data: Record<string, unknown> = {
   'strategy-instances/7': strategy,
   'strategy-instances/7/execution-timeline': [{id: 1, time: '2026-07-13T01:00:00Z', type: 'SIGNAL', status: 'ENTER_LONG', version: 2}],
   'strategy-instances/7/chart': {source: 'POSTGRES_MARKET_AND_EXECUTION_FACTS', bars: [{time: '2026-07-13T01:00:00Z', open: 121, high: 126, low: 120, close: 125, volume: 1000, version: 1}], indicators: [{time: '2026-07-13T01:00:00Z', name: 'channel', value: 123}], markers: [{time: '2026-07-13T01:00:00Z', type: 'SIGNAL', label: 'Signal ENTER_LONG'}]},
+  'instruments/search': [{symbol: 'NVDA', local_symbol: 'NVDA', conid: 4815747, asset_class: 'STK', exchange: 'SMART', primary_exchange: 'NASDAQ', currency: 'USD', description: 'NVIDIA Corporation', instrument_id: null}],
   orders: [
     {id: 1, internal_id: 'active-order-123', account_id: 'DU-PRIMARY', portfolio_id: 10, symbol: 'NVDA', side: 'BUY', order_type: 'LMT', time_in_force: 'DAY', broker_order_id: '991', broker_permanent_id: '', status: 'ACKNOWLEDGED', quantity: 10, filled_quantity: 4, average_fill_price: 123, created_at: '2026-07-13T00:00:00Z', updated_at: '2026-07-13T01:00:00Z'},
     {id: 2, internal_id: 'filled-order-456', account_id: 'DU-PRIMARY', portfolio_id: 10, symbol: 'NVDA', side: 'BUY', order_type: 'MKT', time_in_force: 'DAY', broker_order_id: '992', broker_permanent_id: '', status: 'FILLED', quantity: 2, filled_quantity: 2, average_fill_price: 124, created_at: '2026-07-12T00:00:00Z', updated_at: '2026-07-12T01:00:00Z'},
@@ -103,6 +104,9 @@ test('supports deep links, arbitrary tickers, dynamic schema fields, and shadow-
   render(<App />)
   expect(await screen.findByRole('heading', {name: 'Create a strategy'})).toBeInTheDocument()
   await user.type(screen.getByLabelText('Ticker'), 'nvda')
+  await user.click(await screen.findByRole('button', {name: 'Select NVDA NASDAQ USD'}))
+  await user.click(screen.getByRole('button', {name: 'Qualify selected contract'}))
+  await screen.findByText('QUALIFIED')
   await user.click(screen.getByRole('button', {name: 'Continue'}))
   await user.type(screen.getByLabelText('Instance name'), 'NVDA portable')
   await user.selectOptions(screen.getByLabelText('Strategy definition'), 'CUSTOM_BREAKOUT')

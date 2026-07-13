@@ -62,6 +62,7 @@ export interface Instrument {
   symbol: string
   asset_class: string
   exchange: string
+  primary_exchange: string
   currency: string
   sector: string
   multiplier: DecimalValue
@@ -382,6 +383,18 @@ export interface InstrumentResolution {
   conid: number | null
   primary_exchange: string | null
   qualification_command: JsonRecord | null
+}
+
+export interface InstrumentSearchResult {
+  symbol: string
+  local_symbol: string
+  conid: number
+  asset_class: string
+  exchange: string
+  primary_exchange: string
+  currency: string
+  description: string
+  instrument_id: number | null
 }
 
 export interface SeriesPoint {
