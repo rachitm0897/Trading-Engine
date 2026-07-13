@@ -1,5 +1,0 @@
-.strategy-grid{grid-template-columns:minmax(420px,.8fr) minmax(650px,1.5fr)}
-.strategy-builder{grid-template-columns:repeat(3,minmax(0,1fr))}
-.builder-summary{grid-column:1/-1;border:1px solid #263138;background:#090d0f;padding:9px;display:flex;gap:16px;flex-wrap:wrap;color:var(--cyan);font:600 8px ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.08em}
-.filter-input{width:230px;height:25px;background:#080c0e;border:1px solid #283238;color:#d0d8dc;padding:0 7px;font:500 9px ui-monospace,SFMono-Regular,Consolas,monospace}
-@media(max-width:1450px){.strategy-grid{grid-template-columns:1fr}.strategy-builder{grid-template-columns:repeat(2,minmax(0,1fr))}}
