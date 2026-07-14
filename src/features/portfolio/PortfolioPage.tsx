@@ -1,11 +1,11 @@
-import {useMemo, useState} from 'react'
+import {useEffect, useMemo, useState} from 'react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {Banknote, Layers3, PieChart, Scale, WalletCards} from 'lucide-react'
 import {mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
-import type {AllocationPolicy, Position, PositionSizingDecision, RebalanceRun, RebalanceTarget} from '../../api/types'
+import type {AllocationPolicy, Instrument, PortfolioOptimizationPolicy, PortfolioOptimizationRun, PortfolioUniverse, Position, PositionSizingDecision, RebalanceRun, RebalanceTarget} from '../../api/types'
 import {TimeSeriesChart} from '../../components/charts/TimeSeriesChart'
-import {CollapsibleSection, DataTable, ErrorState, Freshness, MetricCard, PageHeader, Panel, Skeleton, StatusBadge, formatMoney, formatNumber, formatPercent, toNumber} from '../../components/ui'
+import {CollapsibleSection, DataTable, ErrorState, Freshness, MetricCard, PageHeader, Panel, Skeleton, StatusBadge, formatCompact, formatMoney, formatNumber, formatPercent, toNumber} from '../../components/ui'
 import {useSelection} from '../../stores/useSelection'
 
 export function PortfolioPage() {
@@ -18,8 +18,14 @@ export function PortfolioPage() {
   const rebalancePolicies = useQuery(queries.rebalancePolicies())
   const rebalanceRuns = useQuery(queries.rebalanceRuns())
   const instruments = useQuery(queries.instruments())
+  const system = useQuery(queries.system())
+  const universes = useQuery(queries.portfolioUniverse(selectedPortfolioId))
+  const optimizationPolicies = useQuery(queries.optimizationPolicies(selectedPortfolioId))
+  const optimizationRuns = useQuery(queries.optimizationRuns(selectedPortfolioId))
   const [preview, setPreview] = useState<RebalanceRun | null>(null)
+  const [optimizationPreview, setOptimizationPreview] = useState<PortfolioOptimizationRun | null>(null)
   const [sizing, setSizing] = useState<PositionSizingDecision | null>(null)
+  useEffect(() => {setPreview(null); setOptimizationPreview(null); setSizing(null)}, [selectedPortfolioId])
 
   const portfolioPositions = useMemo(() => (positions.data || []).filter((item) => !selectedPortfolioId || item.portfolio_id === selectedPortfolioId), [positions.data, selectedPortfolioId])
   const gross = portfolioPositions.reduce((sum, item) => sum + Math.abs(toNumber(item.market_value)), 0)
@@ -29,8 +35,8 @@ export function PortfolioPage() {
   const rebalancePolicyRows = (rebalancePolicies.data || []).filter((item) => !selectedPortfolioId || item.portfolio_id === selectedPortfolioId)
 
   const flow = useMutation({
-    mutationFn: (payload: {flow_type: string; amount: string; liquidation_policy: string}) => request<{id: number; status: string}>('allocations/flows/', mutationOptions('POST', {portfolio_id: selectedPortfolioId, ...payload}, true)),
-    onSuccess: async () => { await queryClient.invalidateQueries({queryKey: ['allocation-runs']}) },
+    mutationFn: (payload: {flow_type: string; amount: string; liquidation_policy: string; allocation_mode: string}) => request<{id: number; status: string}>('allocations/flows/', mutationOptions('POST', {portfolio_id: selectedPortfolioId, ...payload}, true)),
+    onSuccess: async () => { await Promise.all([queryClient.invalidateQueries({queryKey: ['allocation-runs']}), queryClient.invalidateQueries({queryKey: ['optimization-runs']})]) },
   })
   const rebalance = useMutation({
     mutationFn: () => request<RebalanceRun>('rebalancing/preview/', mutationOptions('POST', {portfolio_id: selectedPortfolioId, trigger: 'MANUAL'}, true)),
@@ -72,6 +78,10 @@ export function PortfolioPage() {
       <Panel title="Allocation by instrument" description="Current marked market value as a share of gross exposure"><AllocationBars rows={(series.data?.allocation_by_instrument || []).map((item) => ({id: item.instrument_id, name: item.symbol, weight: item.weight, value: item.value}))} currency={account?.base_currency} /></Panel>
       <Panel title="Allocation by strategy" description="Configured capital shares; actual attribution remains ledger-backed"><AllocationBars rows={policyRows.map((item) => ({id: item.id, name: item.strategy, weight: toNumber(item.target_share), value: null}))} currency={account?.base_currency} /></Panel>
     </div>
+    <Panel title="Portfolio construction" description="Build a multi-stock universe and preview long-only Markowitz targets before they enter the existing rebalance pipeline.">
+      <PortfolioConstruction portfolioId={selectedPortfolioId} instruments={instruments.data || []} universe={universes.data?.[0]} policy={optimizationPolicies.data?.[0]} preview={optimizationPreview} executionMode={system.data?.execution_mode || 'SHADOW'} onPreview={setOptimizationPreview} onChanged={async () => {await Promise.all([queryClient.invalidateQueries({queryKey: ['portfolio-universe']}), queryClient.invalidateQueries({queryKey: ['optimization-policies']}), queryClient.invalidateQueries({queryKey: ['optimization-runs']}), queryClient.invalidateQueries({queryKey: ['rebalance-runs']})])}} />
+      {!optimizationPreview && (optimizationRuns.data || []).length > 0 && <p className="inline-note">Most recent optimization: run {(optimizationRuns.data || [])[0].id} · {(optimizationRuns.data || [])[0].status}.</p>}
+    </Panel>
     <Panel title="Holdings" description={`${portfolioPositions.length} marked positions`}>{positions.isLoading ? <Skeleton lines={5} /> : positions.isError ? <ErrorState error={positions.error} onRetry={() => void positions.refetch()} /> : <DataTable rows={portfolioPositions} columns={holdingColumns} getRowKey={(item) => item.id} emptyTitle="No holdings" emptyDescription="Broker-synchronized positions for the selected portfolio will appear here." />}</Panel>
     <Panel title="Drift" description="Create a SHADOW preview to compare current and net strategy targets" actions={<button className="button-secondary" disabled={!selectedPortfolioId || rebalance.isPending} onClick={() => rebalance.mutate()}>{rebalance.isPending ? 'Calculating…' : 'Preview rebalance'}</button>}>{rebalance.isError && <ErrorState title="Rebalance preview was blocked" error={rebalance.error} compact />}<DataTable rows={preview?.targets || []} columns={driftColumns} getRowKey={(item) => item.id} emptyTitle="No drift preview" emptyDescription="A preview creates planning records only and never creates an order." /></Panel>
     <section className="advanced-stack" aria-label="Advanced portfolio tools">
@@ -88,9 +98,9 @@ function AllocationBars({rows, currency}: {rows: {id: number; name: string; weig
   return <ul className="allocation-bars">{rows.map((item) => <li key={item.id}><div><strong>{item.name}</strong><span>{formatPercent(item.weight)}{item.value !== null ? ` · ${formatMoney(item.value, currency)}` : ''}</span></div><div><i style={{width: `${Math.abs(item.weight) / maximum * 100}%`}} /></div></li>)}</ul>
 }
 
-function FlowForm({pending, error, result, onSubmit}: {pending: boolean; error: unknown; result?: {id: number; status: string}; onSubmit: (payload: {flow_type: string; amount: string; liquidation_policy: string}) => void}) {
-  const submit = (event: React.FormEvent<HTMLFormElement>) => {event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({flow_type: String(form.get('flow_type')), amount: String(form.get('amount')), liquidation_policy: String(form.get('liquidation_policy'))})}
-  return <><form className="form-grid three-columns" onSubmit={submit}><label>Flow type<select name="flow_type"><option>DEPOSIT</option><option>WITHDRAWAL</option><option>INTERNAL_TRANSFER_IN</option><option>INTERNAL_TRANSFER_OUT</option></select></label><label>Amount<input name="amount" type="number" min="0.01" step="0.01" required /></label><label>Liquidation policy<select name="liquidation_policy"><option>PROPORTIONAL</option><option>LOWEST_CONVICTION_FIRST</option><option>MOST_LIQUID_FIRST</option><option>LOWEST_COST_FIRST</option><option>PRIORITY_ORDER</option></select></label><button className="button-primary form-submit" disabled={pending}>{pending ? 'Calculating…' : 'Calculate flow'}</button></form>{error && <ErrorState title="Flow was blocked" error={error} compact />}{result && <div className="inline-success"><StatusBadge status={result.status} />Allocation run {result.id} recorded.</div>}</>
+function FlowForm({pending, error, result, onSubmit}: {pending: boolean; error: unknown; result?: {id: number; status: string}; onSubmit: (payload: {flow_type: string; amount: string; liquidation_policy: string; allocation_mode: string}) => void}) {
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({flow_type: String(form.get('flow_type')), amount: String(form.get('amount')), allocation_mode: String(form.get('allocation_mode')), liquidation_policy: String(form.get('liquidation_policy'))})}
+  return <><form className="form-grid four-columns" onSubmit={submit}><label>Flow type<select name="flow_type"><option>DEPOSIT</option><option>WITHDRAWAL</option><option>INTERNAL_TRANSFER_IN</option><option>INTERNAL_TRANSFER_OUT</option></select></label><label>Amount<input name="amount" type="number" min="0.01" step="0.01" required /></label><label>Allocation mode<select name="allocation_mode" defaultValue="AUTO"><option value="AUTO">Automatic</option><option value="PORTFOLIO_OPTIMIZATION">Portfolio optimization</option><option value="STRATEGY_ALLOCATION">Strategy allocation</option></select></label><label>Liquidation policy<select name="liquidation_policy"><option>PROPORTIONAL</option><option>LOWEST_CONVICTION_FIRST</option><option>MOST_LIQUID_FIRST</option><option>LOWEST_COST_FIRST</option><option>PRIORITY_ORDER</option></select></label><button className="button-primary form-submit" disabled={pending}>{pending ? 'Calculating…' : 'Calculate post-flow targets'}</button></form>{error && <ErrorState title="Flow was blocked" error={error} compact />}{result && <div className="inline-success"><StatusBadge status={result.status} />Allocation run {result.id} recorded.</div>}</>
 }
 
 function SizingForm({instruments, pending, error, result, onSubmit}: {instruments: {id: number; symbol: string}[]; pending: boolean; error: unknown; result: PositionSizingDecision | null; onSubmit: (payload: Record<string, string | number | null>) => void}) {
@@ -108,4 +118,101 @@ const allocationRunColumns = [
 
 function PolicyTables({allocation, rebalance, runs}: {allocation: AllocationPolicy[]; rebalance: import('../../api/types').RebalancePolicy[]; runs: RebalanceRun[]}) {
   return <div className="page-stack"><h3>Strategy capital policy</h3><DataTable rows={allocation} columns={[{id: 'strategy', header: 'Strategy', cell: (item) => item.strategy}, {id: 'share', header: 'Target share', cell: (item) => formatPercent(item.target_share)}, {id: 'bounds', header: 'Min / max', cell: (item) => `${formatPercent(item.minimum_share)} / ${formatPercent(item.maximum_share)}`}, {id: 'priority', header: 'Priority', cell: (item) => item.priority}, {id: 'state', header: 'State', cell: (item) => <StatusBadge status={item.enabled ? 'ENABLED' : 'DISABLED'} />}]} getRowKey={(item) => item.id} /><h3>Rebalance policy</h3><DataTable rows={rebalance} columns={[{id: 'mode', header: 'Mode', cell: (item) => <StatusBadge status={item.mode} />}, {id: 'instrument', header: 'Instrument drift', cell: (item) => formatPercent(item.instrument_drift_threshold)}, {id: 'portfolio', header: 'Portfolio drift', cell: (item) => formatPercent(item.portfolio_drift_threshold)}, {id: 'turnover', header: 'Max turnover', cell: (item) => formatPercent(item.maximum_turnover)}, {id: 'sequence', header: 'Sequence', cell: (item) => item.sell_before_buy ? 'Sells before buys' : 'Net sequence'}]} getRowKey={(item) => item.id} /><h3>Recent rebalance runs</h3><DataTable rows={runs.slice(0, 10)} columns={[{id: 'trigger', header: 'Trigger', cell: (item) => item.trigger}, {id: 'mode', header: 'Mode', cell: (item) => <StatusBadge status={item.mode} />}, {id: 'phase', header: 'Phase', cell: (item) => item.phase}, {id: 'drift', header: 'Total drift', cell: (item) => formatPercent(item.total_drift)}, {id: 'status', header: 'Status', cell: (item) => <StatusBadge status={item.status} />}]} getRowKey={(item) => item.id} /></div>
+}
+
+function PortfolioConstruction({portfolioId, instruments, universe, policy, preview, executionMode, onPreview, onChanged}: {
+  portfolioId?: number | null
+  instruments: Instrument[]
+  universe?: PortfolioUniverse
+  policy?: PortfolioOptimizationPolicy
+  preview: PortfolioOptimizationRun | null
+  executionMode: string
+  onPreview: (run: PortfolioOptimizationRun) => void
+  onChanged: () => Promise<void>
+}) {
+  const [instrumentIds, setInstrumentIds] = useState<number[]>([])
+  useEffect(() => {
+    setInstrumentIds(universe ? universe.instruments.filter((item) => item.enabled).map((item) => item.instrument_id) : [])
+  }, [portfolioId, universe])
+
+  const save = useMutation({
+    mutationFn: async (form: HTMLFormElement) => {
+      if (!portfolioId) throw new Error('Select a portfolio')
+      if (instrumentIds.length < 2) throw new Error('Select at least two stocks')
+      const values = new FormData(form)
+      await request<PortfolioUniverse>('portfolio-universe/', mutationOptions('POST', {
+        portfolio_id: portfolioId,
+        instrument_ids: instrumentIds,
+        include_strategy_instruments: values.get('include_strategy_instruments') === 'on',
+        minimum_history_observations: Number(values.get('minimum_history_observations')),
+        maximum_instruments: Number(values.get('maximum_instruments')),
+      }))
+      return request<PortfolioOptimizationPolicy>('portfolio-optimization/policies/', mutationOptions('POST', {
+        portfolio_id: portfolioId,
+        method: String(values.get('method')),
+        lookback_days: Number(values.get('lookback_days')),
+        risk_free_rate: String(values.get('risk_free_rate')),
+        target_cash_weight: String(values.get('target_cash_weight')),
+        minimum_weight: String(values.get('minimum_weight')),
+        maximum_weight: String(values.get('maximum_weight')),
+        maximum_turnover: String(values.get('maximum_turnover')),
+        transaction_cost_penalty: String(values.get('transaction_cost_penalty')),
+        long_only: true,
+        enabled: true,
+      }))
+    },
+    onSuccess: onChanged,
+  })
+  const optimize = useMutation({
+    mutationFn: () => request<PortfolioOptimizationRun>('portfolio-optimization/preview/', mutationOptions('POST', {portfolio_id: portfolioId, trigger: 'PREVIEW', refresh_history: true}, true)),
+    onSuccess: async (run) => {onPreview(run); await onChanged()},
+  })
+  const apply = useMutation({
+    mutationFn: () => request<PortfolioOptimizationRun>('portfolio-optimization/run/', mutationOptions('POST', {optimization_run_id: preview?.id}, true)),
+    onSuccess: async (run) => {onPreview(run); await onChanged()},
+  })
+  const stockInstruments = instruments.filter((item) => item.asset_class === 'STK' && item.active && item.tradable)
+  const allocationColumns = [
+    {id: 'symbol', header: 'Instrument', cell: (item: import('../../api/types').OptimizedPortfolioTarget) => <strong className="mono">{item.symbol}</strong>},
+    {id: 'current', header: 'Current', align: 'right' as const, cell: (item: import('../../api/types').OptimizedPortfolioTarget) => formatPercent(item.current_weight)},
+    {id: 'target', header: 'Optimized', align: 'right' as const, cell: (item: import('../../api/types').OptimizedPortfolioTarget) => formatPercent(item.optimized_weight)},
+    {id: 'change', header: 'Change', align: 'right' as const, cell: (item: import('../../api/types').OptimizedPortfolioTarget) => formatPercent(item.weight_change)},
+    {id: 'value', header: 'Target value', align: 'right' as const, cell: (item: import('../../api/types').OptimizedPortfolioTarget) => formatMoney(item.target_value)},
+    {id: 'constraint', header: 'Constraint', cell: (item: import('../../api/types').OptimizedPortfolioTarget) => item.constraint_status || '—'},
+  ]
+  const tradeColumns = [
+    {id: 'symbol', header: 'Instrument', cell: (item: import('../../api/types').PlannedOptimizationTrade) => <strong className="mono">{item.symbol}</strong>},
+    {id: 'side', header: 'Side', cell: (item: import('../../api/types').PlannedOptimizationTrade) => <StatusBadge status={item.side} />},
+    {id: 'quantity', header: 'Quantity', align: 'right' as const, cell: (item: import('../../api/types').PlannedOptimizationTrade) => formatNumber(item.quantity)},
+    {id: 'price', header: 'Reference', align: 'right' as const, cell: (item: import('../../api/types').PlannedOptimizationTrade) => formatMoney(item.reference_price)},
+    {id: 'state', header: 'Planning state', cell: (item: import('../../api/types').PlannedOptimizationTrade) => <StatusBadge status={item.suppressed ? item.suppression_reason || 'SUPPRESSED' : 'PLANNED'} />},
+  ]
+  return <div className="page-stack">
+    <form key={`${universe?.updated_at || 'new'}:${policy?.version || 0}`} className="page-stack" onSubmit={(event) => {event.preventDefault(); save.mutate(event.currentTarget)}}>
+      <div className="form-grid four-columns">
+        <label>Universe<select aria-label="Portfolio universe" multiple value={instrumentIds.map(String)} onChange={(event) => setInstrumentIds(Array.from(event.currentTarget.selectedOptions).map((option) => Number(option.value)))}>{stockInstruments.map((item) => <option key={item.id} value={item.id}>{item.symbol} · {item.sector || item.exchange}</option>)}</select></label>
+        <label>Method<select name="method" defaultValue={policy?.method || 'MINIMUM_VARIANCE'}><option value="MINIMUM_VARIANCE">Minimum variance</option><option value="MAXIMUM_SHARPE">Maximum Sharpe</option></select></label>
+        <label>Lookback days<input name="lookback_days" type="number" min="30" defaultValue={policy?.lookback_days || 252} /></label>
+        <label>Minimum observations<input name="minimum_history_observations" type="number" min="20" defaultValue={universe?.minimum_history_observations || 60} /></label>
+        <label>Minimum weight<input name="minimum_weight" type="number" min="0" max="1" step="0.001" defaultValue={String(policy?.minimum_weight ?? 0)} /></label>
+        <label>Maximum weight<input name="maximum_weight" type="number" min="0" max="1" step="0.001" defaultValue={String(policy?.maximum_weight ?? 1)} /></label>
+        <label>Target cash weight<input name="target_cash_weight" type="number" min="0" max="0.99" step="0.001" defaultValue={String(policy?.target_cash_weight ?? 0.02)} /></label>
+        <label>Maximum turnover<input name="maximum_turnover" type="number" min="0" max="10" step="0.01" defaultValue={String(policy?.maximum_turnover ?? 1)} /></label>
+        <label>Risk-free rate<input name="risk_free_rate" type="number" step="0.001" defaultValue={String(policy?.risk_free_rate ?? 0)} /></label>
+        <label>Transaction-cost penalty<input name="transaction_cost_penalty" type="number" min="0" step="0.001" defaultValue={String(policy?.transaction_cost_penalty ?? 0)} /></label>
+        <label>Maximum instruments<input name="maximum_instruments" type="number" min="2" max="100" defaultValue={universe?.maximum_instruments || 50} /></label>
+        <label className="checkbox-field"><input name="include_strategy_instruments" type="checkbox" defaultChecked={universe?.include_strategy_instruments || false} />Include active strategy stocks</label>
+      </div>
+      <div className="system-actions"><button className="button-secondary" disabled={save.isPending}>{save.isPending ? 'Saving…' : 'Save universe & policy'}</button><button type="button" className="button-primary" disabled={!universe || !policy || optimize.isPending} onClick={() => optimize.mutate()}>{optimize.isPending ? 'Optimizing…' : 'Preview optimization'}</button>{preview && <button type="button" className="button-secondary" disabled={apply.isPending} onClick={() => apply.mutate()}>{apply.isPending ? 'Planning…' : `Apply through ${executionMode} rebalance`}</button>}</div>
+    </form>
+    {save.isError && <ErrorState title="Portfolio construction settings were not saved" error={save.error} compact />}
+    {optimize.isError && <ErrorState title="Optimization preview failed" error={optimize.error} compact />}
+    {apply.isError && <ErrorState title="Optimized rebalance was blocked" error={apply.error} compact />}
+    {preview && <>
+      <section className="metric-grid compact"><MetricCard label="Expected return" value={formatPercent(preview.expected_return)} /><MetricCard label="Expected volatility" value={formatPercent(preview.expected_volatility)} /><MetricCard label="Sharpe ratio" value={formatNumber(preview.sharpe_ratio)} /><MetricCard label="Estimated turnover" value={formatPercent(preview.turnover)} /><MetricCard label="Cash target" value={formatPercent(preview.cash_weight)} /><MetricCard label="Planner mode" value={<StatusBadge status={preview.rebalance?.mode || 'SHADOW'} />} /></section>
+      <div><h3>Current versus optimized allocation</h3><DataTable rows={preview.targets || []} columns={allocationColumns} getRowKey={(item) => item.id} emptyTitle="No optimized targets" /></div>
+      <div><h3>Planned trades</h3><DataTable rows={preview.planned_trades || []} columns={tradeColumns} getRowKey={(item) => item.instrument_id} emptyTitle="No trades required" emptyDescription="Targets are already within planning tolerances." /></div>
+      {preview.warnings.length > 0 && <div className="inline-warning"><StatusBadge status="WARNING" /><div><strong>Solver warnings</strong><p>{formatCompact(preview.warnings)}</p></div></div>}
+    </>}
+  </div>
 }

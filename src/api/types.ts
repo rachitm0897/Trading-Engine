@@ -17,9 +17,17 @@ export interface ApiEnvelope<T> {
 
 export interface SystemStatus {
   mode: string
+  execution_mode?: string
+  is_admin?: boolean
   global_kill_switch: boolean
   material_breaks: number
   time: string
+}
+
+export interface AdminSession {
+  is_authenticated: boolean
+  is_admin: boolean
+  username: string
 }
 
 export interface GatewayStatus {
@@ -527,6 +535,8 @@ export interface AllocationRun {
   approved_amount: DecimalValue
   unallocated_amount: DecimalValue
   liquidation_policy: string
+  allocation_mode: string
+  optimization_run_id: number | null
   status: string
   created_at: string
 }
@@ -575,6 +585,8 @@ export interface RebalanceRun {
   nav: DecimalValue
   total_drift: DecimalValue
   planned_turnover: DecimalValue
+  target_source: string
+  optimization_run_id: number | null
   created_at: string
   last_recalculated_at: string | null
   targets?: RebalanceTarget[]
@@ -593,4 +605,109 @@ export interface PositionSizingDecision {
   approved_quantity: DecimalValue
   binding_constraint: string
   rejected_reason: string
+}
+
+export interface FinnhubProviderStatus {
+  provider: 'FINNHUB'
+  configured: boolean
+  enabled: boolean
+  effective_source: 'ENVIRONMENT' | 'DATABASE' | 'NONE'
+  environment_configured: boolean
+  database_configured: boolean
+  database_override_requested: boolean
+  database_override_allowed: boolean
+  database_override_active: boolean
+  masked_api_key: string
+  last_success_at: string | null
+  last_tested_at: string | null
+  last_error: string
+  rate_limit_state: Record<string, string>
+  updated_at: string | null
+  can_manage: boolean
+  connected?: boolean
+}
+
+export interface PortfolioUniverse {
+  id: number
+  portfolio_id: number
+  name: string
+  include_strategy_instruments: boolean
+  minimum_history_observations: number
+  maximum_instruments: number
+  enabled: boolean
+  instruments: {instrument_id: number; symbol: string; enabled: boolean}[]
+  updated_at: string
+}
+
+export interface PortfolioOptimizationPolicy {
+  id: number
+  portfolio_id: number
+  name: string
+  method: 'MINIMUM_VARIANCE' | 'MAXIMUM_SHARPE'
+  lookback_days: number
+  return_estimation: string
+  covariance_estimation: string
+  risk_free_rate: DecimalValue
+  target_cash_weight: DecimalValue
+  minimum_weight: DecimalValue
+  maximum_weight: DecimalValue
+  maximum_turnover: DecimalValue
+  transaction_cost_penalty: DecimalValue
+  long_only: boolean
+  enabled: boolean
+  execution_mode: 'SHADOW' | 'PAPER'
+  version: number
+  updated_at: string
+}
+
+export interface OptimizedPortfolioTarget {
+  id: number
+  instrument_id: number
+  symbol: string
+  current_weight: DecimalValue
+  optimized_weight: DecimalValue
+  weight_change: DecimalValue
+  target_value: DecimalValue
+  expected_return_contribution: DecimalValue
+  risk_contribution: DecimalValue
+  constraint_status: string
+  rank: number
+}
+
+export interface PlannedOptimizationTrade {
+  instrument_id: number
+  symbol: string
+  side: 'BUY' | 'SELL' | 'NONE'
+  quantity: DecimalValue
+  reference_price: DecimalValue
+  estimated_cost: DecimalValue
+  suppressed: boolean
+  suppression_reason: string
+}
+
+export interface PortfolioOptimizationRun {
+  id: number
+  portfolio_id: number
+  policy_id: number
+  universe_id: number
+  trigger: string
+  status: string
+  input_start_date: string | null
+  input_end_date: string | null
+  nav: DecimalValue
+  objective_value: DecimalValue
+  expected_return: DecimalValue
+  expected_volatility: DecimalValue
+  sharpe_ratio: DecimalValue
+  turnover: DecimalValue
+  cash_weight: DecimalValue
+  solver_status: string
+  warnings: unknown[]
+  error_details: JsonRecord
+  flow_reference: string
+  created_at: string
+  completed_at: string | null
+  targets?: OptimizedPortfolioTarget[]
+  planned_trades?: PlannedOptimizationTrade[]
+  rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
 }
