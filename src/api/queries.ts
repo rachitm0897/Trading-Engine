@@ -3,7 +3,6 @@ import {request, withQuery} from './client'
 import type {
   AllocationPolicy,
   AllocationRun,
-  AdminSession,
   AuditEvent,
   BrokerAccount,
   DashboardSummary,
@@ -35,11 +34,6 @@ import type {
 const POLL_INTERVAL = 15_000
 
 export const queries = {
-  authSession: () => queryOptions({
-    queryKey: ['auth-session'],
-    queryFn: () => request<AdminSession>('auth/session/'),
-    staleTime: 30_000,
-  }),
   system: () => queryOptions({
     queryKey: ['system'],
     queryFn: () => request<SystemStatus>('system/'),

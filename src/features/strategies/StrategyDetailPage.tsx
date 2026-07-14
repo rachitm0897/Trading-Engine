@@ -1,14 +1,14 @@
 import {useMemo, useState} from 'react'
 import {useMutation, useQuery, useQueryClient, type UseQueryResult} from '@tanstack/react-query'
-import {ArrowLeft, CirclePause, Power, SlidersHorizontal} from 'lucide-react'
-import {Link, useParams, useSearchParams} from 'react-router-dom'
+import {ArrowLeft, CirclePause, Power, SlidersHorizontal, Trash2} from 'lucide-react'
+import {Link, useNavigate, useParams, useSearchParams} from 'react-router-dom'
 import {mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
 import type {StrategyChartData, StrategyInstance, StrategyTimelineItem} from '../../api/types'
 import {ActivityTimeline} from '../../components/ActivityTimeline'
 import {TimeSeriesChart, type ChartLine, type ChartMarker} from '../../components/charts/TimeSeriesChart'
-import {ConfirmActionDialog, DataTable, EmptyState, ErrorState, Freshness, MetricCard, PageHeader, Panel, Skeleton, StatusBadge, formatCompact, formatDateTime, formatNumber, formatPercent} from '../../components/ui'
-import {canEnable, canFlatten, canPause} from './strategyActions'
+import {ConfirmActionDialog, DataTable, DeleteStrategyDialog, EmptyState, ErrorState, Freshness, MetricCard, PageHeader, Panel, Skeleton, StatusBadge, formatCompact, formatDateTime, formatNumber, formatPercent} from '../../components/ui'
+import {canEnable, canFlatten, canPause, refreshAfterStrategyDeletion} from './strategyActions'
 
 const tabs = ['Overview', 'Chart', 'Activity', 'Configuration', 'Advanced'] as const
 type Tab = typeof tabs[number]
@@ -17,10 +17,12 @@ export function StrategyDetailPage() {
   const {strategyId = ''} = useParams()
   const id = Number(strategyId)
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
   const tab: Tab = tabs.find((item) => item.toLowerCase() === requestedTab?.toLowerCase()) || 'Overview'
   const [flattenOpen, setFlattenOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const strategy = useQuery(queries.strategy(id))
   const timeline = useQuery({...queries.strategyTimeline(id), enabled: id > 0 && (tab === 'Overview' || tab === 'Activity')})
   const chart = useQuery({...queries.strategyChart(id), enabled: id > 0 && tab === 'Chart'})
@@ -36,6 +38,14 @@ export function StrategyDetailPage() {
       ])
     },
   })
+  const deleteAction = useMutation({
+    mutationFn: (name: string) => request<{id: number}>(`strategy-instances/${id}/`, mutationOptions('DELETE', {strategy_name: name}, true)),
+    onSuccess: async () => {
+      setDeleteOpen(false)
+      navigate('/strategies', {replace: true})
+      await refreshAfterStrategyDeletion(queryClient, id)
+    },
+  })
 
   if (!Number.isFinite(id)) return <ErrorState title="Invalid strategy link" error={new Error('The strategy identifier is not valid.')} />
   if (strategy.isLoading) return <><PageHeader title="Strategy" description="Loading strategy state and immutable configuration…" /><Skeleton lines={7} height={500} /></>
@@ -44,9 +54,10 @@ export function StrategyDetailPage() {
 
   return <div className="page-stack">
     <PageHeader eyebrow={`${item.portfolio} / ${item.symbol}`} title={item.name} description={`${item.definition_name} · ${item.timeframe} · version ${item.version}`} actions={<><Freshness updatedAt={strategy.dataUpdatedAt} stale={strategy.isStale} fetching={strategy.isFetching} onRefresh={() => void strategy.refetch()} /><Link className="button-secondary" to="/strategies"><ArrowLeft />All strategies</Link></>} />
-    <div className="strategy-control-bar"><div><StatusBadge status={item.execution_mode} /><StatusBadge status={item.state} />{item.conid ? <StatusBadge status="CONTRACT QUALIFIED" /> : <StatusBadge status="CONTRACT PENDING" />}</div><div><button className="button-secondary" disabled={!canEnable(item) || action.isPending} onClick={() => action.mutate({name: 'enable'})}><Power />Enable</button><button className="button-secondary" disabled={!canPause(item) || action.isPending} onClick={() => action.mutate({name: 'pause'})}><CirclePause />Pause</button><button className="button-danger-subtle" disabled={!canFlatten(item) || action.isPending} onClick={() => setFlattenOpen(true)}><SlidersHorizontal />Flatten target</button></div></div>
+    <div className="strategy-control-bar"><div><StatusBadge status={item.execution_mode} /><StatusBadge status={item.state} />{item.conid ? <StatusBadge status="CONTRACT QUALIFIED" /> : <StatusBadge status="CONTRACT PENDING" />}</div><div><button className="button-secondary" disabled={!canEnable(item) || action.isPending || deleteAction.isPending} onClick={() => action.mutate({name: 'enable'})}><Power />Enable</button><button className="button-secondary" disabled={!canPause(item) || action.isPending || deleteAction.isPending} onClick={() => action.mutate({name: 'pause'})}><CirclePause />Pause</button><button className="button-danger-subtle" aria-label={`Delete ${item.name}`} disabled={action.isPending || deleteAction.isPending} onClick={() => setDeleteOpen(true)}><Trash2 />Delete</button><button className="button-danger-subtle" disabled={!canFlatten(item) || action.isPending || deleteAction.isPending} onClick={() => setFlattenOpen(true)}><SlidersHorizontal />Flatten target</button></div></div>
     {item.block_reason && <div className="inline-warning"><StatusBadge status="BLOCKED" /><div><strong>Strategy is not ready</strong><p>{item.block_reason}</p></div></div>}
     {action.isError && <ErrorState title="Strategy action failed" error={action.error} compact />}
+    {deleteAction.isError && <ErrorState title="Strategy deletion blocked" error={deleteAction.error} compact />}
     <div className="tabs" role="tablist" aria-label="Strategy details">{tabs.map((name) => <button key={name} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setSearchParams({tab: name.toLowerCase()})}>{name}</button>)}</div>
     {tab === 'Overview' && <OverviewTab strategy={item} timeline={timeline.data || []} timelineLoading={timeline.isLoading} />}
     {tab === 'Chart' && <ChartTab query={chart} />}
@@ -54,6 +65,7 @@ export function StrategyDetailPage() {
     {tab === 'Configuration' && <ConfigurationTab strategy={item} />}
     {tab === 'Advanced' && <AdvancedTab strategy={item} />}
     <ConfirmActionDialog open={flattenOpen} title={`Flatten ${item.name}?`} description="This records a zero target for this strategy’s attributed exposure. It does not place an order directly." confirmLabel="Create flat target" pending={action.isPending} onClose={() => setFlattenOpen(false)} onConfirm={(reason) => action.mutate({name: 'flatten', reason})} />
+    <DeleteStrategyDialog open={deleteOpen} strategyName={item.name} pending={deleteAction.isPending} onClose={() => setDeleteOpen(false)} onConfirm={() => deleteAction.mutate(item.name)} />
   </div>
 }
 

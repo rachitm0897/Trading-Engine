@@ -1,5 +1,6 @@
 export * from './CollapsibleSection'
 export * from './ConfirmActionDialog'
+export * from './DeleteStrategyDialog'
 export * from './DataTable'
 export * from './DetailDrawer'
 export * from './EmptyState'

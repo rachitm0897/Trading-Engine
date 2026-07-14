@@ -24,12 +24,6 @@ export interface SystemStatus {
   time: string
 }
 
-export interface AdminSession {
-  is_authenticated: boolean
-  is_admin: boolean
-  username: string
-}
-
 export interface GatewayStatus {
   connected: boolean
   reconciled: boolean
@@ -620,11 +614,12 @@ export interface FinnhubProviderStatus {
   masked_api_key: string
   last_success_at: string | null
   last_tested_at: string | null
+  last_test_success_at: string | null
   last_error: string
   rate_limit_state: Record<string, string>
   updated_at: string | null
-  can_manage: boolean
   connected?: boolean
+  source?: 'TRANSIENT' | 'ENVIRONMENT' | 'DATABASE'
 }
 
 export interface PortfolioUniverse {
@@ -634,6 +629,7 @@ export interface PortfolioUniverse {
   include_strategy_instruments: boolean
   minimum_history_observations: number
   maximum_instruments: number
+  selected_count: number
   enabled: boolean
   instruments: {instrument_id: number; symbol: string; enabled: boolean}[]
   updated_at: string
@@ -705,9 +701,12 @@ export interface PortfolioOptimizationRun {
   warnings: unknown[]
   error_details: JsonRecord
   flow_reference: string
+  application_status: 'NOT_APPLIED' | 'APPLYING' | 'APPLIED'
+  applied_at: string | null
   created_at: string
   completed_at: string | null
   targets?: OptimizedPortfolioTarget[]
   planned_trades?: PlannedOptimizationTrade[]
   rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
+  applied_rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
 }
