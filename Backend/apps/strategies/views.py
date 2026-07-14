@@ -5,6 +5,11 @@ from apps.core.views import response
 from apps.instruments.models import Instrument
 from apps.instruments.services import resolve_instrument, search_broker_instruments
 from apps.portfolios.models import TradingPortfolio
+from .deletion import (
+    StrategyDeletionError,
+    audit_strategy_deletion_rejection,
+    delete_strategy_instance,
+)
 from .framework import create_instance, enable_instance, evaluate_instance, flatten_instance, pause_instance, update_instance
 from .models import OrderPolicy, StrategyDefinition, StrategyInstance, StrategyRiskPolicy
 from .plugins import get_plugin
@@ -75,6 +80,13 @@ def _get(pk):
     return StrategyInstance.objects.select_related("definition","portfolio","instrument__broker_contract","risk_policy","order_policy","legacy_strategy").get(pk=pk)
 
 
+def _request_actor(request):
+    user = getattr(request, "user", None)
+    if user and user.is_authenticated:
+        return user.get_username()
+    return "frontend_operator"
+
+
 @csrf_exempt
 def instances(request, instance_id=None):
     try:
@@ -84,7 +96,19 @@ def instances(request, instance_id=None):
             for field,param in [("portfolio_id","portfolio"),("instrument__symbol","ticker"),("definition__key","strategy_type"),("state","state"),("execution_mode","execution_mode")]:
                 if request.GET.get(param):query=query.filter(**{field:request.GET[param]})
             return response([_instance(x) for x in query.order_by("name")])
-        payload=json.loads(request.body or b"{}")
+        try:
+            payload=json.loads(request.body or b"{}")
+        except json.JSONDecodeError:
+            error=StrategyDeletionError("INVALID_STRATEGY_DELETE_REQUEST","Request body must be valid JSON",status=400)
+            if request.method=="DELETE" and instance_id:
+                audit_strategy_deletion_rejection(instance_id,attempt_key=request.headers.get("Idempotency-Key"),
+                    actor=_request_actor(request),error=error)
+                raise error
+            raise ValueError("Request body must be valid JSON")
+        if request.method == "DELETE" and instance_id:
+            result=delete_strategy_instance(instance_id,payload.get("strategy_name"),
+                attempt_key=request.headers.get("Idempotency-Key"),actor=_request_actor(request))
+            return response(result)
         if request.method == "POST":
             portfolio=TradingPortfolio.objects.get(pk=payload["portfolio_id"])
             risk=StrategyRiskPolicy.objects.get(pk=payload["risk_policy_id"]) if payload.get("risk_policy_id") else None
@@ -108,6 +132,8 @@ def instances(request, instance_id=None):
                     exchange=payload.get("exchange","SMART"),currency=payload.get("currency","USD"),qualify=False)[0]
             return response(_instance(update_instance(item,changes),True))
         return response(status=405,error={"code":"METHOD_NOT_ALLOWED","message":"Unsupported method","details":{}})
+    except StrategyDeletionError as exc:
+        return response(status=exc.status,error={"code":exc.code,"message":str(exc),"details":exc.details})
     except (KeyError,ValueError,IntegrityError,StrategyInstance.DoesNotExist,StrategyDefinition.DoesNotExist,
             TradingPortfolio.DoesNotExist,StrategyRiskPolicy.DoesNotExist,OrderPolicy.DoesNotExist,Instrument.DoesNotExist) as exc:
         status=404 if isinstance(exc,StrategyInstance.DoesNotExist) else 400

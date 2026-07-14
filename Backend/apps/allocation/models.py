@@ -31,7 +31,8 @@ class AllocationRun(models.Model):
 
 class StrategyCapitalSnapshot(models.Model):
     allocation_run = models.ForeignKey(AllocationRun, on_delete=models.PROTECT, related_name="capital_snapshots")
-    strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.PROTECT)
+    strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.SET_NULL, null=True, blank=True)
+    strategy_snapshot = models.JSONField(default=dict)
     capital_before = models.DecimalField(max_digits=24, decimal_places=8)
     target_capital = models.DecimalField(max_digits=24, decimal_places=8)
     deficit = models.DecimalField(max_digits=24, decimal_places=8, default=0)
@@ -41,7 +42,8 @@ class StrategyCapitalSnapshot(models.Model):
 
 class AllocationDecision(models.Model):
     run = models.ForeignKey(AllocationRun, on_delete=models.PROTECT, related_name="decisions")
-    strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.PROTECT, null=True, blank=True)
+    strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.SET_NULL, null=True, blank=True)
+    strategy_snapshot = models.JSONField(default=dict)
     source = models.CharField(max_length=40)
     requested_amount = models.DecimalField(max_digits=24, decimal_places=8)
     approved_amount = models.DecimalField(max_digits=24, decimal_places=8)
@@ -108,9 +110,10 @@ class TargetPortfolioPosition(models.Model):
 
 class OrderIntentAttribution(models.Model):
     order_intent = models.ForeignKey("oms.OrderIntent", on_delete=models.PROTECT, related_name="attributions")
-    strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.PROTECT)
-    strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.PROTECT, null=True, blank=True)
-    strategy_version = models.ForeignKey("strategies.StrategyVersion", on_delete=models.PROTECT, null=True, blank=True)
+    strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.SET_NULL, null=True, blank=True)
+    strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.SET_NULL, null=True, blank=True)
+    strategy_version = models.ForeignKey("strategies.StrategyVersion", on_delete=models.SET_NULL, null=True, blank=True)
+    strategy_snapshot = models.JSONField(default=dict)
     target_delta = models.DecimalField(max_digits=24, decimal_places=8)
     allocated_quantity = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     allocated_value = models.DecimalField(max_digits=24, decimal_places=8, default=0)

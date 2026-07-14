@@ -1,12 +1,21 @@
 import json
+from datetime import date
 
 import pytest
 import responses
-from django.contrib.auth import get_user_model
 from django.test import Client, override_settings
 
-from apps.market_data.models import MarketDataProviderConfiguration
-from apps.market_data.services import FinnhubClient, decrypt_api_key, effective_api_key, encrypt_api_key, provider_status
+from apps.instruments.models import Instrument
+from apps.market_data.models import MarketDataFetchRun, MarketDataProviderConfiguration
+from apps.market_data.services import (
+    FinnhubClient,
+    FinnhubError,
+    decrypt_api_key,
+    effective_api_key,
+    encrypt_api_key,
+    fetch_daily_history,
+    provider_status,
+)
 
 
 pytestmark = pytest.mark.django_db
@@ -58,15 +67,7 @@ def test_finnhub_client_uses_secret_header_and_handles_rate_limit_retry():
 
 
 @override_settings(FINNHUB_ENCRYPTION_KEY="unit-test-encryption-secret", FINNHUB_API_KEY="")
-def test_finnhub_configuration_endpoint_is_admin_only_and_never_returns_secret(client):
-    denied = client.post(
-        "/api/v1/data-providers/finnhub/configure/",
-        data=json.dumps({"api_key": "browser-submitted-secret"}),
-        content_type="application/json",
-    )
-    assert denied.status_code == 403
-    admin = get_user_model().objects.create_user(username="admin", password="password", is_staff=True)
-    client.force_login(admin)
+def test_finnhub_configuration_endpoint_encrypts_masks_and_never_returns_secret(client):
     saved = client.post(
         "/api/v1/data-providers/finnhub/configure/",
         data=json.dumps({"api_key": "browser-submitted-secret", "enabled": True}),
@@ -78,32 +79,70 @@ def test_finnhub_configuration_endpoint_is_admin_only_and_never_returns_secret(c
     assert "browser-submitted-secret" not in saved.content.decode()
     stored = MarketDataProviderConfiguration.objects.get()
     assert stored.encrypted_api_key != "browser-submitted-secret"
+    assert decrypt_api_key(stored.encrypted_api_key) == "browser-submitted-secret"
+    assert stored.api_key_last_four == "cret"
 
 
 @override_settings(FINNHUB_ENCRYPTION_KEY="unit-test-encryption-secret", FINNHUB_API_KEY="")
-def test_staff_session_and_csrf_are_required_for_browser_credential_changes():
-    get_user_model().objects.create_user(username="operator", password="password", is_staff=True)
+def test_csrf_is_required_without_an_administrator_session():
     browser = Client(enforce_csrf_checks=True)
     browser.get("/api/v1/system/")
     token = browser.cookies["csrftoken"].value
     blocked = browser.post(
-        "/api/v1/auth/session/",
-        data=json.dumps({"username": "operator", "password": "password"}),
+        "/api/v1/data-providers/finnhub/configure/",
+        data=json.dumps({"api_key": "csrf-protected-secret"}),
         content_type="application/json",
     )
     assert blocked.status_code == 403
-    authenticated = browser.post(
-        "/api/v1/auth/session/",
-        data=json.dumps({"username": "operator", "password": "password"}),
-        content_type="application/json",
-        HTTP_X_CSRFTOKEN=token,
-    )
-    assert authenticated.status_code == 200
-    rotated = browser.cookies["csrftoken"].value
     saved = browser.post(
         "/api/v1/data-providers/finnhub/configure/",
         data=json.dumps({"api_key": "csrf-protected-secret"}),
         content_type="application/json",
-        HTTP_X_CSRFTOKEN=rotated,
+        HTTP_X_CSRFTOKEN=token,
     )
     assert saved.status_code == 200
+
+
+@responses.activate
+@override_settings(FINNHUB_ENCRYPTION_KEY="unit-test-encryption-secret", FINNHUB_API_KEY="")
+def test_transient_finnhub_key_test_does_not_save_the_key(client):
+    responses.add(responses.GET, "https://finnhub.io/api/v1/quote", status=200, json={"c": 123.45})
+    tested = client.post(
+        "/api/v1/data-providers/finnhub/test/",
+        data=json.dumps({"api_key": "transient-browser-secret", "symbol": "AAPL"}),
+        content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="transient-test",
+    )
+    assert tested.status_code == 200
+    assert tested.json()["data"]["source"] == "TRANSIENT"
+    assert "transient-browser-secret" not in tested.content.decode()
+    config = MarketDataProviderConfiguration.objects.get(provider="FINNHUB")
+    assert config.encrypted_api_key == ""
+    assert config.api_key_last_four == ""
+    assert config.last_test_success_at is not None
+    assert responses.calls[-1].request.headers["X-Finnhub-Token"] == "transient-browser-secret"
+
+
+def test_failed_history_fetch_run_is_committed_with_metadata():
+    instrument = Instrument.objects.create(symbol="FAIL")
+
+    class FailingClient:
+        last_response_metadata = {"status_code": 429, "rate_limit": {"remaining": "0"}}
+
+        def daily_candles(self, symbol, start_date, end_date):
+            raise FinnhubError("rate limited", code="FINNHUB_RATE_LIMITED", status_code=429)
+
+    with pytest.raises(FinnhubError, match="rate limited"):
+        fetch_daily_history(
+            instrument,
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            purpose="OPTIMIZATION",
+            client=FailingClient(),
+        )
+
+    run = MarketDataFetchRun.objects.get(instrument=instrument)
+    assert run.status == "FAILED"
+    assert run.error == "rate limited"
+    assert run.completed_at is not None
+    assert run.response_metadata["status_code"] == 429

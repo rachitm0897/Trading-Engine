@@ -2,6 +2,7 @@ import {render, screen, waitFor, within} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App, {appBasename, normalizeBasename} from '../src/App'
 import {queryClient} from '../src/app/queryClient'
+import {refreshAfterStrategyDeletion} from '../src/features/strategies/strategyActions'
 import {usePreferencesStore} from '../src/stores/preferences'
 
 const definition = {
@@ -30,7 +31,6 @@ const strategy = {
 
 const data: Record<string, unknown> = {
   system: {mode: 'PAPER', execution_mode: 'SHADOW', is_admin: true, global_kill_switch: false, material_breaks: 0, time: '2026-07-13T01:00:00Z'},
-  'auth/session': {is_authenticated: true, is_admin: true, username: 'admin'},
   gateway: {connected: true, reconciled: true, mode: 'paper', last_callback: '2026-07-13T01:00:00Z', worker: 'paper-worker'},
   accounts: [
     {id: 1, account_id: 'DU-PRIMARY', alias: 'Primary', base_currency: 'USD', net_liquidation: 100000, available_cash: 40000, buying_power: 200000, daily_pnl: 250, is_reconciled: true, kill_switch: false, updated_at: '2026-07-13T01:00:00Z'},
@@ -77,14 +77,14 @@ const data: Record<string, unknown> = {
     dead_letter_count: 0, stale_instrument_count: 0},
   'allocations/policies': [{id: 1, portfolio_id: 10, portfolio: 'Primary paper', strategy_id: 1, strategy: 'Portable breakout', target_share: 1, minimum_share: 0, maximum_share: 1, capacity: null, minimum_allocation: 0, priority: 100, enabled: true}],
   'allocations/runs': [], 'rebalancing/policies': [], 'rebalancing/runs': [],
-  'data-providers/finnhub': {provider: 'FINNHUB', configured: true, enabled: true, effective_source: 'ENVIRONMENT', environment_configured: true, database_configured: false, database_override_requested: false, database_override_allowed: false, database_override_active: false, masked_api_key: '••••CRET', last_success_at: '2026-07-13T01:00:00Z', last_tested_at: null, last_error: '', rate_limit_state: {remaining: '59', limit: '60'}, updated_at: null, can_manage: true},
-  'portfolio-universe': [{id: 1, portfolio_id: 10, name: 'Default universe', include_strategy_instruments: false, minimum_history_observations: 60, maximum_instruments: 50, enabled: true, instruments: [{instrument_id: 5, symbol: 'NVDA', enabled: true}, {instrument_id: 6, symbol: 'MSFT', enabled: true}], updated_at: '2026-07-13T01:00:00Z'}],
+  'data-providers/finnhub': {provider: 'FINNHUB', configured: true, enabled: true, effective_source: 'ENVIRONMENT', environment_configured: true, database_configured: false, database_override_requested: false, database_override_allowed: false, database_override_active: false, masked_api_key: '••••CRET', last_success_at: '2026-07-13T01:00:00Z', last_tested_at: null, last_test_success_at: null, last_error: '', rate_limit_state: {remaining: '59', limit: '60'}, updated_at: null},
+  'portfolio-universe': [{id: 1, portfolio_id: 10, name: 'Default universe', include_strategy_instruments: false, minimum_history_observations: 60, maximum_instruments: 50, selected_count: 2, enabled: true, instruments: [{instrument_id: 5, symbol: 'NVDA', enabled: true}, {instrument_id: 6, symbol: 'MSFT', enabled: true}], updated_at: '2026-07-13T01:00:00Z'}],
   'portfolio-optimization/policies': [{id: 1, portfolio_id: 10, name: 'Default Markowitz policy', method: 'MINIMUM_VARIANCE', lookback_days: 252, return_estimation: 'HISTORICAL_MEAN', covariance_estimation: 'SAMPLE', risk_free_rate: 0, target_cash_weight: .05, minimum_weight: 0, maximum_weight: .8, maximum_turnover: .5, transaction_cost_penalty: .01, long_only: true, enabled: true, execution_mode: 'SHADOW', version: 1, updated_at: '2026-07-13T01:00:00Z'}],
   'portfolio-optimization/runs': [],
 }
 
 const optimizationPreview = {
-  id: 91, portfolio_id: 10, policy_id: 1, universe_id: 1, trigger: 'PREVIEW', status: 'COMPLETED', input_start_date: '2025-07-01', input_end_date: '2026-07-01', nav: 100000,
+  id: 91, portfolio_id: 10, policy_id: 1, universe_id: 1, trigger: 'PREVIEW', status: 'COMPLETED', application_status: 'NOT_APPLIED', applied_at: null, applied_rebalance: null, input_start_date: '2025-07-01', input_end_date: '2026-07-01', nav: 100000,
   objective_value: .02, expected_return: .12, expected_volatility: .18, sharpe_ratio: .66, turnover: .24, cash_weight: .05, solver_status: 'Optimization terminated successfully', warnings: [], error_details: {}, flow_reference: '', created_at: '2026-07-13T01:00:00Z', completed_at: '2026-07-13T01:00:01Z',
   targets: [{id: 1, instrument_id: 5, symbol: 'NVDA', current_weight: .1, optimized_weight: .45, weight_change: .35, target_value: 45000, expected_return_contribution: .05, risk_contribution: .08, constraint_status: '', rank: 0}, {id: 2, instrument_id: 6, symbol: 'MSFT', current_weight: 0, optimized_weight: .5, weight_change: .5, target_value: 50000, expected_return_contribution: .07, risk_contribution: .1, constraint_status: '', rank: 1}],
   planned_trades: [{instrument_id: 5, symbol: 'NVDA', side: 'BUY', quantity: 10, reference_price: 125, estimated_cost: 1, suppressed: false, suppression_reason: ''}, {instrument_id: 6, symbol: 'MSFT', side: 'BUY', quantity: 15, reference_price: 400, estimated_cost: 2, suppressed: false, suppression_reason: ''}],
@@ -92,7 +92,7 @@ const optimizationPreview = {
 }
 
 let failDashboard = false
-let adminAuthenticated = true
+let failStrategyDelete = false
 
 function apiPath(input: string) {
   const url = new URL(input, 'http://localhost')
@@ -104,22 +104,26 @@ beforeEach(() => {
   queryClient.clear()
   usePreferencesStore.setState({selectedAccountId: null, selectedPortfolioId: null, navigationOpen: false})
   failDashboard = false
-  adminAuthenticated = true
+  failStrategyDelete = false
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const path = apiPath(input)
     const method = init?.method || 'GET'
     if (failDashboard && path === 'dashboard/summary') return {ok: false, status: 400, json: async () => ({ok: false, data: null, error: {code: 'DEGRADED', message: 'Summary unavailable', details: {}}, meta: {}})} as Response
     if (method !== 'GET') {
-      if (path === 'auth/session') {adminAuthenticated = true; return {ok: true, status: 200, json: async () => ({ok: true, data: {is_authenticated: true, is_admin: true, username: 'admin'}, error: null, meta: {}})} as Response}
+      if (method === 'DELETE' && path === 'strategy-instances/7') {
+        if (failStrategyDelete) return {ok: false, status: 409, json: async () => ({ok: false, data: null, error: {code: 'STRATEGY_DELETION_BLOCKED', message: 'Strategy has 1 open order. Cancel it before deleting.', details: {blockers: [{code: 'OPEN_ORDERS'}]}}, meta: {}})} as Response
+        return {ok: true, status: 200, json: async () => ({ok: true, data: {id: 7, name: strategy.name}, error: null, meta: {}})} as Response
+      }
       if (path === 'strategy-instances') return {ok: true, status: 201, json: async () => ({ok: true, data: strategy, error: null, meta: {}})} as Response
       if (path === 'instruments/resolve') return {ok: true, status: 200, json: async () => ({ok: true, data: {instrument_id: 5, symbol: 'NVDA', asset_class: 'STK', exchange: 'SMART', currency: 'USD', conid: 4815747, primary_exchange: 'NASDAQ', qualification_command: null}, error: null, meta: {}})} as Response
       if (path === 'orders') return {ok: true, status: 201, json: async () => ({ok: true, data: {internal_id: 'created-order', status: 'QUEUED', decision: 'APPROVED'}, error: null, meta: {}})} as Response
-      if (path === 'portfolio-optimization/preview' || path === 'portfolio-optimization/run') return {ok: true, status: 201, json: async () => ({ok: true, data: optimizationPreview, error: null, meta: {}})} as Response
-      if (path === 'data-providers/finnhub/configure' || path === 'data-providers/finnhub/test') return {ok: true, status: 200, json: async () => ({ok: true, data: {...data['data-providers/finnhub'] as object, connected: path.endsWith('/test')}, error: null, meta: {}})} as Response
+      if (path === 'portfolio-optimization/preview') return {ok: true, status: 201, json: async () => ({ok: true, data: optimizationPreview, error: null, meta: {}})} as Response
+      if (path === 'portfolio-optimization/run') return {ok: true, status: 201, json: async () => ({ok: true, data: {...optimizationPreview, application_status: 'APPLIED', applied_at: '2026-07-13T01:02:00Z', applied_rebalance: {id: 82, mode: 'SHADOW', status: 'PLANNED', phase: 'SHADOW_COMPLETE', planned_turnover: .24}}, error: null, meta: {}})} as Response
+      if (path === 'allocations/flows') return {ok: true, status: 201, json: async () => ({ok: true, data: {id: 92, status: 'COMPLETED', allocation_mode: 'PORTFOLIO_OPTIMIZATION'}, error: null, meta: {}})} as Response
+      if (path === 'data-providers/finnhub/configure') return {ok: true, status: 200, json: async () => ({ok: true, data: {...data['data-providers/finnhub'] as object, database_configured: true, masked_api_key: '••••CRET'}, error: null, meta: {}})} as Response
+      if (path === 'data-providers/finnhub/test') return {ok: true, status: 200, json: async () => ({ok: true, data: {...data['data-providers/finnhub'] as object, connected: true, source: 'TRANSIENT'}, error: null, meta: {}})} as Response
       return {ok: true, status: 200, json: async () => ({ok: true, data: {}, error: null, meta: {}})} as Response
     }
-    if (path === 'auth/session') return {ok: true, status: 200, json: async () => ({ok: true, data: adminAuthenticated ? data['auth/session'] : {is_authenticated: false, is_admin: false, username: ''}, error: null, meta: {}})} as Response
-    if (path === 'data-providers/finnhub') return {ok: true, status: 200, json: async () => ({ok: true, data: {...data['data-providers/finnhub'] as object, can_manage: adminAuthenticated}, error: null, meta: {}})} as Response
     const result = data[path]
     return {ok: true, status: 200, json: async () => ({ok: true, data: result ?? [], error: null, meta: {}})} as Response
   }))
@@ -177,9 +181,62 @@ test('strategy controls expose eligible enable pause and confirmed flatten actio
   expect(await screen.findByRole('heading', {name: 'Strategies'})).toBeInTheDocument()
   expect(await screen.findByRole('button', {name: 'Enable Portable breakout'})).toBeDisabled()
   expect(screen.getByRole('button', {name: 'Pause Portable breakout'})).toBeEnabled()
+  expect(screen.getByRole('button', {name: 'Delete Portable breakout'})).toBeEnabled()
   await user.click(screen.getByRole('button', {name: 'Flatten Portable breakout'}))
   expect(screen.getByRole('dialog', {name: 'Flatten Portable breakout target?'})).toBeInTheDocument()
   expect(screen.getByRole('button', {name: 'Create flat target'})).toBeDisabled()
+})
+
+test('strategy deletion requires the exact name and sends a DELETE request', async () => {
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/strategies')
+  render(<App />)
+  await user.click(await screen.findByRole('button', {name: 'Delete Portable breakout'}))
+  const dialog = screen.getByRole('dialog', {name: 'Delete Portable breakout?'})
+  const confirmation = within(dialog).getByLabelText('Strategy name confirmation')
+  const submit = within(dialog).getByRole('button', {name: 'Delete strategy'})
+  expect(submit).toBeDisabled()
+  await user.type(confirmation, 'Portable Breakout')
+  expect(submit).toBeDisabled()
+  await user.clear(confirmation)
+  await user.type(confirmation, 'Portable breakout')
+  expect(submit).toBeEnabled()
+  await user.click(submit)
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/strategy-instances/7/'), expect.objectContaining({method: 'DELETE'})))
+  const call = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).includes('/strategy-instances/7/') && init?.method === 'DELETE')
+  expect(JSON.parse(String(call?.[1]?.body))).toEqual({strategy_name: 'Portable breakout'})
+})
+
+test('strategy deletion displays backend blocker guidance', async () => {
+  failStrategyDelete = true
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/strategies')
+  render(<App />)
+  await user.click(await screen.findByRole('button', {name: 'Delete Portable breakout'}))
+  const dialog = screen.getByRole('dialog', {name: 'Delete Portable breakout?'})
+  await user.type(within(dialog).getByLabelText('Strategy name confirmation'), 'Portable breakout')
+  await user.click(within(dialog).getByRole('button', {name: 'Delete strategy'}))
+  expect(await screen.findByText('Strategy deletion blocked')).toBeInTheDocument()
+  expect(screen.getByText('Strategy has 1 open order. Cancel it before deleting.')).toBeInTheDocument()
+})
+
+test('strategy deletion invalidates affected portfolio queries and removes detail caches', async () => {
+  const affected = [
+    ['allocation-policies'], ['allocation-runs'], ['rebalance-runs'], ['streaming'],
+    ['portfolio-universe', 10], ['optimization-runs', 10], ['positions', 10],
+    ['portfolio-series', 10], ['audit', {}], ['dashboard', 10], ['strategy-instances', {}],
+  ]
+  affected.forEach((key) => queryClient.setQueryData(key, {}))
+  queryClient.setQueryData(['strategy-instance', 7], strategy)
+  queryClient.setQueryData(['strategy-timeline', 7], [])
+  queryClient.setQueryData(['strategy-chart', 7], {})
+
+  await refreshAfterStrategyDeletion(queryClient, 7)
+
+  affected.forEach((key) => expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true))
+  expect(queryClient.getQueryData(['strategy-instance', 7])).toBeUndefined()
+  expect(queryClient.getQueryData(['strategy-timeline', 7])).toBeUndefined()
+  expect(queryClient.getQueryData(['strategy-chart', 7])).toBeUndefined()
 })
 
 test('kill switch requires confirmation and an audit reason', async () => {
@@ -218,33 +275,76 @@ test('portfolio construction previews optimized metrics and planned SHADOW trade
   expect(screen.getByRole('button', {name: 'Apply through SHADOW rebalance'})).toBeInTheDocument()
 })
 
-test('admin can replace a masked Finnhub key without exposing it in browser storage', async () => {
+test('applied optimization disables Apply and shows the applied rebalance', async () => {
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/portfolio')
+  render(<App />)
+  await waitFor(() => expect(queryClient.getQueryData(['portfolio-universe', 10])).toEqual(data['portfolio-universe']))
+  const previewButton = await screen.findByRole('button', {name: 'Preview optimization'})
+  await waitFor(() => expect(previewButton).toBeEnabled())
+  await user.click(previewButton)
+  await user.click(await screen.findByRole('button', {name: 'Apply through SHADOW rebalance'}))
+  const appliedButton = await screen.findByRole('button', {name: 'Optimization already applied'})
+  expect(appliedButton).toBeDisabled()
+  expect(screen.getByText(/Applied rebalance 82/)).toBeInTheDocument()
+})
+
+test('universe selection shows the count and disables Save above the maximum', async () => {
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/portfolio')
+  render(<App />)
+  await screen.findByText('Selected 2 of 50 maximum')
+  const maximum = await screen.findByLabelText('Maximum instruments')
+  await user.clear(maximum)
+  await user.type(maximum, '1')
+  expect(screen.getByText('Selected 2 of 1 maximum')).toBeInTheDocument()
+  expect(screen.getByRole('button', {name: 'Save universe & policy'})).toBeDisabled()
+})
+
+test('flow result displays the resolved allocation mode', async () => {
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/portfolio')
+  render(<App />)
+  await user.click(await screen.findByText('Portfolio flow allocation'))
+  await user.type(screen.getByLabelText('Amount'), '100')
+  await user.click(screen.getByRole('button', {name: 'Calculate post-flow targets'}))
+  expect(await screen.findByText('PORTFOLIO_OPTIMIZATION')).toBeInTheDocument()
+})
+
+test('Finnhub dialog opens without administrator sign-in and Test key never saves', async () => {
   const user = userEvent.setup()
   window.history.replaceState({}, '', '/system')
   render(<App />)
-  const input = await screen.findByLabelText('Finnhub API key')
+  expect(screen.queryByLabelText('Administrator username')).not.toBeInTheDocument()
+  await user.click(await screen.findByRole('button', {name: 'Configure Finnhub'}))
+  const dialog = screen.getByRole('dialog', {name: 'Finnhub API key'})
+  const input = within(dialog).getByLabelText('Finnhub API key')
   expect(input).toHaveAttribute('placeholder', '••••CRET')
-  expect(input).toHaveValue('')
+  await user.type(input, 'transient-secret')
+  await user.click(within(dialog).getByRole('button', {name: 'Test key'}))
+  await waitFor(() => expect(input).toHaveValue(''))
+  const testCall = vi.mocked(fetch).mock.calls.find(([requestInput, init]) => String(requestInput).includes('/data-providers/finnhub/test/') && init?.method === 'POST')
+  expect(String(testCall?.[1]?.body)).toContain('transient-secret')
+  expect(vi.mocked(fetch).mock.calls.some(([requestInput]) => String(requestInput).includes('/data-providers/finnhub/configure/'))).toBe(false)
+  expect(localStorage.getItem('transient-secret')).toBeNull()
+  expect(JSON.stringify(queryClient.getQueryData(['finnhub']))).not.toContain('transient-secret')
+})
+
+test('Save key clears the full Finnhub key and only refreshes masked status', async () => {
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/system')
+  render(<App />)
+  await user.click(await screen.findByRole('button', {name: 'Configure Finnhub'}))
+  const dialog = screen.getByRole('dialog', {name: 'Finnhub API key'})
+  const input = within(dialog).getByLabelText('Finnhub API key')
   await user.type(input, 'replacement-secret')
-  await user.click(screen.getByRole('button', {name: 'Save provider'}))
+  await user.click(within(dialog).getByRole('button', {name: 'Save key'}))
   await waitFor(() => expect(input).toHaveValue(''))
   const call = vi.mocked(fetch).mock.calls.find(([requestInput, init]) => String(requestInput).includes('/data-providers/finnhub/configure/') && init?.method === 'POST')
   expect(String(call?.[1]?.body)).toContain('replacement-secret')
   expect(localStorage.getItem('replacement-secret')).toBeNull()
   expect(JSON.stringify(queryClient.getQueryData(['finnhub']))).not.toContain('replacement-secret')
-})
-
-test('Finnhub credential controls require an administrator session', async () => {
-  adminAuthenticated = false
-  const user = userEvent.setup()
-  window.history.replaceState({}, '', '/system')
-  render(<App />)
-  expect(await screen.findByLabelText('Administrator username')).toBeInTheDocument()
-  expect(screen.queryByLabelText('Finnhub API key')).not.toBeInTheDocument()
-  await user.type(screen.getByLabelText('Administrator username'), 'admin')
-  await user.type(screen.getByLabelText('Administrator password'), 'password')
-  await user.click(screen.getByRole('button', {name: 'Sign in to manage providers'}))
-  expect(await screen.findByLabelText('Finnhub API key')).toBeInTheDocument()
+  expect(screen.queryByDisplayValue('replacement-secret')).not.toBeInTheDocument()
 })
 
 test('strategy detail maps backend chart data with no placeholder series', async () => {

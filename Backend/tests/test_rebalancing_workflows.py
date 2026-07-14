@@ -49,3 +49,42 @@ def test_shadow_preview_never_creates_intents():
     account,portfolio,old,new,policy=setup_case()
     run=plan_rebalance(portfolio,"MANUAL","reb-shadow",prices={old.pk:100,new.pk:100},nav=1000,mode="SHADOW",strict_market_state=False)
     assert run.phase=="SHADOW_COMPLETE" and not OrderIntent.objects.filter(rebalance=run).exists()
+
+
+def test_turnover_uses_cash_constrained_executable_quantity_before_later_trades():
+    account=BrokerAccount.objects.create(account_id="DU-TURNOVER",net_liquidation=1000,available_cash=150)
+    portfolio=TradingPortfolio.objects.create(name="Turnover",account=account)
+    large=Instrument.objects.create(symbol="LARGE",lot_size=1)
+    later=Instrument.objects.create(symbol="LATER",lot_size=1)
+    strategy=TradingStrategy.objects.create(name="Turnover strategy",strategy_type="fixed_weight")
+    StrategyAllocation.objects.create(portfolio=portfolio,strategy=strategy,weight=1)
+    strategy_run=StrategyRun.objects.create(strategy=strategy,input_hash="turnover",status="COMPLETED",completed_at=timezone.now())
+    StrategyTarget.objects.create(run=strategy_run,instrument=large,target_weight="1.00")
+    StrategyTarget.objects.create(run=strategy_run,instrument=later,target_weight="0.04")
+    policy=RebalancePolicy.objects.create(
+        portfolio=portfolio,
+        maximum_turnover="1.02",
+        cash_buffer_percent="0",
+        fee_buffer="0",
+        minimum_trade_notional="1",
+        mode="SHADOW",
+    )
+
+    run=plan_rebalance(
+        portfolio,
+        "MANUAL",
+        "rebalance-final-quantity-turnover",
+        prices={large.pk:100,later.pk:10},
+        nav=1000,
+        mode="SHADOW",
+        policy=policy,
+        strict_market_state=False,
+    )
+
+    large_target=run.targets.get(instrument=large)
+    later_target=run.targets.get(instrument=later)
+    assert large_target.target_quantity == Decimal("10")
+    assert large_target.trade_quantity == Decimal("1")
+    assert later_target.trade_quantity == Decimal("4")
+    assert not later_target.suppressed
+    assert run.planned_turnover == Decimal("0.1400000000")

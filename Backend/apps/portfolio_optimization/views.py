@@ -1,10 +1,12 @@
 import json
+import uuid
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.db import transaction
-from django.views.decorators.csrf import csrf_exempt
 
+from apps.audit.models import AuditEvent
+from apps.core.throttling import throttle_response
 from apps.core.views import response
 from apps.instruments.models import Instrument
 from apps.portfolios.models import TradingPortfolio
@@ -15,7 +17,14 @@ from .models import (
     PortfolioUniverse,
     PortfolioUniverseInstrument,
 )
-from .services import OptimizationError, plan_optimized_rebalance, run_optimization
+from .services import (
+    OptimizationAlreadyApplied,
+    OptimizationError,
+    UniverseSizeError,
+    apply_optimization_run,
+    plan_optimized_rebalance,
+    run_optimization,
+)
 
 
 POLICY_FIELDS = [
@@ -23,6 +32,24 @@ POLICY_FIELDS = [
     "target_cash_weight", "minimum_weight", "maximum_weight", "maximum_turnover",
     "transaction_cost_penalty", "long_only", "enabled",
 ]
+
+
+def _actor(request):
+    user = getattr(request, "user", None)
+    return user.get_username() if user and user.is_authenticated else "operator/system"
+
+
+def _audit(request, event_type, aggregate_id, data, idempotency_key=None):
+    AuditEvent.objects.get_or_create(
+        idempotency_key=idempotency_key or f"audit:{event_type}:{uuid.uuid4()}",
+        defaults={
+            "event_type": event_type,
+            "actor": _actor(request),
+            "aggregate_type": "portfolio",
+            "aggregate_id": str(aggregate_id),
+            "data": data,
+        },
+    )
 
 
 def _universe_row(universe):
@@ -34,6 +61,7 @@ def _universe_row(universe):
         "include_strategy_instruments": universe.include_strategy_instruments,
         "minimum_history_observations": universe.minimum_history_observations,
         "maximum_instruments": universe.maximum_instruments,
+        "selected_count": memberships.filter(enabled=True).count(),
         "enabled": universe.enabled,
         "instruments": [
             {"instrument_id": item.instrument_id, "symbol": item.instrument.symbol, "enabled": item.enabled}
@@ -85,15 +113,30 @@ def _run_row(run, detail=False):
         "warnings": run.warnings,
         "error_details": run.error_details,
         "flow_reference": run.flow_reference,
+        "application_status": run.application_status,
+        "applied_at": run.applied_at,
         "created_at": run.created_at,
         "completed_at": run.completed_at,
     }
+    row["applied_rebalance"] = None
+    if run.applied_rebalance_id:
+        applied = run.applied_rebalance
+        row["applied_rebalance"] = {
+            "id": applied.pk,
+            "mode": applied.mode,
+            "status": applied.status,
+            "phase": applied.phase,
+            "planned_turnover": applied.planned_turnover,
+        }
     if detail:
         row["policy_snapshot"] = run.policy_snapshot
         row["constraints"] = run.constraints_snapshot
         row["current_weights"] = run.current_weights
         row["targets"] = [_target_row(item) for item in run.targets.select_related("instrument").order_by("rank")]
-        rebalance = run.rebalances.order_by("-created_at").first()
+        preview_query = run.rebalances.all()
+        if run.applied_rebalance_id:
+            preview_query = preview_query.exclude(pk=run.applied_rebalance_id)
+        rebalance = preview_query.order_by("-created_at").first()
         row["rebalance"] = None
         row["planned_trades"] = []
         if rebalance:
@@ -120,7 +163,6 @@ def _run_row(run, detail=False):
     return row
 
 
-@csrf_exempt
 def universes(request):
     if request.method == "GET":
         query = PortfolioUniverse.objects.all().select_related("portfolio")
@@ -133,8 +175,11 @@ def universes(request):
         payload = json.loads(request.body or b"{}")
         portfolio = TradingPortfolio.objects.get(pk=payload["portfolio_id"])
         instrument_ids = list(dict.fromkeys(int(item) for item in payload.get("instrument_ids", [])))
+        maximum_instruments = int(payload.get("maximum_instruments", 50))
         if len(instrument_ids) < 2:
             raise ValueError("Select at least two instruments")
+        if len(instrument_ids) > maximum_instruments:
+            raise UniverseSizeError(len(instrument_ids), maximum_instruments)
         instruments = list(Instrument.objects.filter(pk__in=instrument_ids, active=True, tradable=True, asset_class="STK"))
         if len(instruments) != len(instrument_ids):
             raise ValueError("Universe instruments must be active, tradable stocks")
@@ -145,7 +190,7 @@ def universes(request):
                     "name": str(payload.get("name") or "Default universe")[:128],
                     "include_strategy_instruments": bool(payload.get("include_strategy_instruments", False)),
                     "minimum_history_observations": int(payload.get("minimum_history_observations", 60)),
-                    "maximum_instruments": int(payload.get("maximum_instruments", 50)),
+                    "maximum_instruments": maximum_instruments,
                     "enabled": bool(payload.get("enabled", True)),
                 },
             )
@@ -156,12 +201,33 @@ def universes(request):
                 PortfolioUniverseInstrument.objects.update_or_create(
                     universe=universe, instrument=instrument, defaults={"enabled": True}
                 )
+        _audit(
+            request,
+            "portfolio.universe.changed",
+            portfolio.pk,
+            {
+                "universe_id": universe.pk,
+                "selected_count": len(instrument_ids),
+                "maximum_instruments": universe.maximum_instruments,
+            },
+        )
         return response(_universe_row(universe), status=201)
+    except UniverseSizeError as exc:
+        return response(
+            status=400,
+            error={
+                "code": exc.code,
+                "message": str(exc),
+                "details": {
+                    "selected_count": exc.selected_count,
+                    "maximum_instruments": exc.maximum_instruments,
+                },
+            },
+        )
     except (KeyError, ValueError, TypeError, json.JSONDecodeError, TradingPortfolio.DoesNotExist) as exc:
         return response(status=400, error={"code": "INVALID_PORTFOLIO_UNIVERSE", "message": str(exc), "details": {}})
 
 
-@csrf_exempt
 def policies(request):
     if request.method == "GET":
         query = PortfolioOptimizationPolicy.objects.all().select_related("portfolio")
@@ -205,18 +271,31 @@ def policies(request):
                 policy.save()
             else:
                 policy = PortfolioOptimizationPolicy.objects.create(portfolio=portfolio, **values)
+        _audit(
+            request,
+            "portfolio.optimization_policy.changed",
+            portfolio.pk,
+            {"policy_id": policy.pk, "version": policy.version, "execution_mode": policy.execution_mode},
+        )
         return response(_policy_row(policy), status=201)
     except (KeyError, ValueError, InvalidOperation, TypeError, json.JSONDecodeError, TradingPortfolio.DoesNotExist) as exc:
         return response(status=400, error={"code": "INVALID_OPTIMIZATION_POLICY", "message": str(exc), "details": {}})
 
 
-@csrf_exempt
 def execute(request, preview=False):
     if request.method != "POST":
         return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "POST required", "details": {}})
     key = request.headers.get("Idempotency-Key")
     if not key:
         return response(status=400, error={"code": "IDEMPOTENCY_KEY_REQUIRED", "message": "Idempotency-Key header is required", "details": {}})
+    throttled = throttle_response(
+        request,
+        "portfolio_optimization",
+        limit=settings.OPTIMIZATION_THROTTLE_LIMIT,
+        window_seconds=settings.EXPENSIVE_OPERATION_THROTTLE_WINDOW_SECONDS,
+    )
+    if throttled:
+        return throttled
     try:
         payload = json.loads(request.body or b"{}")
         if preview:
@@ -228,14 +307,70 @@ def execute(request, preview=False):
                 nav=payload.get("nav"),
                 refresh_history=bool(payload.get("refresh_history", True)),
             )
+            for field, actual in {"policy_id": run.policy_id, "universe_id": run.universe_id}.items():
+                if field in payload and int(payload[field]) != actual:
+                    raise OptimizationError(
+                        "Selected portfolio, universe, policy, and optimization run do not belong together"
+                    )
             if not run.rebalances.exists():
                 plan_optimized_rebalance(run, f"{key}:rebalance", mode="SHADOW", strict_market_state=False)
+            _audit(
+                request,
+                "portfolio.optimization.previewed",
+                run.portfolio_id,
+                {"optimization_run_id": run.pk, "universe_id": run.universe_id, "policy_id": run.policy_id},
+                f"audit:optimization-preview:{key}",
+            )
         else:
-            run = PortfolioOptimizationRun.objects.select_related("portfolio__account").get(pk=payload["optimization_run_id"])
+            run = PortfolioOptimizationRun.objects.select_related(
+                "portfolio__account", "policy", "universe", "applied_rebalance"
+            ).get(pk=payload["optimization_run_id"])
+            for field, actual in {
+                "portfolio_id": run.portfolio_id,
+                "policy_id": run.policy_id,
+                "universe_id": run.universe_id,
+            }.items():
+                if field in payload and int(payload[field]) != actual:
+                    raise OptimizationError(
+                        "Selected portfolio, universe, policy, and optimization run do not belong together"
+                    )
             mode = "SHADOW" if settings.NEW_EXECUTION_MODE == "SHADOW" else "PAPER"
-            plan_optimized_rebalance(run, f"{key}:rebalance", mode=mode, strict_market_state=mode == "PAPER")
+            run, applied_rebalance, _ = apply_optimization_run(
+                run,
+                key,
+                mode=mode,
+                strict_market_state=mode == "PAPER",
+            )
+            _audit(
+                request,
+                "portfolio.optimization.applied",
+                run.portfolio_id,
+                {"optimization_run_id": run.pk, "rebalance_id": applied_rebalance.pk, "mode": mode},
+                f"audit:optimization-apply:{key}",
+            )
         run.refresh_from_db()
         return response(_run_row(run, True), status=201)
+    except OptimizationAlreadyApplied as exc:
+        return response(
+            status=409,
+            error={
+                "code": exc.code,
+                "message": str(exc),
+                "details": {"applied_rebalance_id": exc.optimization_run.applied_rebalance_id},
+            },
+        )
+    except UniverseSizeError as exc:
+        return response(
+            status=400,
+            error={
+                "code": exc.code,
+                "message": str(exc),
+                "details": {
+                    "selected_count": exc.selected_count,
+                    "maximum_instruments": exc.maximum_instruments,
+                },
+            },
+        )
     except (KeyError, ValueError, InvalidOperation, OptimizationError, json.JSONDecodeError,
             TradingPortfolio.DoesNotExist, PortfolioOptimizationRun.DoesNotExist) as exc:
         return response(status=400, error={"code": "OPTIMIZATION_FAILED", "message": str(exc), "details": {}})

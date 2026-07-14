@@ -96,6 +96,7 @@ def provider_status():
         "masked_api_key": f"••••{last_four}" if last_four else "",
         "last_success_at": config.last_success_at if config else None,
         "last_tested_at": config.last_tested_at if config else None,
+        "last_test_success_at": config.last_test_success_at if config else None,
         "last_error": config.last_error if config else "",
         "rate_limit_state": config.rate_limit_state if config else {},
         "updated_at": config.updated_at if config else None,
@@ -110,23 +111,32 @@ class FinnhubClient:
             self.api_key, self.source, self.configuration = effective_api_key()
         self.base_url = (base_url or settings.FINNHUB_BASE_URL).rstrip("/")
         self.session = session or requests.Session()
+        self.last_response_metadata = {}
 
     def _record_state(self, response=None, error="", tested=False):
         config, _ = MarketDataProviderConfiguration.objects.get_or_create(provider="FINNHUB")
         fields = ["last_error", "rate_limit_state", "updated_at"]
         config.last_error = str(error)[:2000]
+        metadata = {"error": str(error)[:2000]} if error else {}
         if tested:
             config.last_tested_at = timezone.now()
             fields.append("last_tested_at")
+            if not error and (response is None or response.ok):
+                config.last_test_success_at = config.last_tested_at
+                fields.append("last_test_success_at")
         if response is not None:
-            config.rate_limit_state = {
+            rate_limit_state = {
                 "limit": response.headers.get("X-Ratelimit-Limit", ""),
                 "remaining": response.headers.get("X-Ratelimit-Remaining", ""),
                 "reset": response.headers.get("X-Ratelimit-Reset", ""),
             }
+            config.rate_limit_state = rate_limit_state
+            metadata.update({"status_code": response.status_code, "rate_limit": rate_limit_state})
             if response.ok:
                 config.last_success_at = timezone.now()
                 fields.append("last_success_at")
+        if metadata:
+            self.last_response_metadata = metadata
         config.save(update_fields=list(dict.fromkeys(fields)))
 
     def get(self, path, params=None, *, tested=False):
@@ -166,9 +176,16 @@ class FinnhubClient:
         raise last_error
 
     def test_connection(self, symbol="AAPL"):
-        payload = self.get("quote", {"symbol": symbol}, tested=True)
+        try:
+            payload = self.get("quote", {"symbol": symbol})
+        except FinnhubError as exc:
+            self._record_state(error=exc, tested=True)
+            raise
         if not isinstance(payload, dict) or not payload.get("c"):
-            raise FinnhubError("Finnhub quote test returned no current price", code="FINNHUB_TEST_FAILED", status_code=400)
+            error = FinnhubError("Finnhub quote test returned no current price", code="FINNHUB_TEST_FAILED", status_code=400)
+            self._record_state(error=error, tested=True)
+            raise error
+        self._record_state(tested=True)
         return {"connected": True, "symbol": symbol, "source": self.source}
 
     def daily_candles(self, symbol, start_date, end_date):
@@ -197,32 +214,38 @@ class FinnhubClient:
         ]
 
 
-@transaction.atomic
 def fetch_daily_history(instrument, start_date, end_date, *, purpose="HISTORY", client=None):
     run = MarketDataFetchRun.objects.create(
         instrument=instrument, purpose=purpose, requested_start=start_date, requested_end=end_date
     )
+    active_client = None
+    rows = []
     try:
-        rows = (client or FinnhubClient()).daily_candles(instrument.symbol, start_date, end_date)
+        active_client = client or FinnhubClient()
+        rows = active_client.daily_candles(instrument.symbol, start_date, end_date)
         written = 0
         now = timezone.now()
-        for row in rows:
-            _, created = InstrumentPriceHistory.objects.update_or_create(
-                instrument=instrument,
-                trading_date=row["trading_date"],
-                provider="FINNHUB",
-                defaults={**row, "quality_status": "COMPLETE", "fetched_at": now},
-            )
-            written += int(created)
+        with transaction.atomic():
+            for row in rows:
+                _, created = InstrumentPriceHistory.objects.update_or_create(
+                    instrument=instrument,
+                    trading_date=row["trading_date"],
+                    provider="FINNHUB",
+                    defaults={**row, "quality_status": "COMPLETE", "fetched_at": now},
+                )
+                written += int(created)
         run.status = "COMPLETED"
         run.records_received = len(rows)
         run.records_written = written
+        run.response_metadata = getattr(active_client, "last_response_metadata", {})
         run.completed_at = timezone.now()
-        run.save(update_fields=["status", "records_received", "records_written", "completed_at"])
+        run.save(update_fields=["status", "records_received", "records_written", "response_metadata", "completed_at"])
         return run
     except Exception as exc:
         run.status = "FAILED"
+        run.records_received = len(rows)
+        run.response_metadata = getattr(active_client, "last_response_metadata", {})
         run.error = str(exc)[:2000]
         run.completed_at = timezone.now()
-        run.save(update_fields=["status", "error", "completed_at"])
+        run.save(update_fields=["status", "records_received", "response_metadata", "error", "completed_at"])
         raise

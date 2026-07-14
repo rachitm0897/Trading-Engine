@@ -28,6 +28,28 @@ class OptimizationError(ValueError):
     pass
 
 
+class OptimizationAlreadyApplied(OptimizationError):
+    code = "OPTIMIZATION_ALREADY_APPLIED"
+
+    def __init__(self, optimization_run):
+        self.optimization_run = optimization_run
+        super().__init__(
+            f"Optimization run {optimization_run.pk} was already applied by rebalance "
+            f"{optimization_run.applied_rebalance_id}"
+        )
+
+
+class UniverseSizeError(OptimizationError):
+    code = "UNIVERSE_SIZE_EXCEEDED"
+
+    def __init__(self, selected_count, maximum_instruments):
+        self.selected_count = selected_count
+        self.maximum_instruments = maximum_instruments
+        super().__init__(
+            f"Selected instrument count {selected_count} exceeds maximum_instruments {maximum_instruments}"
+        )
+
+
 def _json_matrix(matrix):
     return [[str(float(value)) for value in row] for row in matrix]
 
@@ -163,7 +185,9 @@ def universe_instruments(universe):
             instance = getattr(allocation.strategy, "strategy_instance", None)
             if instance and instance.instrument.active and instance.instrument.tradable and instance.instrument.asset_class == "STK":
                 instrument_map[instance.instrument_id] = instance.instrument
-    return [instrument_map[key] for key in sorted(instrument_map)[:universe.maximum_instruments]]
+    if len(instrument_map) > universe.maximum_instruments:
+        raise UniverseSizeError(len(instrument_map), universe.maximum_instruments)
+    return [instrument_map[key] for key in sorted(instrument_map)]
 
 
 def _load_prices(instruments, policy, minimum_observations, refresh_history):
@@ -245,6 +269,8 @@ def run_optimization(portfolio, idempotency_key, *, trigger="MANUAL", nav=None, 
                      refresh_history=True, flow_reference=""):
     existing = PortfolioOptimizationRun.objects.filter(idempotency_key=idempotency_key).first()
     if existing:
+        if existing.portfolio_id != portfolio.pk:
+            raise OptimizationError("Idempotency-Key was already used for a different portfolio optimization")
         return existing
     policy = PortfolioOptimizationPolicy.objects.filter(portfolio=portfolio, enabled=True).first()
     universe = PortfolioUniverse.objects.filter(portfolio=portfolio, enabled=True).first()
@@ -397,3 +423,38 @@ def plan_optimized_rebalance(optimization_run, idempotency_key, *, mode="SHADOW"
         strict_market_state=strict_market_state,
         optimization_run=optimization_run,
     )
+
+
+@transaction.atomic
+def apply_optimization_run(optimization_run, idempotency_key, *, mode="SHADOW", strict_market_state=False):
+    run_id = optimization_run.pk if isinstance(optimization_run, PortfolioOptimizationRun) else optimization_run
+    run = (
+        PortfolioOptimizationRun.objects.select_for_update()
+        .select_related("portfolio__account", "policy", "universe", "applied_rebalance")
+        .get(pk=run_id)
+    )
+    if run.status != "COMPLETED":
+        raise OptimizationError("Only a completed optimization run can be applied")
+    if run.policy.portfolio_id != run.portfolio_id or run.universe.portfolio_id != run.portfolio_id:
+        raise OptimizationError("Optimization run, policy, universe, and portfolio do not belong together")
+    if run.applied_rebalance_id:
+        if run.application_idempotency_key == idempotency_key:
+            return run, run.applied_rebalance, False
+        raise OptimizationAlreadyApplied(run)
+
+    run.application_status = "APPLYING"
+    run.application_idempotency_key = idempotency_key
+    run.save(update_fields=["application_status", "application_idempotency_key"])
+    rebalance = plan_optimized_rebalance(
+        run,
+        f"{idempotency_key}:rebalance",
+        mode=mode,
+        strict_market_state=strict_market_state,
+    )
+    if rebalance.optimization_run_id != run.pk:
+        raise OptimizationError("Idempotency-Key was already used for a different optimization application")
+    run.applied_rebalance = rebalance
+    run.applied_at = timezone.now()
+    run.application_status = "APPLIED"
+    run.save(update_fields=["applied_rebalance", "applied_at", "application_status"])
+    return run, rebalance, True

@@ -6,9 +6,10 @@ ORDER_STATES = [x for x in "CREATED RISK_APPROVED QUEUED BROKER_BLOCKED SUBMITTE
 class OrderIntent(models.Model):
     rebalance = models.ForeignKey("allocation.RebalanceRun", on_delete=models.PROTECT, null=True, blank=True)
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT)
-    strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.PROTECT, null=True, blank=True)
-    strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.PROTECT, null=True, blank=True)
-    strategy_version = models.ForeignKey("strategies.StrategyVersion", on_delete=models.PROTECT, null=True, blank=True)
+    strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.SET_NULL, null=True, blank=True)
+    strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.SET_NULL, null=True, blank=True)
+    strategy_version = models.ForeignKey("strategies.StrategyVersion", on_delete=models.SET_NULL, null=True, blank=True)
+    strategy_snapshot = models.JSONField(default=dict)
     strategy_version_snapshot = models.JSONField(default=list)
     instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT)
     side = models.CharField(max_length=4)

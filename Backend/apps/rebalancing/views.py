@@ -1,7 +1,6 @@
 import json, uuid
 from decimal import Decimal, InvalidOperation
 from django.conf import settings
-from django.views.decorators.csrf import csrf_exempt
 from apps.core.views import response, _serialize
 from apps.portfolios.models import TradingPortfolio
 from apps.allocation.models import RebalancePolicy, RebalanceRun
@@ -26,7 +25,6 @@ def _row(run, detail=False):
     return row
 
 
-@csrf_exempt
 def execute(request, preview=False):
     if request.method != "POST":return response(status=405,error={"code":"METHOD_NOT_ALLOWED","message":"POST required","details":{}})
     key=request.headers.get("Idempotency-Key")

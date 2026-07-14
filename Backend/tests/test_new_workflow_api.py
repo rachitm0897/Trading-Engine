@@ -1,6 +1,7 @@
 import json
 import pytest
 from django.test import override_settings
+from django.test import Client
 from apps.accounts.models import BrokerAccount
 from apps.instruments.models import Instrument
 from apps.portfolios.models import TradingPortfolio
@@ -28,6 +29,22 @@ def test_flow_api_requires_key_and_is_idempotent(client,portfolio):
     first=client.post("/api/v1/allocations/flows/",json.dumps(payload),content_type="application/json",HTTP_IDEMPOTENCY_KEY="flow-api")
     second=client.post("/api/v1/allocations/flows/",json.dumps(payload),content_type="application/json",HTTP_IDEMPOTENCY_KEY="flow-api")
     assert first.status_code==201 and second.json()["data"]["id"]==first.json()["data"]["id"]
+
+
+def test_flow_and_rebalance_browser_mutations_require_csrf(portfolio):
+    browser=Client(enforce_csrf_checks=True)
+    browser.get("/api/v1/system/")
+    token=browser.cookies["csrftoken"].value
+    flow_payload=json.dumps({"portfolio_id":portfolio.pk,"flow_type":"DEPOSIT","amount":"100"})
+    assert browser.post("/api/v1/allocations/flows/",flow_payload,content_type="application/json",HTTP_IDEMPOTENCY_KEY="csrf-flow").status_code==403
+    accepted=browser.post("/api/v1/allocations/flows/",flow_payload,content_type="application/json",HTTP_IDEMPOTENCY_KEY="csrf-flow",HTTP_X_CSRFTOKEN=token)
+    assert accepted.status_code==201
+
+    instrument=Instrument.objects.create(symbol="CSRF")
+    rebalance_payload=json.dumps({"portfolio_id":portfolio.pk,"prices":{str(instrument.pk):"10"}})
+    assert browser.post("/api/v1/rebalancing/preview/",rebalance_payload,content_type="application/json",HTTP_IDEMPOTENCY_KEY="csrf-rebalance").status_code==403
+    accepted_rebalance=browser.post("/api/v1/rebalancing/preview/",rebalance_payload,content_type="application/json",HTTP_IDEMPOTENCY_KEY="csrf-rebalance",HTTP_X_CSRFTOKEN=token)
+    assert accepted_rebalance.status_code==201
 
 
 def test_rebalance_preview_and_sizing_preview_never_create_orders(client,portfolio):

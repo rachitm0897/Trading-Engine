@@ -8,6 +8,7 @@ from apps.portfolios.models import PortfolioPosition
 from apps.strategies.models import StrategyAllocation
 
 D = Decimal
+VARIABLE_FEE_RATE = D("0.0005")
 
 
 def aggregate_targets(portfolio):
@@ -135,7 +136,7 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
         elif abs(delta) < D(policy.minimum_trade_quantity): reason = "BELOW_MINIMUM_QUANTITY"
         elif notional < D(policy.minimum_trade_notional): reason = "BELOW_MINIMUM_NOTIONAL"
         elif strict_market_state and not hasattr(instrument, "broker_contract"): reason = "UNQUALIFIED_CONTRACT"
-        estimated_cost = D(policy.fee_buffer) + notional*D("0.0005")
+        estimated_cost = D(policy.fee_buffer) + notional*VARIABLE_FEE_RATE
         benefit = abs(drift)*nav
         if not reason and estimated_cost >= benefit: reason = "COST_EXCEEDS_BENEFIT"
         candidates.append({"instrument":instrument, "weight":weight, "current":current, "current_weight":current_weight,
@@ -143,31 +144,39 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
             "estimated_cost":estimated_cost, "reason":reason})
     candidates.sort(key=lambda x: (0 if x["delta"]<0 else 1, -abs(x["drift"]), x["estimated_cost"], x["instrument"].pk))
     turnover_used = D(0)
-    has_sells = any(x["delta"] < 0 and not x["reason"] for x in candidates)
     buy_cash = max(available_cash*(D(1)-D(policy.cash_buffer_percent)), D(0))
     for rank, item in enumerate(candidates):
-        trade_turnover = abs(item["delta"]*item["price"])/nav
-        if not item["reason"] and turnover_used+trade_turnover > D(policy.maximum_turnover):
-            item["reason"] = "TURNOVER_LIMIT"
-        if not item["reason"]:
-            turnover_used += trade_turnover
         item["desired_delta"] = item["delta"]
-        if not item["reason"] and item["delta"] > 0 and not (policy.sell_before_buy and has_sells):
-            affordable = _floor_lot(max(buy_cash-D(policy.fee_buffer), D(0))/item["price"], item["lot"])
+        if not item["reason"] and item["delta"] > 0:
+            affordable = _floor_lot(
+                max(buy_cash-D(policy.fee_buffer), D(0))/(item["price"]*(D(1)+VARIABLE_FEE_RATE)),
+                item["lot"],
+            )
             if affordable < item["delta"]:
                 item["delta"] = affordable
             if item["delta"] <= 0:
                 item["reason"] = "CASH_OR_FEE_BUFFER"
-            else:
-                buy_cash -= item["delta"]*item["price"]+D(policy.fee_buffer)
+        trade_turnover = abs(item["delta"]*item["price"])/nav if not item["reason"] else D(0)
+        if not item["reason"] and turnover_used+trade_turnover > D(policy.maximum_turnover):
+            item["reason"] = "TURNOVER_LIMIT"
+        if not item["reason"]:
+            turnover_used += trade_turnover
+            if item["delta"] < 0 and policy.sell_before_buy:
+                sell_notional = abs(item["delta"])*item["price"]
+                buy_cash += max(sell_notional-D(policy.fee_buffer)-sell_notional*VARIABLE_FEE_RATE, D(0))
+            elif item["delta"] > 0:
+                buy_notional = item["delta"]*item["price"]
+                buy_cash -= buy_notional+D(policy.fee_buffer)+buy_notional*VARIABLE_FEE_RATE
+            item["estimated_cost"] = D(policy.fee_buffer) + abs(item["delta"]*item["price"])*VARIABLE_FEE_RATE
         item["target_row"] = TargetPortfolioPosition.objects.create(rebalance=run, instrument=item["instrument"],
             target_weight=item["weight"], target_quantity=item["target"], trade_quantity=D(0) if item["reason"] else item["delta"],
             reference_price=item["price"], current_quantity=item["current"], current_weight=item["current_weight"],
             drift=item["drift"], lot_size=item["lot"], estimated_cost=item["estimated_cost"],
             suppressed=bool(item["reason"]), suppression_reason=item["reason"], rank=rank)
+    planned_has_sells = any(x["delta"] < 0 and not x["reason"] for x in candidates)
     run.total_drift = sum(abs(x["drift"]) for x in candidates)
     run.planned_turnover = turnover_used
-    run.phase = "SHADOW_COMPLETE" if mode == "SHADOW" else ("SELLS" if policy.sell_before_buy and has_sells else "BUYS")
+    run.phase = "SHADOW_COMPLETE" if mode == "SHADOW" else ("SELLS" if policy.sell_before_buy and planned_has_sells else "BUYS")
     run.status = "PLANNED" if mode == "SHADOW" else "INTENTS_CREATED"
     run.last_recalculated_at = timezone.now()
     run.save(update_fields=["nav","snapshot","total_drift","planned_turnover","phase","status","last_recalculated_at"])
@@ -233,21 +242,40 @@ def advance_rebalance(run):
         portfolio = run.portfolio
         cash = max(D(portfolio.account.available_cash)*(D(1)-D(run.policy.cash_buffer_percent)), D(0))
         positions = {x.instrument_id:D(x.quantity) for x in PortfolioPosition.objects.filter(portfolio=portfolio)}
+        turnover_used = sum(
+            abs(D(target.trade_quantity) * D(target.reference_price)) / D(run.nav)
+            for target in run.targets.filter(trade_quantity__lt=0, suppressed=False)
+        )
         for target in run.targets.filter(trade_quantity__gt=0).order_by("rank"):
             intent = OrderIntent.objects.filter(rebalance=run, instrument=target.instrument, side="BUY").first()
             if not intent or hasattr(intent, "order"):
                 continue
             desired = max(D(target.target_quantity)-positions.get(target.instrument_id,D(0)),D(0))
-            affordable = _floor_lot(max(cash-D(run.policy.fee_buffer),D(0))/D(target.reference_price),D(target.lot_size))
-            quantity = min(desired, affordable)
+            affordable = _floor_lot(
+                max(cash-D(run.policy.fee_buffer),D(0))/(D(target.reference_price)*(D(1)+VARIABLE_FEE_RATE)),
+                D(target.lot_size),
+            )
+            turnover_quantity = _floor_lot(
+                max(D(run.policy.maximum_turnover)-turnover_used, D(0))*D(run.nav)/D(target.reference_price),
+                D(target.lot_size),
+            )
+            quantity = min(desired, affordable, turnover_quantity)
             if quantity > 0:
                 intent.quantity=quantity;intent.eligible=True;intent.save(update_fields=["quantity","eligible"])
-                target.trade_quantity=quantity;target.save(update_fields=["trade_quantity"])
-                cash -= quantity*D(target.reference_price)+D(run.policy.fee_buffer)
+                target.trade_quantity=quantity;target.suppressed=False;target.suppression_reason=""
+                target.save(update_fields=["trade_quantity","suppressed","suppression_reason"])
+                buy_notional = quantity*D(target.reference_price)
+                cash -= buy_notional+D(run.policy.fee_buffer)+buy_notional*VARIABLE_FEE_RATE
+                turnover_used += quantity*D(target.reference_price)/D(run.nav)
             else:
                 target.trade_quantity=0;target.suppressed=True;target.suppression_reason="CASH_OR_FEE_BUFFER"
+                if affordable > 0 and turnover_quantity <= 0:
+                    target.suppression_reason="TURNOVER_LIMIT"
                 target.save(update_fields=["trade_quantity","suppressed","suppression_reason"])
-        run.phase = "BUYS"; run.last_recalculated_at = timezone.now(); run.save(update_fields=["phase","last_recalculated_at"])
+        run.phase = "BUYS"
+        run.planned_turnover = turnover_used
+        run.last_recalculated_at = timezone.now()
+        run.save(update_fields=["phase","planned_turnover","last_recalculated_at"])
     return run
 
 

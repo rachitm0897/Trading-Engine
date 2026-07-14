@@ -35,7 +35,7 @@ export function PortfolioPage() {
   const rebalancePolicyRows = (rebalancePolicies.data || []).filter((item) => !selectedPortfolioId || item.portfolio_id === selectedPortfolioId)
 
   const flow = useMutation({
-    mutationFn: (payload: {flow_type: string; amount: string; liquidation_policy: string; allocation_mode: string}) => request<{id: number; status: string}>('allocations/flows/', mutationOptions('POST', {portfolio_id: selectedPortfolioId, ...payload}, true)),
+    mutationFn: (payload: {flow_type: string; amount: string; liquidation_policy: string; allocation_mode: string}) => request<{id: number; status: string; allocation_mode: string}>('allocations/flows/', mutationOptions('POST', {portfolio_id: selectedPortfolioId, ...payload}, true)),
     onSuccess: async () => { await Promise.all([queryClient.invalidateQueries({queryKey: ['allocation-runs']}), queryClient.invalidateQueries({queryKey: ['optimization-runs']})]) },
   })
   const rebalance = useMutation({
@@ -98,9 +98,9 @@ function AllocationBars({rows, currency}: {rows: {id: number; name: string; weig
   return <ul className="allocation-bars">{rows.map((item) => <li key={item.id}><div><strong>{item.name}</strong><span>{formatPercent(item.weight)}{item.value !== null ? ` · ${formatMoney(item.value, currency)}` : ''}</span></div><div><i style={{width: `${Math.abs(item.weight) / maximum * 100}%`}} /></div></li>)}</ul>
 }
 
-function FlowForm({pending, error, result, onSubmit}: {pending: boolean; error: unknown; result?: {id: number; status: string}; onSubmit: (payload: {flow_type: string; amount: string; liquidation_policy: string; allocation_mode: string}) => void}) {
+function FlowForm({pending, error, result, onSubmit}: {pending: boolean; error: unknown; result?: {id: number; status: string; allocation_mode: string}; onSubmit: (payload: {flow_type: string; amount: string; liquidation_policy: string; allocation_mode: string}) => void}) {
   const submit = (event: React.FormEvent<HTMLFormElement>) => {event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({flow_type: String(form.get('flow_type')), amount: String(form.get('amount')), allocation_mode: String(form.get('allocation_mode')), liquidation_policy: String(form.get('liquidation_policy'))})}
-  return <><form className="form-grid four-columns" onSubmit={submit}><label>Flow type<select name="flow_type"><option>DEPOSIT</option><option>WITHDRAWAL</option><option>INTERNAL_TRANSFER_IN</option><option>INTERNAL_TRANSFER_OUT</option></select></label><label>Amount<input name="amount" type="number" min="0.01" step="0.01" required /></label><label>Allocation mode<select name="allocation_mode" defaultValue="AUTO"><option value="AUTO">Automatic</option><option value="PORTFOLIO_OPTIMIZATION">Portfolio optimization</option><option value="STRATEGY_ALLOCATION">Strategy allocation</option></select></label><label>Liquidation policy<select name="liquidation_policy"><option>PROPORTIONAL</option><option>LOWEST_CONVICTION_FIRST</option><option>MOST_LIQUID_FIRST</option><option>LOWEST_COST_FIRST</option><option>PRIORITY_ORDER</option></select></label><button className="button-primary form-submit" disabled={pending}>{pending ? 'Calculating…' : 'Calculate post-flow targets'}</button></form>{error && <ErrorState title="Flow was blocked" error={error} compact />}{result && <div className="inline-success"><StatusBadge status={result.status} />Allocation run {result.id} recorded.</div>}</>
+  return <><form className="form-grid four-columns" onSubmit={submit}><label>Flow type<select name="flow_type"><option>DEPOSIT</option><option>WITHDRAWAL</option><option>INTERNAL_TRANSFER_IN</option><option>INTERNAL_TRANSFER_OUT</option></select></label><label>Amount<input name="amount" type="number" min="0.01" step="0.01" required /></label><label>Allocation mode<select name="allocation_mode" defaultValue="AUTO"><option value="AUTO">Automatic</option><option value="PORTFOLIO_OPTIMIZATION">Portfolio optimization</option><option value="STRATEGY_ALLOCATION">Strategy allocation</option></select></label><label>Liquidation policy<select name="liquidation_policy"><option>PROPORTIONAL</option><option>LOWEST_CONVICTION_FIRST</option><option>MOST_LIQUID_FIRST</option><option>LOWEST_COST_FIRST</option><option>PRIORITY_ORDER</option></select></label><button className="button-primary form-submit" disabled={pending}>{pending ? 'Calculating…' : 'Calculate post-flow targets'}</button></form>{error && <ErrorState title="Flow was blocked" error={error} compact />}{result && <div className="inline-success"><StatusBadge status={result.status} />Allocation run {result.id} recorded using <strong>{result.allocation_mode}</strong>.</div>}</>
 }
 
 function SizingForm({instruments, pending, error, result, onSubmit}: {instruments: {id: number; symbol: string}[]; pending: boolean; error: unknown; result: PositionSizingDecision | null; onSubmit: (payload: Record<string, string | number | null>) => void}) {
@@ -112,6 +112,7 @@ const allocationRunColumns = [
   {id: 'type', header: 'Type', cell: (item: import('../../api/types').AllocationRun) => item.flow_type},
   {id: 'amount', header: 'Amount', align: 'right' as const, cell: (item: import('../../api/types').AllocationRun) => formatNumber(item.amount)},
   {id: 'approved', header: 'Approved', align: 'right' as const, cell: (item: import('../../api/types').AllocationRun) => formatNumber(item.approved_amount)},
+  {id: 'mode', header: 'Resolved mode', cell: (item: import('../../api/types').AllocationRun) => item.allocation_mode},
   {id: 'policy', header: 'Policy', cell: (item: import('../../api/types').AllocationRun) => item.liquidation_policy},
   {id: 'status', header: 'Status', cell: (item: import('../../api/types').AllocationRun) => <StatusBadge status={item.status} />},
 ]
@@ -131,14 +132,17 @@ function PortfolioConstruction({portfolioId, instruments, universe, policy, prev
   onChanged: () => Promise<void>
 }) {
   const [instrumentIds, setInstrumentIds] = useState<number[]>([])
+  const [maximumInstruments, setMaximumInstruments] = useState(50)
   useEffect(() => {
     setInstrumentIds(universe ? universe.instruments.filter((item) => item.enabled).map((item) => item.instrument_id) : [])
+    setMaximumInstruments(universe?.maximum_instruments || 50)
   }, [portfolioId, universe])
 
   const save = useMutation({
     mutationFn: async (form: HTMLFormElement) => {
       if (!portfolioId) throw new Error('Select a portfolio')
       if (instrumentIds.length < 2) throw new Error('Select at least two stocks')
+      if (instrumentIds.length > maximumInstruments) throw new Error(`Selected instrument count ${instrumentIds.length} exceeds maximum ${maximumInstruments}`)
       const values = new FormData(form)
       await request<PortfolioUniverse>('portfolio-universe/', mutationOptions('POST', {
         portfolio_id: portfolioId,
@@ -164,11 +168,11 @@ function PortfolioConstruction({portfolioId, instruments, universe, policy, prev
     onSuccess: onChanged,
   })
   const optimize = useMutation({
-    mutationFn: () => request<PortfolioOptimizationRun>('portfolio-optimization/preview/', mutationOptions('POST', {portfolio_id: portfolioId, trigger: 'PREVIEW', refresh_history: true}, true)),
+    mutationFn: () => request<PortfolioOptimizationRun>('portfolio-optimization/preview/', mutationOptions('POST', {portfolio_id: portfolioId, universe_id: universe?.id, policy_id: policy?.id, trigger: 'PREVIEW', refresh_history: true}, true)),
     onSuccess: async (run) => {onPreview(run); await onChanged()},
   })
   const apply = useMutation({
-    mutationFn: () => request<PortfolioOptimizationRun>('portfolio-optimization/run/', mutationOptions('POST', {optimization_run_id: preview?.id}, true)),
+    mutationFn: () => request<PortfolioOptimizationRun>('portfolio-optimization/run/', mutationOptions('POST', {optimization_run_id: preview?.id, portfolio_id: portfolioId, universe_id: preview?.universe_id, policy_id: preview?.policy_id}, true)),
     onSuccess: async (run) => {onPreview(run); await onChanged()},
   })
   const stockInstruments = instruments.filter((item) => item.asset_class === 'STK' && item.active && item.tradable)
@@ -190,7 +194,7 @@ function PortfolioConstruction({portfolioId, instruments, universe, policy, prev
   return <div className="page-stack">
     <form key={`${universe?.updated_at || 'new'}:${policy?.version || 0}`} className="page-stack" onSubmit={(event) => {event.preventDefault(); save.mutate(event.currentTarget)}}>
       <div className="form-grid four-columns">
-        <label>Universe<select aria-label="Portfolio universe" multiple value={instrumentIds.map(String)} onChange={(event) => setInstrumentIds(Array.from(event.currentTarget.selectedOptions).map((option) => Number(option.value)))}>{stockInstruments.map((item) => <option key={item.id} value={item.id}>{item.symbol} · {item.sector || item.exchange}</option>)}</select></label>
+        <label>Universe<select aria-label="Portfolio universe" multiple value={instrumentIds.map(String)} onChange={(event) => setInstrumentIds(Array.from(event.currentTarget.selectedOptions).map((option) => Number(option.value)))}>{stockInstruments.map((item) => <option key={item.id} value={item.id}>{item.symbol} · {item.sector || item.exchange}</option>)}</select><span className={instrumentIds.length > maximumInstruments ? 'field-error' : 'field-help'}>Selected {instrumentIds.length} of {maximumInstruments} maximum</span></label>
         <label>Method<select name="method" defaultValue={policy?.method || 'MINIMUM_VARIANCE'}><option value="MINIMUM_VARIANCE">Minimum variance</option><option value="MAXIMUM_SHARPE">Maximum Sharpe</option></select></label>
         <label>Lookback days<input name="lookback_days" type="number" min="30" defaultValue={policy?.lookback_days || 252} /></label>
         <label>Minimum observations<input name="minimum_history_observations" type="number" min="20" defaultValue={universe?.minimum_history_observations || 60} /></label>
@@ -200,14 +204,15 @@ function PortfolioConstruction({portfolioId, instruments, universe, policy, prev
         <label>Maximum turnover<input name="maximum_turnover" type="number" min="0" max="10" step="0.01" defaultValue={String(policy?.maximum_turnover ?? 1)} /></label>
         <label>Risk-free rate<input name="risk_free_rate" type="number" step="0.001" defaultValue={String(policy?.risk_free_rate ?? 0)} /></label>
         <label>Transaction-cost penalty<input name="transaction_cost_penalty" type="number" min="0" step="0.001" defaultValue={String(policy?.transaction_cost_penalty ?? 0)} /></label>
-        <label>Maximum instruments<input name="maximum_instruments" type="number" min="2" max="100" defaultValue={universe?.maximum_instruments || 50} /></label>
+        <label>Maximum instruments<input name="maximum_instruments" type="number" min="2" max="100" value={maximumInstruments} onChange={(event) => setMaximumInstruments(Number(event.target.value))} /></label>
         <label className="checkbox-field"><input name="include_strategy_instruments" type="checkbox" defaultChecked={universe?.include_strategy_instruments || false} />Include active strategy stocks</label>
       </div>
-      <div className="system-actions"><button className="button-secondary" disabled={save.isPending}>{save.isPending ? 'Saving…' : 'Save universe & policy'}</button><button type="button" className="button-primary" disabled={!universe || !policy || optimize.isPending} onClick={() => optimize.mutate()}>{optimize.isPending ? 'Optimizing…' : 'Preview optimization'}</button>{preview && <button type="button" className="button-secondary" disabled={apply.isPending} onClick={() => apply.mutate()}>{apply.isPending ? 'Planning…' : `Apply through ${executionMode} rebalance`}</button>}</div>
+      <div className="system-actions"><button className="button-secondary" disabled={save.isPending || instrumentIds.length > maximumInstruments}>{save.isPending ? 'Saving…' : 'Save universe & policy'}</button><button type="button" className="button-primary" disabled={!universe || !policy || optimize.isPending} onClick={() => optimize.mutate()}>{optimize.isPending ? 'Optimizing…' : 'Preview optimization'}</button>{preview && <button type="button" className="button-secondary" disabled={apply.isPending || preview.application_status === 'APPLIED' || Boolean(preview.applied_rebalance)} onClick={() => apply.mutate()}>{preview.applied_rebalance ? 'Optimization already applied' : apply.isPending ? 'Planning…' : `Apply through ${executionMode} rebalance`}</button>}</div>
     </form>
     {save.isError && <ErrorState title="Portfolio construction settings were not saved" error={save.error} compact />}
     {optimize.isError && <ErrorState title="Optimization preview failed" error={optimize.error} compact />}
     {apply.isError && <ErrorState title="Optimized rebalance was blocked" error={apply.error} compact />}
+    {preview?.applied_rebalance && <div className="inline-success"><StatusBadge status={preview.applied_rebalance.status} />Applied rebalance {preview.applied_rebalance.id} · {preview.applied_rebalance.mode}</div>}
     {preview && <>
       <section className="metric-grid compact"><MetricCard label="Expected return" value={formatPercent(preview.expected_return)} /><MetricCard label="Expected volatility" value={formatPercent(preview.expected_volatility)} /><MetricCard label="Sharpe ratio" value={formatNumber(preview.sharpe_ratio)} /><MetricCard label="Estimated turnover" value={formatPercent(preview.turnover)} /><MetricCard label="Cash target" value={formatPercent(preview.cash_weight)} /><MetricCard label="Planner mode" value={<StatusBadge status={preview.rebalance?.mode || 'SHADOW'} />} /></section>
       <div><h3>Current versus optimized allocation</h3><DataTable rows={preview.targets || []} columns={allocationColumns} getRowKey={(item) => item.id} emptyTitle="No optimized targets" /></div>
