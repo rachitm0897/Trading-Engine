@@ -27,8 +27,9 @@ def flows(request):
         payload=json.loads(request.body or b"{}")
         run=create_flow(TradingPortfolio.objects.select_related("account").get(pk=payload["portfolio_id"]),
             payload["flow_type"].upper(),Decimal(str(payload["amount"])),key,nav=payload.get("nav"),
-            liquidation_policy=payload.get("liquidation_policy","PROPORTIONAL"))
-        return response({"id":run.pk,"flow_id":run.flow_id,"status":run.status,"unallocated_amount":run.unallocated_amount},status=201)
+            liquidation_policy=payload.get("liquidation_policy","PROPORTIONAL"),allocation_mode=payload.get("allocation_mode","AUTO"))
+        return response({"id":run.pk,"flow_id":run.flow_id,"status":run.status,"unallocated_amount":run.unallocated_amount,
+            "allocation_mode":run.allocation_mode,"optimization_run_id":run.optimization_run_id},status=201)
     except (KeyError,ValueError,InvalidOperation,TradingPortfolio.DoesNotExist) as exc:
         return response(status=400,error={"code":"INVALID_FLOW","message":str(exc),"details":{}})
 
@@ -36,7 +37,8 @@ def flows(request):
 def _run(item, detail=False):
     row={"id":item.pk,"flow_id":item.flow_id,"portfolio_id":item.flow.portfolio_id,"flow_type":item.flow.flow_type,
         "amount":item.flow.amount,"approved_amount":item.approved_amount,"unallocated_amount":item.unallocated_amount,
-        "liquidation_policy":item.liquidation_policy,"status":item.status,"created_at":item.created_at}
+        "liquidation_policy":item.liquidation_policy,"allocation_mode":item.allocation_mode,
+        "optimization_run_id":item.optimization_run_id,"status":item.status,"created_at":item.created_at}
     if detail:
         row["snapshots"]=_serialize(item.capital_snapshots.all(),["strategy_id","capital_before","target_capital","deficit","surplus","idle_cash"])
         row["decisions"]=_serialize(item.decisions.all(),["strategy_id","source","requested_amount","approved_amount","binding_constraint","liquidation_required","rank","details"])

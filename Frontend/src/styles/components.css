@@ -151,9 +151,11 @@
 .form-grid.three-columns { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .form-grid.four-columns { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .form-grid label { display: flex; flex-direction: column; gap: .38rem; text-transform: capitalize; }
+.form-grid select[multiple] { min-height: 132px; padding: .4rem; }
+.form-grid label.checkbox-field { flex-direction: row; align-items: center; align-self: end; min-height: 42px; text-transform: none; }
+.form-grid .checkbox-field input { width: auto; }
 .form-submit { align-self: end; }
 .inline-note, .inline-success { padding: .75rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); color: var(--text-muted); font-size: .7rem; }
 .inline-success { display: flex; align-items: center; gap: .55rem; margin-top: .7rem; color: var(--positive); border-color: #acdaca; background: var(--positive-soft); }
 .global-error { padding: .6rem 1rem 0; }
 .nav-scrim { display: none; }
-

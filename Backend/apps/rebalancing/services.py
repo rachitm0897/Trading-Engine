@@ -85,27 +85,37 @@ def _net_strategy_risk_limits(portfolio, contributions, reference_price, target_
 
 @transaction.atomic
 def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None, mode=None,
-                   policy=None, strict_market_state=True):
+                   policy=None, strict_market_state=True, optimization_run=None, available_cash=None):
     policy = policy or RebalancePolicy.objects.filter(portfolio=portfolio).first() or RebalancePolicy.objects.create(portfolio=portfolio)
     mode = (mode or policy.mode).upper()
     if mode not in {"SHADOW", "PAPER"}:
         raise ValueError("Rebalancing supports SHADOW or PAPER mode only")
     run, created = RebalanceRun.objects.get_or_create(idempotency_key=idempotency_key, defaults={
-        "portfolio": portfolio, "policy": policy, "trigger": trigger, "mode": mode})
+        "portfolio": portfolio, "policy": policy, "trigger": trigger, "mode": mode,
+        "optimization_run": optimization_run,
+        "target_source": "PORTFOLIO_OPTIMIZATION" if optimization_run else "STRATEGY_AGGREGATION"})
     if not created:
         return run
     nav = D(str(nav if nav is not None else portfolio.account.net_liquidation))
+    available_cash = D(str(available_cash if available_cash is not None else portfolio.account.available_cash))
     if nav <= 0:
         raise ValueError("Portfolio NAV must be positive")
     current_rows = {x.instrument_id:x for x in PortfolioPosition.objects.filter(portfolio=portfolio).select_related("instrument")}
-    target_weights, attribution = aggregate_targets(portfolio)
+    if optimization_run:
+        if optimization_run.portfolio_id != portfolio.pk or optimization_run.status != "COMPLETED":
+            raise ValueError("Optimization run is not a completed target set for this portfolio")
+        target_weights = {item.instrument_id: D(item.optimized_weight) for item in optimization_run.targets.all()}
+        attribution = {}
+    else:
+        target_weights, attribution = aggregate_targets(portfolio)
     instrument_ids = set(target_weights) | set(current_rows)
     reference, unusable = _reference_prices(portfolio, prices or {}, strict_market_state)
     missing = instrument_ids-set(reference)
     if missing:
         raise ValueError(f"No auditable reference price for instruments: {sorted(missing)}")
     run.nav = nav
-    run.snapshot = {"nav":str(nav), "cash":str(portfolio.account.available_cash),
+    run.snapshot = {"nav":str(nav), "cash":str(available_cash), "target_source":run.target_source,
+        "optimization_run_id":optimization_run.pk if optimization_run else None,
         "positions":{str(key):str(row.quantity) for key,row in current_rows.items()},
         "prices":{str(key):str(reference[key]) for key in instrument_ids}}
     candidates = []
@@ -121,11 +131,11 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
         notional = abs(delta*price)
         reason = ""
         if instrument_id in unusable: reason = "STALE_OR_UNAVAILABLE_PRICE"
-        elif abs(drift) < policy.instrument_drift_threshold and trigger not in {"MANUAL", "SCHEDULED", "DEPOSIT", "WITHDRAWAL"}: reason = "BELOW_DRIFT_THRESHOLD"
-        elif abs(delta) < policy.minimum_trade_quantity: reason = "BELOW_MINIMUM_QUANTITY"
-        elif notional < policy.minimum_trade_notional: reason = "BELOW_MINIMUM_NOTIONAL"
+        elif abs(drift) < D(policy.instrument_drift_threshold) and trigger not in {"MANUAL", "SCHEDULED", "DEPOSIT", "WITHDRAWAL"}: reason = "BELOW_DRIFT_THRESHOLD"
+        elif abs(delta) < D(policy.minimum_trade_quantity): reason = "BELOW_MINIMUM_QUANTITY"
+        elif notional < D(policy.minimum_trade_notional): reason = "BELOW_MINIMUM_NOTIONAL"
         elif strict_market_state and not hasattr(instrument, "broker_contract"): reason = "UNQUALIFIED_CONTRACT"
-        estimated_cost = policy.fee_buffer + notional*D("0.0005")
+        estimated_cost = D(policy.fee_buffer) + notional*D("0.0005")
         benefit = abs(drift)*nav
         if not reason and estimated_cost >= benefit: reason = "COST_EXCEEDS_BENEFIT"
         candidates.append({"instrument":instrument, "weight":weight, "current":current, "current_weight":current_weight,
@@ -134,10 +144,10 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
     candidates.sort(key=lambda x: (0 if x["delta"]<0 else 1, -abs(x["drift"]), x["estimated_cost"], x["instrument"].pk))
     turnover_used = D(0)
     has_sells = any(x["delta"] < 0 and not x["reason"] for x in candidates)
-    buy_cash = max(D(portfolio.account.available_cash)*(D(1)-D(policy.cash_buffer_percent)), D(0))
+    buy_cash = max(available_cash*(D(1)-D(policy.cash_buffer_percent)), D(0))
     for rank, item in enumerate(candidates):
         trade_turnover = abs(item["delta"]*item["price"])/nav
-        if not item["reason"] and turnover_used+trade_turnover > policy.maximum_turnover:
+        if not item["reason"] and turnover_used+trade_turnover > D(policy.maximum_turnover):
             item["reason"] = "TURNOVER_LIMIT"
         if not item["reason"]:
             turnover_used += trade_turnover
@@ -189,7 +199,7 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
                 adv_record = IndicatorValue.objects.filter(instrument=item["instrument"], indicator="average_volume").order_by("-event_time").first()
                 broker_limits,strategy_limits=_net_strategy_risk_limits(portfolio,contributions,item["price"],item["weight"])
                 size_and_record(sizing_policy, item["instrument"], intent.side, intent.quantity, item["price"], None, nav,
-                    portfolio.account.available_cash, adv_record.value if adv_record and adv_record.value is not None else 0,
+                    available_cash, adv_record.value if adv_record and adv_record.value is not None else 0,
                     broker_limits=broker_limits,strategy_limits=strategy_limits,order_intent=intent,
                     idempotency_key=f"sizing:rebalance:{run.pk}:instrument:{item['instrument'].pk}:v1")
             net_contribution = sum(contributions.values()) or D(1)
@@ -203,7 +213,8 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
                     target_delta=contribution, allocated_quantity=item["delta"]*contribution/net_contribution)
     OutboxEvent.objects.create(topic="portfolio.rebalance.planned.v1", event_type="portfolio.rebalance.planned",
         aggregate_type="portfolio", aggregate_id=str(portfolio.pk), partition_key=str(portfolio.pk),
-        payload={"rebalance_run_id":run.pk,"mode":mode,"phase":run.phase,"turnover":str(turnover_used)},
+        payload={"rebalance_run_id":run.pk,"mode":mode,"phase":run.phase,"turnover":str(turnover_used),
+                 "target_source":run.target_source,"optimization_run_id":optimization_run.pk if optimization_run else None},
         idempotency_key=f"rebalance:{run.pk}:planned")
     return run
 

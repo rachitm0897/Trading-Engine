@@ -3,6 +3,7 @@ from django.db import connection
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import ensure_csrf_cookie
 import json
 import uuid
 
@@ -16,10 +17,40 @@ def health(request):
     except Exception as exc:
         return response(status=503, error={"code": "DATABASE_UNAVAILABLE", "message": str(exc), "details": {}})
 
+@ensure_csrf_cookie
 def system(request):
     from apps.reconciliation.models import ReconciliationBreak
     from apps.risk.models import KillSwitch
-    return response({"mode": "PAPER" if not settings.ALLOW_LIVE_TRADING else "LIVE", "global_kill_switch": settings.GLOBAL_KILL_SWITCH or KillSwitch.objects.filter(scope="GLOBAL", enabled=True).exists(), "material_breaks": ReconciliationBreak.objects.filter(material=True, resolved=False).count(), "time": timezone.now().isoformat()})
+    is_admin = bool(getattr(request, "user", None) and request.user.is_authenticated and request.user.is_active and request.user.is_staff)
+    return response({"mode": "PAPER" if not settings.ALLOW_LIVE_TRADING else "LIVE", "execution_mode":settings.NEW_EXECUTION_MODE,
+        "is_admin":is_admin,"global_kill_switch": settings.GLOBAL_KILL_SWITCH or KillSwitch.objects.filter(scope="GLOBAL", enabled=True).exists(),
+        "material_breaks": ReconciliationBreak.objects.filter(material=True, resolved=False).count(), "time": timezone.now().isoformat()})
+
+
+@ensure_csrf_cookie
+def auth_session(request):
+    from django.contrib.auth import authenticate, login, logout
+    user = getattr(request, "user", None)
+    if request.method == "GET":
+        return response({"is_authenticated": bool(user and user.is_authenticated),
+            "is_admin": bool(user and user.is_authenticated and user.is_active and user.is_staff),
+            "username": user.get_username() if user and user.is_authenticated else ""})
+    if request.method == "DELETE":
+        logout(request)
+        return response({"is_authenticated": False, "is_admin": False, "username": ""})
+    if request.method != "POST":
+        return response(status=405,error={"code":"METHOD_NOT_ALLOWED","message":"GET, POST, or DELETE required","details":{}})
+    try:
+        payload = json.loads(request.body or b"{}")
+        authenticated = authenticate(request, username=str(payload.get("username") or ""), password=str(payload.get("password") or ""))
+        if not authenticated:
+            return response(status=401,error={"code":"AUTHENTICATION_FAILED","message":"Invalid administrator credentials","details":{}})
+        if not authenticated.is_active or not authenticated.is_staff:
+            return response(status=403,error={"code":"ADMIN_REQUIRED","message":"A staff administrator account is required","details":{}})
+        login(request, authenticated)
+        return response({"is_authenticated": True, "is_admin": True, "username": authenticated.get_username()})
+    except json.JSONDecodeError:
+        return response(status=400,error={"code":"INVALID_AUTH_REQUEST","message":"Request body must be valid JSON","details":{}})
 
 def _serialize(queryset, fields):
     rows = []

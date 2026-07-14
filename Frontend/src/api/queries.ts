@@ -3,6 +3,7 @@ import {request, withQuery} from './client'
 import type {
   AllocationPolicy,
   AllocationRun,
+  AdminSession,
   AuditEvent,
   BrokerAccount,
   DashboardSummary,
@@ -25,11 +26,20 @@ import type {
   StrategyTimelineItem,
   StreamingHealth,
   SystemStatus,
+  FinnhubProviderStatus,
+  PortfolioUniverse,
+  PortfolioOptimizationPolicy,
+  PortfolioOptimizationRun,
 } from './types'
 
 const POLL_INTERVAL = 15_000
 
 export const queries = {
+  authSession: () => queryOptions({
+    queryKey: ['auth-session'],
+    queryFn: () => request<AdminSession>('auth/session/'),
+    staleTime: 30_000,
+  }),
   system: () => queryOptions({
     queryKey: ['system'],
     queryFn: () => request<SystemStatus>('system/'),
@@ -173,6 +183,29 @@ export const queries = {
   rebalanceRuns: () => queryOptions({
     queryKey: ['rebalance-runs'],
     queryFn: () => request<RebalanceRun[]>('rebalancing/runs/'),
+    refetchInterval: POLL_INTERVAL,
+  }),
+  finnhub: () => queryOptions({
+    queryKey: ['finnhub'],
+    queryFn: () => request<FinnhubProviderStatus>('data-providers/finnhub/'),
+    staleTime: 30_000,
+  }),
+  portfolioUniverse: (portfolioId?: number | null) => queryOptions({
+    queryKey: ['portfolio-universe', portfolioId ?? 'none'],
+    queryFn: () => request<PortfolioUniverse[]>(withQuery('portfolio-universe/', {portfolio: portfolioId})),
+    enabled: Boolean(portfolioId),
+    staleTime: 30_000,
+  }),
+  optimizationPolicies: (portfolioId?: number | null) => queryOptions({
+    queryKey: ['optimization-policies', portfolioId ?? 'none'],
+    queryFn: () => request<PortfolioOptimizationPolicy[]>(withQuery('portfolio-optimization/policies/', {portfolio: portfolioId})),
+    enabled: Boolean(portfolioId),
+    staleTime: 30_000,
+  }),
+  optimizationRuns: (portfolioId?: number | null) => queryOptions({
+    queryKey: ['optimization-runs', portfolioId ?? 'none'],
+    queryFn: () => request<PortfolioOptimizationRun[]>(withQuery('portfolio-optimization/runs/', {portfolio: portfolioId})),
+    enabled: Boolean(portfolioId),
     refetchInterval: POLL_INTERVAL,
   }),
 }

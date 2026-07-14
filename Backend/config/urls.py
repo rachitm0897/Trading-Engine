@@ -7,9 +7,11 @@ from apps.rebalancing import views as rebalancing_views
 from apps.position_sizing import views as sizing_views
 from apps.strategies import views as strategy_views
 from apps.core import analytics as analytics_views
+from apps.market_data import views as market_data_views
+from apps.portfolio_optimization import views as optimization_views
 
 api_patterns = [
-    path("system/", views.system), path("gateway/", views.gateway), path("accounts/", views.accounts),
+    path("system/", views.system), path("auth/session/",views.auth_session), path("gateway/", views.gateway), path("accounts/", views.accounts),
     path("instruments/", views.instruments), path("portfolios/", views.portfolios), path("positions/", views.positions),
     path("strategies/", views.strategies), path("strategy-runs/", views.strategy_runs), path("rebalances/", views.rebalances),
     path("orders/", views.orders), path("orders/<str:internal_id>/detail/", views.orders, {"action":"detail"}), path("orders/<str:internal_id>/", views.orders), path("orders/<str:internal_id>/cancel/", views.orders, {"action":"cancel"}), path("executions/", views.executions), path("reconciliation/", views.reconciliation),
@@ -40,6 +42,15 @@ new_api = [
     path("rebalancing/run/",rebalancing_views.execute,{"preview":False}),path("rebalancing/runs/",rebalancing_views.runs),
     path("rebalancing/runs/<int:run_id>/",rebalancing_views.runs),path("position-sizing/preview/",sizing_views.preview),
     path("position-sizing/decisions/<int:decision_id>/",sizing_views.decision),
+    path("data-providers/finnhub/",market_data_views.status),
+    path("data-providers/finnhub/configure/",market_data_views.configure),
+    path("data-providers/finnhub/test/",market_data_views.test),
+    path("portfolio-universe/",optimization_views.universes),
+    path("portfolio-optimization/policies/",optimization_views.policies),
+    path("portfolio-optimization/preview/",optimization_views.execute,{"preview":True}),
+    path("portfolio-optimization/run/",optimization_views.execute,{"preview":False}),
+    path("portfolio-optimization/runs/",optimization_views.runs),
+    path("portfolio-optimization/runs/<int:run_id>/",optimization_views.runs),
 ]
 urlpatterns += [path("api/v1/" + str(p.pattern),p.callback,p.default_args) for p in new_api]
 if settings.APP_BASE_PATH:

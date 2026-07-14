@@ -29,9 +29,14 @@ export function withQuery(path: string, parameters: Record<string, string | numb
 export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   let response: Response
   try {
+    const csrfToken = document.cookie.split(';').map((item) => item.trim()).find((item) => item.startsWith('csrftoken='))?.slice('csrftoken='.length)
+    const headers = new Headers(options.headers)
+    headers.set('Content-Type', 'application/json')
+    if (options.method && options.method !== 'GET' && csrfToken) headers.set('X-CSRFToken', decodeURIComponent(csrfToken))
     response = await fetch(`${API_BASE_URL}/${path.replace(/^\//, '')}`, {
       ...options,
-      headers: {'Content-Type': 'application/json', ...(options.headers || {})},
+      credentials: 'include',
+      headers,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Network request failed'
@@ -60,4 +65,3 @@ export function mutationOptions(method: 'POST' | 'PATCH' | 'DELETE', payload?: u
   if (idempotent) headers['Idempotency-Key'] = crypto.randomUUID()
   return {method, headers, body: payload === undefined ? undefined : JSON.stringify(payload)}
 }
-

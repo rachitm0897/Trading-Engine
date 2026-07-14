@@ -20,6 +20,8 @@ class AllocationRun(models.Model):
     approved_amount = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     unallocated_amount = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     liquidation_policy = models.CharField(max_length=40, choices=POLICIES, default="PROPORTIONAL")
+    allocation_mode = models.CharField(max_length=40, default="STRATEGY_ALLOCATION")
+    optimization_run = models.ForeignKey("portfolio_optimization.PortfolioOptimizationRun", on_delete=models.PROTECT, null=True, blank=True)
     status = models.CharField(max_length=24, default="CALCULATING")
     calculation_version = models.PositiveIntegerField(default=1)
     snapshot = models.JSONField(default=dict)
@@ -69,6 +71,8 @@ class RebalancePolicy(models.Model):
 class RebalanceRun(models.Model):
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT)
     policy = models.ForeignKey(RebalancePolicy, on_delete=models.PROTECT, null=True, blank=True)
+    optimization_run = models.ForeignKey("portfolio_optimization.PortfolioOptimizationRun", on_delete=models.PROTECT, null=True, blank=True, related_name="rebalances")
+    target_source = models.CharField(max_length=40, default="STRATEGY_AGGREGATION")
     trigger = models.CharField(max_length=40)
     idempotency_key = models.CharField(max_length=128, unique=True)
     status = models.CharField(max_length=24, default="CALCULATING")

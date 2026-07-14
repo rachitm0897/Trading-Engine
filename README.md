@@ -43,7 +43,7 @@ docker compose ps
 powershell -NoProfile -File docs/streaming_recovery_smoke.ps1
 ```
 
-See [local development](docs/LOCAL_DEVELOPMENT.md), the [frontend redesign guide](docs/FRONTEND_REDESIGN.md), and each application README for isolated commands.
+See [local development](docs/LOCAL_DEVELOPMENT.md), the [frontend redesign guide](docs/FRONTEND_REDESIGN.md), [multi-stock portfolio construction](docs/PORTFOLIO_OPTIMIZATION.md), and each application README for isolated commands.
 
 ## QFS
 
