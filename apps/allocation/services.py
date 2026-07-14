@@ -131,7 +131,7 @@ def _strategy_rows(portfolio):
 
 @transaction.atomic
 def create_flow(portfolio, flow_type, amount, idempotency_key, *, nav=None, effective_at=None,
-                liquidation_policy="PROPORTIONAL"):
+                liquidation_policy="PROPORTIONAL", allocation_mode="AUTO"):
     if flow_type not in {value for value, _ in PortfolioFlow.TYPES}:
         raise ValueError("Unsupported flow type")
     amount = _money(amount)
@@ -144,8 +144,12 @@ def create_flow(portfolio, flow_type, amount, idempotency_key, *, nav=None, effe
         return flow.allocation_run
     nav = D(str(nav if nav is not None else portfolio.account.net_liquidation))
     cash = D(portfolio.account.available_cash)
+    allocation_mode = str(allocation_mode or "AUTO").upper()
+    if allocation_mode not in {"AUTO", "STRATEGY_ALLOCATION", "PORTFOLIO_OPTIMIZATION"}:
+        raise ValueError("Allocation mode must be AUTO, STRATEGY_ALLOCATION, or PORTFOLIO_OPTIMIZATION")
     run = AllocationRun.objects.create(flow=flow, portfolio_nav_before=nav, portfolio_cash_before=cash,
         approved_amount=amount, liquidation_policy=liquidation_policy,
+        allocation_mode=allocation_mode,
         snapshot={"nav": str(nav), "cash": str(cash), "mode": "SHADOW"})
     rows = _strategy_rows(portfolio)
     post_nav = nav + amount if flow_type in {"DEPOSIT", "INTERNAL_TRANSFER_IN"} else nav - amount
@@ -187,13 +191,48 @@ def create_flow(portfolio, flow_type, amount, idempotency_key, *, nav=None, effe
         strategy.allocated_capital=max(D(strategy.allocated_capital)+strategy_changes[strategy.pk],D(0))
         strategy.save(update_fields=["allocated_capital"])
     run.approved_amount=amount-run.unallocated_amount
+    from apps.portfolio_optimization.models import PortfolioOptimizationPolicy, PortfolioUniverse
+    optimization_configured = (
+        PortfolioOptimizationPolicy.objects.filter(portfolio=portfolio, enabled=True).exists()
+        and PortfolioUniverse.objects.filter(portfolio=portfolio, enabled=True).exists()
+    )
+    optimize_flow = allocation_mode == "PORTFOLIO_OPTIMIZATION" or (allocation_mode == "AUTO" and optimization_configured)
+    if allocation_mode == "PORTFOLIO_OPTIMIZATION" and not optimization_configured:
+        raise ValueError("Portfolio optimization mode requires an enabled universe and policy")
+    if optimize_flow:
+        from apps.portfolio_optimization.services import plan_optimized_rebalance, run_optimization
+        post_cash = cash + amount if flow_type in {"DEPOSIT", "INTERNAL_TRANSFER_IN"} else max(cash - amount, D(0))
+        optimization = run_optimization(
+            portfolio,
+            f"optimization:flow:{flow.pk}",
+            trigger=flow_type,
+            nav=post_nav,
+            available_cash=post_cash,
+            refresh_history=True,
+            flow_reference=f"flow:{flow.pk}",
+        )
+        plan_optimized_rebalance(
+            optimization,
+            f"rebalance:flow:{flow.pk}:optimization:{optimization.pk}",
+            mode="SHADOW",
+            strict_market_state=False,
+            available_cash=post_cash,
+        )
+        run.optimization_run = optimization
+        run.allocation_mode = "PORTFOLIO_OPTIMIZATION"
+        run.snapshot.update({"post_flow_nav": str(post_nav), "post_flow_cash": str(post_cash),
+                             "optimization_run_id": optimization.pk})
+    elif allocation_mode == "AUTO":
+        run.allocation_mode = "STRATEGY_ALLOCATION"
     run.status = "COMPLETED" if run.unallocated_amount==0 else "PARTIALLY_ALLOCATED"
-    run.completed_at = timezone.now(); run.save(update_fields=["status", "completed_at", "approved_amount", "unallocated_amount"])
+    run.completed_at = timezone.now(); run.save(update_fields=["status", "completed_at", "approved_amount", "unallocated_amount",
+        "optimization_run", "allocation_mode", "snapshot"])
     flow.status = "ALLOCATED"; flow.save(update_fields=["status"])
     OutboxEvent.objects.create(topic="portfolio.flow.allocated.v1", event_type="portfolio.flow.allocated",
         aggregate_type="portfolio", aggregate_id=str(portfolio.pk), partition_key=str(portfolio.pk),
         payload={"flow_id": flow.pk, "allocation_run_id": run.pk, "approved_amount": str(run.approved_amount),
-                 "unallocated_amount": str(run.unallocated_amount)}, idempotency_key=f"flow:{flow.pk}:allocated")
+                 "unallocated_amount": str(run.unallocated_amount), "allocation_mode":run.allocation_mode,
+                 "optimization_run_id":run.optimization_run_id}, idempotency_key=f"flow:{flow.pk}:allocated")
     return run
 
 
