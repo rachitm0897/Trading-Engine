@@ -1,7 +1,6 @@
 import json
 from decimal import Decimal, InvalidOperation
-from django.views.decorators.csrf import csrf_exempt
-from apps.core.views import response, _serialize
+from apps.core.views import response
 from apps.portfolios.models import TradingPortfolio
 from apps.strategies.models import StrategyAllocation
 from .models import AllocationRun
@@ -18,7 +17,6 @@ def policies(request):
     return response(rows)
 
 
-@csrf_exempt
 def flows(request):
     if request.method != "POST": return response(status=405,error={"code":"METHOD_NOT_ALLOWED","message":"POST required","details":{}})
     key=request.headers.get("Idempotency-Key")
@@ -40,8 +38,19 @@ def _run(item, detail=False):
         "liquidation_policy":item.liquidation_policy,"allocation_mode":item.allocation_mode,
         "optimization_run_id":item.optimization_run_id,"status":item.status,"created_at":item.created_at}
     if detail:
-        row["snapshots"]=_serialize(item.capital_snapshots.all(),["strategy_id","capital_before","target_capital","deficit","surplus","idle_cash"])
-        row["decisions"]=_serialize(item.decisions.all(),["strategy_id","source","requested_amount","approved_amount","binding_constraint","liquidation_required","rank","details"])
+        row["snapshots"]=[{"id":record.pk,
+            "strategy_id":record.strategy_id or record.strategy_snapshot.get("strategy_id"),
+            "strategy":record.strategy.name if record.strategy else record.strategy_snapshot.get("strategy_name"),
+            "capital_before":record.capital_before,"target_capital":record.target_capital,
+            "deficit":record.deficit,"surplus":record.surplus,"idle_cash":record.idle_cash}
+            for record in item.capital_snapshots.select_related("strategy").all()]
+        row["decisions"]=[{"id":record.pk,
+            "strategy_id":record.strategy_id or record.strategy_snapshot.get("strategy_id"),
+            "strategy":record.strategy.name if record.strategy else record.strategy_snapshot.get("strategy_name"),
+            "source":record.source,"requested_amount":record.requested_amount,
+            "approved_amount":record.approved_amount,"binding_constraint":record.binding_constraint,
+            "liquidation_required":record.liquidation_required,"rank":record.rank,"details":record.details}
+            for record in item.decisions.select_related("strategy").all()]
     return row
 
 

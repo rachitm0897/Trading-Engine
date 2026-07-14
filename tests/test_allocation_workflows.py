@@ -1,7 +1,7 @@
 from decimal import Decimal
 import pytest
 from apps.accounts.models import BrokerAccount
-from apps.allocation.models import AllocationDecision
+from apps.allocation.models import AllocationDecision, StrategyCapitalSnapshot
 from apps.allocation.services import allocate_deposit, allocate_withdrawal, create_flow
 from apps.portfolios.models import TradingPortfolio
 from apps.strategies.models import StrategyAllocation, TradingStrategy
@@ -43,3 +43,21 @@ def test_flow_retry_is_idempotent_and_reserves_cash():
     first=create_flow(portfolio,"DEPOSIT",200,"flow-1"); second=create_flow(portfolio,"DEPOSIT",200,"flow-1")
     assert first.pk==second.pk and first.unallocated_amount==Decimal("120.00")
     assert AllocationDecision.objects.count()==1
+    strategy.refresh_from_db()
+    assert strategy.allocated_capital == Decimal("80.00")
+    assert StrategyCapitalSnapshot.objects.filter(allocation_run=first).count() == 1
+
+
+def test_auto_without_enabled_optimization_configuration_uses_strategy_allocation():
+    account=BrokerAccount.objects.create(account_id="DU-AUTO",net_liquidation=1000,available_cash=1000)
+    portfolio=TradingPortfolio.objects.create(name="Auto strategy",account=account)
+    strategy=TradingStrategy.objects.create(name="Auto S",strategy_type="fixed_weight",allocated_capital=100)
+    StrategyAllocation.objects.create(portfolio=portfolio,strategy=strategy,weight=1)
+
+    run=create_flow(portfolio,"DEPOSIT",100,"flow-auto-strategy",allocation_mode="AUTO")
+
+    strategy.refresh_from_db()
+    assert run.allocation_mode == "STRATEGY_ALLOCATION"
+    assert run.optimization_run_id is None
+    assert strategy.allocated_capital > Decimal("100")
+    assert run.decisions.exists()

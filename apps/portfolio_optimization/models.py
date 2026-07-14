@@ -43,6 +43,7 @@ class PortfolioOptimizationPolicy(models.Model):
 
 
 class PortfolioOptimizationRun(models.Model):
+    APPLICATION_STATUSES = [(value, value) for value in ["NOT_APPLIED", "APPLYING", "APPLIED"]]
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT, related_name="optimization_runs")
     policy = models.ForeignKey(PortfolioOptimizationPolicy, on_delete=models.PROTECT)
     universe = models.ForeignKey(PortfolioUniverse, on_delete=models.PROTECT)
@@ -67,6 +68,16 @@ class PortfolioOptimizationRun(models.Model):
     warnings = models.JSONField(default=list)
     error_details = models.JSONField(default=dict)
     flow_reference = models.CharField(max_length=128, blank=True)
+    application_status = models.CharField(max_length=24, choices=APPLICATION_STATUSES, default="NOT_APPLIED")
+    application_idempotency_key = models.CharField(max_length=128, blank=True)
+    applied_rebalance = models.OneToOneField(
+        "allocation.RebalanceRun",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="applied_optimization",
+    )
+    applied_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
@@ -85,4 +96,3 @@ class OptimizedPortfolioTarget(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["optimization_run", "instrument"], name="unique_optimized_run_instrument")]
-

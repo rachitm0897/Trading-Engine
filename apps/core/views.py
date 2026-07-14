@@ -163,10 +163,12 @@ def orders(request, internal_id=None, action=None):
                 "requested_quantity":item.requested_quantity,"approved_quantity":item.approved_quantity,
                 "details":item.details,"created_at":item.created_at}
                 for item in order.intent.risk_checks.all().order_by("created_at","id")]
-            attributions=[{"id":item.pk,"strategy_id":item.strategy_id,"strategy":item.strategy.name,
-                "strategy_instance_id":item.strategy_instance_id,
-                "strategy_instance":item.strategy_instance.name if item.strategy_instance else None,
-                "strategy_version_id":item.strategy_version_id,"target_delta":item.target_delta,
+            attributions=[{"id":item.pk,
+                "strategy_id":item.strategy_id or item.strategy_snapshot.get("strategy_id"),
+                "strategy":item.strategy.name if item.strategy else item.strategy_snapshot.get("strategy_name"),
+                "strategy_instance_id":item.strategy_instance_id or item.strategy_snapshot.get("strategy_instance_id"),
+                "strategy_instance":item.strategy_instance.name if item.strategy_instance else item.strategy_snapshot.get("strategy_instance_name"),
+                "strategy_version_id":item.strategy_version_id or item.strategy_snapshot.get("strategy_version_id"),"target_delta":item.target_delta,
                 "allocated_quantity":item.allocated_quantity,"allocated_value":item.allocated_value,
                 "allocated_cost":item.allocated_cost,"realized_pnl":item.realized_pnl,"method":item.method}
                 for item in order.intent.attributions.select_related("strategy","strategy_instance","strategy_version").all()]

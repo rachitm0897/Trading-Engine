@@ -9,6 +9,7 @@ class MarketDataProviderConfiguration(models.Model):
     enabled = models.BooleanField(default=True)
     last_success_at = models.DateTimeField(null=True, blank=True)
     last_tested_at = models.DateTimeField(null=True, blank=True)
+    last_test_success_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True)
     rate_limit_state = models.JSONField(default=dict)
     updated_by = models.CharField(max_length=150, blank=True)
@@ -47,7 +48,7 @@ class MarketDataFetchRun(models.Model):
     requested_end = models.DateField(null=True, blank=True)
     records_received = models.PositiveIntegerField(default=0)
     records_written = models.PositiveIntegerField(default=0)
+    response_metadata = models.JSONField(default=dict)
     error = models.TextField(blank=True)
     started_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
-
