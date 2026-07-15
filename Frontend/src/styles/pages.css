@@ -53,10 +53,18 @@
 .goal-selection-card > header, .goal-preview-card > header { display: flex; justify-content: space-between; gap: 1rem; margin-bottom: .85rem; }
 .goal-selection-card h3, .goal-preview-card h3 { margin: 0 0 .2rem; }
 .goal-selection-card header p, .goal-preview-card header p { margin: 0; color: var(--text-muted); }
-.selection-chips { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .5rem; margin: .85rem 0 0; padding: 0; list-style: none; }
-.selection-chips li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .65rem .75rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
-.selection-chips li div { display: flex; flex-direction: column; gap: .15rem; }
-.selection-chips li span, .rejected-strategies li span { color: var(--text-muted); font-size: .75rem; }
+.add-goal-stock { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: .75rem; }
+.goal-stock-list { display: grid; gap: .75rem; margin-top: .85rem; }
+.goal-stock-card { padding: .85rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.goal-stock-card > header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .75rem; }
+.goal-stock-card > header div { display: flex; flex-direction: column; gap: .15rem; }
+.goal-stock-card > header span, .rejected-strategies li span { color: var(--text-muted); font-size: .75rem; }
+.stock-assignments { display: grid; gap: .65rem; }
+.assignment-editor { padding: .7rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); }
+.assignment-editor > summary { display: flex; align-items: center; gap: .55rem; cursor: pointer; }
+.assignment-editor > summary span { color: var(--text-muted); }
+.assignment-editor > summary a { margin-left: auto; color: var(--accent); }
+.assignment-fields { display: grid; gap: .7rem; margin-top: .75rem; }
 .rejected-strategies { margin-top: .85rem; color: var(--text-muted); }
 .rejected-strategies ul { display: flex; flex-direction: column; gap: .4rem; padding-left: 1.2rem; }
 .rejected-strategies li { display: flex; flex-direction: column; gap: .1rem; }

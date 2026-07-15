@@ -18,7 +18,8 @@ from apps.strategies.models import StrategyDefinition, StrategyInstance
 from apps.strategies.plugins import get_plugin
 
 from .models import (
-    GoalStrategySelection,
+    GoalInstrumentSelection,
+    GoalStrategyAssignment,
     PortfolioConstructionPlan,
     PortfolioConstructionRun,
     PortfolioConstructionTarget,
@@ -143,12 +144,33 @@ def eligible_strategies(goal):
     }
 
 
-def validate_selection(*, goal, definition, instrument, execution_timeframe, parameter_overrides):
+def validate_instrument_selection(*, instrument, minimum_weight=None, maximum_weight=None):
+    if not instrument.active or not instrument.tradable or instrument.asset_class != "STK":
+        raise ConstructionError("Instrument must be an active, tradable stock")
+    minimum = None if minimum_weight is None else D(str(minimum_weight))
+    maximum = None if maximum_weight is None else D(str(maximum_weight))
+    if minimum is not None and not D(0) <= minimum <= D(1):
+        raise ConstructionError("minimum_weight must be between 0 and 1")
+    if maximum is not None and not D(0) <= maximum <= D(1):
+        raise ConstructionError("maximum_weight must be between 0 and 1")
+    if minimum is not None and maximum is not None and minimum > maximum:
+        raise ConstructionError("minimum_weight must not exceed maximum_weight")
+    return minimum, maximum
+
+
+def validate_assignment(
+    *, goal_instrument_selection, definition, execution_timeframe, parameter_overrides,
+    strategy_share=1, risk_policy=None, order_policy=None,
+):
+    goal = goal_instrument_selection.goal_allocation
+    validate_instrument_selection(
+        instrument=goal_instrument_selection.instrument,
+        minimum_weight=goal_instrument_selection.minimum_weight,
+        maximum_weight=goal_instrument_selection.maximum_weight,
+    )
     eligibility = strategy_eligibility(definition, goal)
     if not eligibility["eligible"]:
         raise ConstructionError(eligibility["reason"])
-    if not instrument.active or not instrument.tradable or instrument.asset_class != "STK":
-        raise ConstructionError("Instrument must be an active, tradable stock")
     if execution_timeframe not in definition.supported_timeframes:
         raise ConstructionError(f"Unsupported execution timeframe {execution_timeframe}")
     if not isinstance(parameter_overrides, dict):
@@ -158,30 +180,69 @@ def validate_selection(*, goal, definition, instrument, execution_timeframe, par
     except ValueError as exc:
         raise ConstructionError(str(exc)) from exc
     if parameters.get("direction", "LONG") != "LONG":
-        raise ConstructionError("Portfolio Builder selections must be long-only")
+        raise ConstructionError("Portfolio Builder assignments must be long-only")
+    share = D(str(strategy_share))
+    if not D(0) <= share <= D(1):
+        raise ConstructionError("strategy_share must be between 0 and 1")
+    if risk_policy and (not risk_policy.enabled or risk_policy.allow_short):
+        raise ConstructionError("Risk policy must be enabled and long-only")
+    if order_policy and not order_policy.enabled:
+        raise ConstructionError("Order policy must be enabled")
     return parameters
 
 
-def _selection_snapshot(selection):
+def _instrument_snapshot(selection):
     return {
         "id": selection.pk,
         "goal_id": selection.goal_allocation_id,
-        "strategy_definition_id": selection.strategy_definition_id,
-        "strategy_key": selection.strategy_definition.key,
-        "strategy_name": selection.strategy_definition.name,
         "instrument_id": selection.instrument_id,
         "symbol": selection.instrument.symbol,
-        "execution_timeframe": selection.execution_timeframe,
-        "parameter_overrides": selection.parameter_overrides,
+        "minimum_weight": decimal_string(selection.minimum_weight) if selection.minimum_weight is not None else None,
+        "maximum_weight": decimal_string(selection.maximum_weight) if selection.maximum_weight is not None else None,
+        "display_order": selection.display_order,
         "enabled": selection.enabled,
     }
+
+
+def _assignment_snapshot(assignment):
+    return {
+        "id": assignment.pk,
+        "goal_instrument_id": assignment.goal_instrument_selection_id,
+        "goal_id": assignment.goal_instrument_selection.goal_allocation_id,
+        "strategy_definition_id": assignment.strategy_definition_id,
+        "strategy_key": assignment.strategy_definition.key,
+        "strategy_name": assignment.strategy_definition.name,
+        "instrument_id": assignment.goal_instrument_selection.instrument_id,
+        "symbol": assignment.goal_instrument_selection.instrument.symbol,
+        "execution_timeframe": assignment.execution_timeframe,
+        "parameter_overrides": assignment.parameter_overrides,
+        "parameter_hash": assignment.parameter_hash,
+        "strategy_share": decimal_string(assignment.strategy_share),
+        "risk_policy_id": assignment.risk_policy_id,
+        "order_policy_id": assignment.order_policy_id,
+        "create_instance": assignment.create_instance,
+        "enabled": assignment.enabled,
+    }
+
+
+def assignment_share_validation(instrument_selection, assignments=None):
+    assignments = list(assignments if assignments is not None else instrument_selection.assignments.all())
+    owning = [item for item in assignments if item.enabled and item.create_instance]
+    total = sum((D(str(item.strategy_share)) for item in owning), D(0))
+    errors = []
+    if not owning:
+        errors.append("At least one enabled assignment that creates an instance is required")
+    elif total != D(1):
+        errors.append(f"Enabled strategy shares must total exactly 100% (currently {decimal_string(total * 100)}%)")
+    return {"total": total, "valid": not errors, "errors": errors}
 
 
 def snapshot_plan(plan):
     require_plan_ready(plan)
     goals = list(plan.goals.filter(enabled=True).order_by("display_order", "pk"))
     goal_rows = []
-    selection_rows = []
+    instrument_rows = []
+    assignment_rows = []
     policy_rows = {}
     for goal in goals:
         rules = resolved_goal_rules(goal.timeframe_bucket, goal.risk_level)
@@ -196,16 +257,34 @@ def snapshot_plan(plan):
         policy_rows[str(goal.pk)] = {
             key: decimal_string(value) if isinstance(value, D) else value for key, value in rules.items()
         }
-        for selection in goal.selections.filter(enabled=True).select_related("strategy_definition", "instrument"):
-            # Revalidate mutable definitions and profiles at the snapshot boundary.
-            validate_selection(
-                goal=goal,
-                definition=selection.strategy_definition,
+        selections = goal.instrument_selections.filter(enabled=True).select_related("instrument")
+        for selection in selections:
+            validate_instrument_selection(
                 instrument=selection.instrument,
-                execution_timeframe=selection.execution_timeframe,
-                parameter_overrides=selection.parameter_overrides,
+                minimum_weight=selection.minimum_weight,
+                maximum_weight=selection.maximum_weight,
             )
-            selection_rows.append(_selection_snapshot(selection))
+            instrument_rows.append(_instrument_snapshot(selection))
+            assignments = list(selection.assignments.select_related(
+                "strategy_definition", "risk_policy", "order_policy",
+            ))
+            for assignment in assignments:
+                if not assignment.enabled:
+                    continue
+                parameters = validate_assignment(
+                    goal_instrument_selection=selection,
+                    definition=assignment.strategy_definition,
+                    execution_timeframe=assignment.execution_timeframe,
+                    parameter_overrides=assignment.parameter_overrides,
+                    strategy_share=assignment.strategy_share,
+                    risk_policy=assignment.risk_policy,
+                    order_policy=assignment.order_policy,
+                )
+                if parameters != assignment.parameter_overrides:
+                    raise ConstructionError("Stored assignment parameters are not canonical; save the assignment again")
+                if assignment.parameter_hash != canonical_request_hash("parameters", parameters):
+                    raise ConstructionError("Stored assignment parameter identity is invalid; save the assignment again")
+                assignment_rows.append(_assignment_snapshot(assignment))
     return {
         "plan": {
             "id": plan.pk,
@@ -215,7 +294,8 @@ def snapshot_plan(plan):
             "version": plan.version,
         },
         "goals": goal_rows,
-        "selections": selection_rows,
+        "instruments": instrument_rows,
+        "assignments": assignment_rows,
         "policies": policy_rows,
     }
 
@@ -279,7 +359,8 @@ def create_construction_run(
         nav=nav,
         plan_snapshot=snapshot["plan"],
         goal_snapshot=snapshot["goals"],
-        selection_snapshot=snapshot["selections"],
+        instrument_snapshot=snapshot["instruments"],
+        assignment_snapshot=snapshot["assignments"],
         policy_snapshot=snapshot["policies"],
     )
     OperationAttempt.objects.create(
@@ -341,18 +422,23 @@ def run_construction(construction_run, *, refresh_history=True):
         status="QUEUED",
     ).update(status="PROCESSING")
     try:
-        selections_by_goal = {}
-        for selection in run.selection_snapshot:
+        instruments_by_goal = {}
+        for selection in run.instrument_snapshot:
             if selection.get("enabled", True):
-                selections_by_goal.setdefault(int(selection["goal_id"]), []).append(selection)
+                instruments_by_goal.setdefault(int(selection["goal_id"]), []).append(selection)
+        assignments_by_instrument = {}
+        for assignment in run.assignment_snapshot:
+            if assignment.get("enabled", True):
+                assignments_by_instrument.setdefault(int(assignment["goal_instrument_id"]), []).append(assignment)
         goal_results = []
         combined = {}
         combined_contributions = {}
+        strategy_aggregates = {}
         all_warnings = []
         instruments_by_id = {
             item.pk: item
             for item in Instrument.objects.filter(
-                pk__in={int(item["instrument_id"]) for item in run.selection_snapshot},
+                pk__in={int(item["instrument_id"]) for item in run.instrument_snapshot},
                 active=True,
                 tradable=True,
                 asset_class="STK",
@@ -364,9 +450,10 @@ def run_construction(construction_run, *, refresh_history=True):
             rules = run.policy_snapshot[str(goal_id)]
             minimum_cash = D(rules["minimum_cash_weight"])
             maximum_stock = D(rules["maximum_stock_weight"])
-            selections = selections_by_goal.get(goal_id, [])
+            selections = instruments_by_goal.get(goal_id, [])
             instrument_ids = sorted({int(item["instrument_id"]) for item in selections})
             instruments = [instruments_by_id[item_id] for item_id in instrument_ids if item_id in instruments_by_id]
+            selections_by_instrument_id = {int(item["instrument_id"]): item for item in selections}
             warnings = []
             apply_blocked = False
             local_weights = {}
@@ -388,7 +475,14 @@ def run_construction(construction_run, *, refresh_history=True):
                     "message": "No stocks are selected; preview is cash-only and apply is blocked for this goal",
                 })
             elif len(instruments) == 1:
-                stock_weight = min(D(1) - minimum_cash, maximum_stock)
+                selection = selections_by_instrument_id[instruments[0].pk]
+                local_minimum = D(selection["minimum_weight"] or 0)
+                local_maximum = min(maximum_stock, D(selection["maximum_weight"] or 1))
+                stock_weight = min(D(1) - minimum_cash, local_maximum)
+                if local_minimum > stock_weight:
+                    raise ConstructionError(
+                        f"Weight bounds are infeasible for {selection['symbol']} in goal {goal['name']}"
+                    )
                 local_weights[instruments[0].pk] = stock_weight
                 cash_weight = D(1) - stock_weight
                 if stock_weight < D(1) - minimum_cash:
@@ -398,13 +492,22 @@ def run_construction(construction_run, *, refresh_history=True):
                     })
                 metrics = _single_stock_metrics(instruments, local_weights, refresh_history)
             else:
-                stock_total = min(D(1) - minimum_cash, maximum_stock * len(instruments))
+                minimum_weights = []
+                maximum_weights = []
+                for instrument in instruments:
+                    selection = selections_by_instrument_id[instrument.pk]
+                    minimum_weights.append(D(selection["minimum_weight"] or 0))
+                    maximum_weights.append(min(maximum_stock, D(selection["maximum_weight"] or 1)))
+                stock_total = min(D(1) - minimum_cash, sum(maximum_weights, D(0)))
+                if sum(minimum_weights, D(0)) > stock_total:
+                    raise ConstructionError(f"Weight bounds are infeasible for goal {goal['name']}")
                 cash_weight = D(1) - stock_total
                 solved = optimize_explicit_universe(
                     instruments,
                     method=rules["optimizer_method"],
                     cash_weight=cash_weight,
-                    maximum_weight=maximum_stock,
+                    minimum_weight=minimum_weights,
+                    maximum_weight=maximum_weights,
                     lookback_days=int(rules["lookback_days"]),
                     minimum_history_observations=int(rules["minimum_history_observations"]),
                     maximum_turnover=10,
@@ -432,9 +535,74 @@ def run_construction(construction_run, *, refresh_history=True):
                     "portfolio_contribution": decimal_string(contribution),
                 }
                 combined_contributions.setdefault(instrument_id, []).append(contribution_row)
+                selection = selections_by_instrument_id[instrument_id]
+                assignments = [
+                    item for item in assignments_by_instrument.get(int(selection["id"]), [])
+                    if item.get("create_instance", True)
+                ]
+                share_total = sum((D(item["strategy_share"]) for item in assignments), D(0))
+                share_valid = bool(assignments) and share_total == D(1)
+                if not share_valid:
+                    apply_blocked = True
+                    message = (
+                        "At least one enabled assignment that creates an instance is required"
+                        if not assignments else
+                        f"Enabled strategy shares must total exactly 100% (currently {decimal_string(share_total * 100)}%)"
+                    )
+                    warnings.append({
+                        "code": "INVALID_STRATEGY_SHARES",
+                        "instrument_id": instrument_id,
+                        "symbol": selection["symbol"],
+                        "message": message,
+                    })
+                strategy_rows = []
+                for assignment in assignments:
+                    controlled_weight = contribution * D(assignment["strategy_share"])
+                    identity = (
+                        int(assignment["strategy_definition_id"]),
+                        instrument_id,
+                        assignment["execution_timeframe"],
+                        assignment["parameter_hash"],
+                        assignment.get("risk_policy_id"),
+                        assignment.get("order_policy_id"),
+                    )
+                    aggregate = strategy_aggregates.setdefault(identity, {
+                        "strategy_definition_id": identity[0],
+                        "strategy_key": assignment["strategy_key"],
+                        "strategy_name": assignment["strategy_name"],
+                        "instrument_id": instrument_id,
+                        "symbol": assignment["symbol"],
+                        "execution_timeframe": assignment["execution_timeframe"],
+                        "parameter_hash": assignment["parameter_hash"],
+                        "parameter_overrides": assignment["parameter_overrides"],
+                        "risk_policy_id": assignment.get("risk_policy_id"),
+                        "order_policy_id": assignment.get("order_policy_id"),
+                        "target_weight": D(0),
+                        "assignment_ids": [],
+                        "contributions": [],
+                    })
+                    aggregate["target_weight"] += controlled_weight
+                    aggregate["assignment_ids"].append(int(assignment["id"]))
+                    aggregate["contributions"].append({
+                        "assignment_id": int(assignment["id"]),
+                        "goal_id": goal_id,
+                        "strategy_share": assignment["strategy_share"],
+                        "portfolio_weight": decimal_string(controlled_weight),
+                    })
+                    strategy_rows.append({
+                        "assignment_id": int(assignment["id"]),
+                        "strategy_definition_id": int(assignment["strategy_definition_id"]),
+                        "strategy_name": assignment["strategy_name"],
+                        "strategy_share": assignment["strategy_share"],
+                        "portfolio_weight": decimal_string(controlled_weight),
+                    })
                 stocks.append({
                     "instrument_id": instrument_id,
                     "symbol": instruments_by_id[instrument_id].symbol,
+                    "goal_instrument_id": int(selection["id"]),
+                    "strategy_share_total": decimal_string(share_total),
+                    "strategy_share_valid": share_valid,
+                    "strategies": strategy_rows,
                     **contribution_row,
                 })
             result = {
@@ -462,6 +630,16 @@ def run_construction(construction_run, *, refresh_history=True):
         final_instruments = [instruments_by_id[key] for key in combined]
         combined_metrics = _single_stock_metrics(final_instruments, combined, refresh_history)
         all_warnings.extend(combined_metrics.get("warnings", []))
+        strategy_targets = []
+        for identity, item in strategy_aggregates.items():
+            strategy_targets.append({
+                **{key: value for key, value in item.items() if key != "target_weight"},
+                "identity": canonical_request_hash("builder_strategy_identity", identity),
+                "target_weight": decimal_string(_quantize_weight(item["target_weight"])),
+            })
+        strategy_targets.sort(key=lambda item: (
+            item["strategy_name"], item["symbol"], item["execution_timeframe"], item["identity"]
+        ))
         positions = {
             item.instrument_id: D(item.quantity) * D(item.market_price) / D(run.nav)
             for item in PortfolioPosition.objects.filter(portfolio=run.plan.portfolio)
@@ -486,7 +664,7 @@ def run_construction(construction_run, *, refresh_history=True):
                 "cash": decimal_string(cash_weight),
                 "stocks": {str(key): decimal_string(value) for key, value in combined.items()},
             }
-            run.metrics = _metric_strings(combined_metrics)
+            run.metrics = {**_metric_strings(combined_metrics), "strategy_targets": strategy_targets}
             run.warnings = all_warnings
             run.status = "COMPLETED"
             run.retryable = False
@@ -564,62 +742,78 @@ def plan_construction_rebalance(construction_run, idempotency_key, *, mode="SHAD
     )
 
 
-def _instance_name(run, selection, suffix=0):
-    base = f"Builder {selection['strategy_name']} {selection['symbol']} {selection['execution_timeframe']}"
+def _instance_name(run, target, suffix=0):
+    base = f"Builder {target['strategy_name']} {target['symbol']} {target['execution_timeframe']}"
     if suffix:
         base = f"{base} {suffix}"
     return base[:128]
 
 
 def create_or_reuse_strategy_instances(run):
-    from apps.strategies.framework import create_instance
+    from apps.strategies.framework import create_instance, update_instance
+    from apps.strategies.models import OrderPolicy, StrategyRiskPolicy
 
     linked = []
-    cache = {}
-    for selection in run.selection_snapshot:
-        identity = (
-            int(selection["strategy_definition_id"]),
-            int(selection["instrument_id"]),
-            selection["execution_timeframe"],
-            canonical_request_hash("parameters", selection["parameter_overrides"]),
+    for target in run.metrics.get("strategy_targets", []):
+        target_configuration = {
+            "target_weight": target["target_weight"],
+            "capital_share": target["target_weight"],
+            "priority": 100,
+            "construction_run_id": str(run.pk),
+        }
+        candidates = StrategyInstance.objects.filter(
+            portfolio=run.plan.portfolio,
+            definition_id=int(target["strategy_definition_id"]),
+            instrument_id=int(target["instrument_id"]),
+            timeframe=target["execution_timeframe"],
+            risk_policy_id=target.get("risk_policy_id"),
+            order_policy_id=target.get("order_policy_id"),
+            execution_mode="SHADOW",
+            enabled=False,
+        ).order_by("pk")
+        instance = next(
+            (item for item in candidates if item.parameters == target["parameter_overrides"]),
+            None,
         )
-        instance = cache.get(identity)
         if not instance:
-            candidates = StrategyInstance.objects.filter(
-                portfolio=run.plan.portfolio,
-                definition_id=identity[0],
-                instrument_id=identity[1],
-                timeframe=identity[2],
-                execution_mode="SHADOW",
-                enabled=False,
+            definition = StrategyDefinition.objects.get(pk=target["strategy_definition_id"], enabled=True)
+            risk_policy = (
+                StrategyRiskPolicy.objects.get(pk=target["risk_policy_id"], enabled=True)
+                if target.get("risk_policy_id") else None
             )
-            instance = next(
-                (item for item in candidates if item.parameters == selection["parameter_overrides"]),
-                None,
+            order_policy = (
+                OrderPolicy.objects.get(pk=target["order_policy_id"], enabled=True)
+                if target.get("order_policy_id") else None
             )
-        if not instance:
-            definition = StrategyDefinition.objects.get(pk=identity[0], enabled=True)
-            name = _instance_name(run, selection)
+            name = _instance_name(run, target)
             suffix = 1
             while StrategyInstance.objects.filter(portfolio=run.plan.portfolio, name=name).exists():
                 suffix += 1
-                name = _instance_name(run, selection, suffix)
+                name = _instance_name(run, target, suffix)
             instance, _ = create_instance(
                 name=name,
                 definition_key=definition.key,
                 portfolio=run.plan.portfolio,
-                instrument_id=identity[1],
-                timeframe=identity[2],
-                parameters=selection["parameter_overrides"],
-                target_configuration={},
+                instrument_id=int(target["instrument_id"]),
+                timeframe=target["execution_timeframe"],
+                parameters=target["parameter_overrides"],
+                target_configuration=target_configuration,
+                risk_policy=risk_policy,
+                order_policy=order_policy,
                 execution_mode="SHADOW",
                 qualify=False,
             )
+        elif instance.target_configuration != target_configuration:
+            instance = update_instance(instance, {"target_configuration": target_configuration})
         if instance.execution_mode != "SHADOW" or instance.enabled:
             raise ConstructionError("Construction-created strategy instances must remain disabled in SHADOW mode")
-        cache[identity] = instance
-        linked.append({"selection_id": selection["id"], "strategy_instance_id": instance.pk})
-        GoalStrategySelection.objects.filter(pk=selection["id"]).update(created_strategy_instance=instance)
+        for assignment_id in target["assignment_ids"]:
+            linked.append({
+                "assignment_id": assignment_id,
+                "strategy_instance_id": instance.pk,
+                "target_weight": target["target_weight"],
+            })
+            GoalStrategyAssignment.objects.filter(pk=assignment_id).update(created_strategy_instance=instance)
     return linked
 
 
@@ -634,7 +828,9 @@ def apply_construction_run(construction_run, idempotency_key, *, mode="SHADOW"):
     if run.status != "COMPLETED":
         raise ConstructionError("Only a completed construction run can be applied")
     if any(item.get("apply_blocked") for item in run.goal_results):
-        raise ConstructionError("Every non-cash-only goal must include at least one selected stock")
+        raise ConstructionError(
+            "Every non-cash-only goal must include at least one stock, and enabled strategy shares must total exactly 100%"
+        )
     if run.applied_rebalance_id:
         if run.application_idempotency_key == idempotency_key:
             return run, run.applied_rebalance, False

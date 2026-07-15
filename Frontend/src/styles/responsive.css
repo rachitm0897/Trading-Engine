@@ -42,6 +42,7 @@
   .builder-total { align-items: flex-start; flex-direction: column; }
   .goal-editor-row { grid-template-columns: auto 1fr; }
   .goal-editor-row label { grid-column: 1 / -1; }
+  .add-goal-stock { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 560px) {

@@ -16,4 +16,4 @@ Every mutating operation that requires idempotency rejects a missing `Idempotenc
 
 All execution remains paper or shadow only. The worker paths do not enable live trading.
 
-Construction preview snapshots the plan version, enabled goals, selections, and resolved fixed rules before it is queued. Editing the draft afterward does not mutate an existing run. Reusing the preview key after editing the plan is an idempotency conflict. Construction application is one-time; matching strategy instances remain disabled in `SHADOW` mode and only one combined target is passed to each rebalance run.
+Construction preview snapshots the plan version, enabled goals, stock universes, strategy assignments, and resolved fixed rules before it is queued. Editing the draft afterward does not mutate an existing run. Reusing the preview key after editing the plan is an idempotency conflict. Construction application is one-time; matching strategy identities aggregate across goals, strategy instances remain disabled in `SHADOW` mode, and only one combined stock target is passed to each rebalance run.

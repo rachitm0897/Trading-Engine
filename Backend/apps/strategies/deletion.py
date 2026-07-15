@@ -332,7 +332,11 @@ def _refresh_subscription(instrument_id, timeframe):
                 reconcile_market_subscription(instrument, timeframe)
             except Exception:
                 # The persisted consumer count remains the recovery source of truth.
-                logger.exception("Failed to reconcile market-data subscription after deleting strategy %s", instance_id)
+                logger.exception(
+                    "Failed to reconcile market-data subscription after deleting strategy for instrument %s at %s",
+                    instrument_id,
+                    timeframe,
+                )
 
         transaction.on_commit(reconcile_after_commit)
 
@@ -366,6 +370,7 @@ def _delete_mutable_records(instance, version_ids):
             strategy_instance=instance
         ).count(),
         "actions": StrategyAction.objects.filter(strategy_instance=instance).count(),
+        "construction_assignments_detached": instance.construction_assignments.count(),
     }
 
     StrategySignal.objects.filter(
@@ -384,6 +389,7 @@ def _delete_mutable_records(instance, version_ids):
     StrategyAttributedPosition.objects.filter(strategy_instance=instance).delete()
     StrategyAllocation.objects.filter(strategy_instance=instance).delete()
     StrategyAction.objects.filter(strategy_instance=instance).delete()
+    instance.construction_assignments.update(created_strategy_instance=None)
     StrategyVersion.objects.filter(strategy_instance=instance).delete()
     OutboxEvent.objects.select_for_update().filter(
         Q(aggregate_type="strategy_instance", aggregate_id=str(instance.pk))

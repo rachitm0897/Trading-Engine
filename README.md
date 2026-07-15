@@ -12,7 +12,7 @@ A paper-first execution platform that turns deterministic strategy targets into 
 
 Kafka carries versioned immutable events through a transactional PostgreSQL outbox. PyFlink normalizes market data, creates event-time 1m/5m/1d OHLCV bars, computes SMA/RSI/Donchian/momentum/volatility/average-volume indicators and publishes price-quality transitions. Backend consumers persist outputs idempotently. Allocation and rebalancing are shadow-first and can create only `OrderIntent`; sizing, risk, OMS, Gateway, ledgers and reconciliation remain mandatory.
 
-The deterministic [Portfolio Builder](docs/PORTFOLIO_BUILDER.md) divides one real portfolio into virtual goal allocations, constructs each goal with fixed timeframe/risk rules and manually selected strategy-stock pairs, merges duplicate stocks, and sends one combined target through the same rebalancer. Goals do not create separate broker portfolios or financial ledgers, and created strategy instances remain disabled in `SHADOW` mode.
+The deterministic [Portfolio Builder](docs/PORTFOLIO_BUILDER.md) divides one real portfolio into virtual goal allocations, constructs each goal from a qualified stock universe with fixed timeframe/risk rules, and separately divides each stock weight among schema-configured strategies. Strategies own constructed stock weight but do not influence Markowitz weighting. Duplicate stocks and compatible strategy identities aggregate across goals, one combined stock target enters the existing rebalancer, and every created or updated strategy instance remains disabled in `SHADOW` mode with an explicit target weight. Goals do not create separate broker portfolios or financial ledgers.
 
 ## Local start
 

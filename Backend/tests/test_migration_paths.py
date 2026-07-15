@@ -142,3 +142,71 @@ def test_dual_strategy_schema_upgrades_to_instance_only_without_losing_reference
     ).strategy_instance_id == migrated.pk
     with pytest.raises(LookupError):
         new_apps.get_model("strategies", "TradingStrategy")
+
+
+def test_portfolio_builder_migration_splits_stocks_and_equal_strategy_shares_then_drops_legacy_model():
+    executor = MigrationExecutor(connection)
+    final_targets = executor.loader.graph.leaf_nodes()
+    old_target = [("portfolio_construction", "0002_seed_strategy_construction_profiles")]
+    executor.migrate(old_target)
+    old_apps = executor.loader.project_state(old_target).apps
+
+    Account = old_apps.get_model("accounts", "BrokerAccount")
+    Portfolio = old_apps.get_model("portfolios", "TradingPortfolio")
+    Instrument = old_apps.get_model("instruments", "Instrument")
+    Definition = old_apps.get_model("strategies", "StrategyDefinition")
+    Plan = old_apps.get_model("portfolio_construction", "PortfolioConstructionPlan")
+    Goal = old_apps.get_model("portfolio_construction", "PortfolioGoalAllocation")
+    LegacySelection = old_apps.get_model("portfolio_construction", "GoalStrategySelection")
+
+    account = Account.objects.create(account_id="DU-BUILDER-MIGRATION", net_liquidation=1000, available_cash=1000)
+    portfolio = Portfolio.objects.create(name="Builder migration portfolio", account=account)
+    instrument = Instrument.objects.create(symbol="SPLIT", exchange="SMART")
+    plan = Plan.objects.create(portfolio=portfolio)
+    goal = Goal.objects.create(
+        plan=plan,
+        name="Growth",
+        allocation_weight=1,
+        timeframe_bucket="GROW",
+        risk_level=5,
+    )
+    fixed = Definition.objects.create(
+        key="MIGRATION_FIXED", name="Migration Fixed", plugin_path="migration.Fixed",
+    )
+    sma = Definition.objects.create(
+        key="MIGRATION_SMA", name="Migration SMA", plugin_path="migration.SMA",
+    )
+    LegacySelection.objects.create(
+        goal_allocation=goal,
+        strategy_definition=fixed,
+        instrument=instrument,
+        execution_timeframe="1d",
+        parameter_overrides={"direction": "LONG"},
+        enabled=True,
+    )
+    LegacySelection.objects.create(
+        goal_allocation=goal,
+        strategy_definition=sma,
+        instrument=instrument,
+        execution_timeframe="1d",
+        parameter_overrides={"fast_window": 20, "slow_window": 50, "direction": "LONG"},
+        enabled=True,
+    )
+
+    executor = MigrationExecutor(connection)
+    executor.migrate([("portfolio_construction", "0003_remove_portfolioconstructionrun_selection_snapshot_and_more")])
+    new_apps = executor.loader.project_state(
+        [("portfolio_construction", "0003_remove_portfolioconstructionrun_selection_snapshot_and_more")]
+    ).apps
+    Stock = new_apps.get_model("portfolio_construction", "GoalInstrumentSelection")
+    Assignment = new_apps.get_model("portfolio_construction", "GoalStrategyAssignment")
+    stock = Stock.objects.get(goal_allocation_id=goal.pk, instrument_id=instrument.pk)
+    assignments = list(Assignment.objects.filter(goal_instrument_selection_id=stock.pk).order_by("id"))
+    assert len(assignments) == 2
+    assert {str(item.strategy_share) for item in assignments} == {"0.50000000"}
+    assert all(item.parameter_hash and len(item.parameter_hash) == 64 for item in assignments)
+    with pytest.raises(LookupError):
+        new_apps.get_model("portfolio_construction", "GoalStrategySelection")
+
+    executor = MigrationExecutor(connection)
+    executor.migrate(final_targets)

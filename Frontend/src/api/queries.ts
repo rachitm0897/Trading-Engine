@@ -32,7 +32,8 @@ import type {
   PortfolioConstructionPlan,
   PortfolioConstructionRun,
   ConstructionEligibility,
-  GoalStrategySelection,
+  GoalInstrumentSelection,
+  GoalStrategyAssignment,
 } from './types'
 
 const POLL_INTERVAL = 15_000
@@ -224,10 +225,16 @@ export const queries = {
     enabled: Boolean(goalId),
     staleTime: 30_000,
   }),
-  constructionSelections: (goalId?: number | null) => queryOptions({
-    queryKey: ['construction-selections', goalId ?? 'none'],
-    queryFn: () => request<GoalStrategySelection[]>(`portfolio-construction/goals/${goalId}/selections/`),
+  constructionInstruments: (goalId?: number | null) => queryOptions({
+    queryKey: ['construction-instruments', goalId ?? 'none'],
+    queryFn: () => request<GoalInstrumentSelection[]>(`portfolio-construction/goals/${goalId}/instruments/`),
     enabled: Boolean(goalId),
+    staleTime: 15_000,
+  }),
+  constructionAssignments: (goalInstrumentId?: number | null) => queryOptions({
+    queryKey: ['construction-assignments', goalInstrumentId ?? 'none'],
+    queryFn: () => request<GoalStrategyAssignment[]>(`portfolio-construction/instruments/${goalInstrumentId}/assignments/`),
+    enabled: Boolean(goalInstrumentId),
     staleTime: 15_000,
   }),
 }

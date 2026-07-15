@@ -739,7 +739,7 @@ export interface PortfolioGoalAllocation {
   enabled: boolean
   display_order: number
   resolved_rules: GoalResolvedRules
-  selection_count: number
+  instrument_count: number
   created_at: string
   updated_at: string
 }
@@ -788,8 +788,26 @@ export interface ConstructionEligibility {
   rejected: ConstructionStrategyOption[]
 }
 
-export interface GoalStrategySelection {
+export interface GoalInstrumentSelection {
   id: number
+  goal_id: number
+  instrument_id: number
+  symbol: string
+  asset_class: string
+  exchange: string
+  currency: string
+  minimum_weight: DecimalValue | null
+  maximum_weight: DecimalValue | null
+  display_order: number
+  enabled: boolean
+  assignment_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface GoalStrategyAssignment {
+  id: number
+  goal_instrument_id: number
   goal_id: number
   strategy_definition_id: number
   strategy_key: string
@@ -798,20 +816,37 @@ export interface GoalStrategySelection {
   symbol: string
   execution_timeframe: string
   parameter_overrides: JsonRecord
+  parameter_hash: string
+  strategy_share: DecimalValue
+  risk_policy_id: number | null
+  order_policy_id: number | null
+  create_instance: boolean
   enabled: boolean
   created_strategy_instance_id: number | null
   created_at: string
   updated_at: string
 }
 
+export interface GoalConstructionStrategy {
+  assignment_id: number
+  strategy_definition_id: number
+  strategy_name: string
+  strategy_share: DecimalValue
+  portfolio_weight: DecimalValue
+}
+
 export interface GoalConstructionStock {
   instrument_id: number
   symbol: string
+  goal_instrument_id: number
   goal_id: number
   goal_name: string
   goal_allocation_weight: DecimalValue
   local_weight: DecimalValue
   portfolio_contribution: DecimalValue
+  strategy_share_total: DecimalValue
+  strategy_share_valid: boolean
+  strategies: GoalConstructionStrategy[]
 }
 
 export interface GoalConstructionResult {
@@ -862,7 +897,22 @@ export interface PortfolioConstructionRun {
   attempt_count: number
   nav: DecimalValue
   final_target_weights: {cash?: DecimalValue; stocks?: Record<string, DecimalValue>}
-  metrics: {expected_return?: DecimalValue; expected_volatility?: DecimalValue; sharpe_ratio?: DecimalValue; strategy_instances?: {selection_id: number; strategy_instance_id: number}[]}
+  metrics: {
+    expected_return?: DecimalValue
+    expected_volatility?: DecimalValue
+    sharpe_ratio?: DecimalValue
+    strategy_targets?: {
+      identity: string
+      strategy_definition_id: number
+      strategy_name: string
+      instrument_id: number
+      symbol: string
+      execution_timeframe: string
+      target_weight: DecimalValue
+      assignment_ids: number[]
+    }[]
+    strategy_instances?: {assignment_id: number; strategy_instance_id: number; target_weight: DecimalValue}[]
+  }
   warnings: unknown[]
   goals?: GoalConstructionResult[]
   targets?: PortfolioConstructionTarget[]

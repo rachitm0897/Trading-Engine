@@ -6,13 +6,20 @@ import {Link} from 'react-router-dom'
 import {API_BASE_URL, mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
 import type {
-  GoalStrategySelection,
+  ConstructionStrategyOption,
+  GoalInstrumentSelection,
+  GoalStrategyAssignment,
   GoalTimeframe,
   Instrument,
+  InstrumentResolution,
   PortfolioConstructionPlan,
   PortfolioConstructionRun,
   PortfolioGoalAllocation,
+  Scalar,
+  StrategyPolicies,
 } from '../../api/types'
+import {BrokerInstrumentSearch} from '../../components/BrokerInstrumentSearch'
+import {SchemaParameterForm} from '../../components/SchemaParameterForm'
 import {
   ConfirmActionDialog,
   DataTable,
@@ -49,6 +56,21 @@ async function pollConstruction(initial: PortfolioConstructionRun, applying = fa
   for (let attempt = 0; attempt < 120 && !complete(value); attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, 500))
     value = await request<PortfolioConstructionRun>(`portfolio-construction/runs/${value.id}/`)
+  }
+  if (applying) {
+    if (value.application_status === 'FAILED') {
+      throw new Error(value.last_error || 'Portfolio construction could not be applied')
+    }
+    if (value.application_status !== 'APPLIED') {
+      throw new Error('Portfolio construction apply did not complete before polling timed out')
+    }
+  } else {
+    if (value.status === 'FAILED') {
+      throw new Error(value.last_error || 'Portfolio construction preview failed')
+    }
+    if (value.status !== 'COMPLETED') {
+      throw new Error('Portfolio construction preview did not complete before polling timed out')
+    }
   }
   return value
 }
@@ -162,6 +184,7 @@ export function PortfolioBuilderPage() {
   const validDraft = localErrors.length === 0
   const stockInstruments = (instruments.data || []).filter((item) => item.asset_class === 'STK' && item.active && item.tradable)
   const shownPreview = preview || runs.data?.find((item) => item.status === 'COMPLETED') || null
+  const previewErrorMessage = previewMutation.error instanceof Error ? previewMutation.error.message : ''
 
   if (!selectedPortfolioId) return <EmptyState title="Select a portfolio" description="Portfolio Builder needs one broker-backed portfolio context." />
   if (plans.isLoading) return <Skeleton lines={7} />
@@ -178,7 +201,7 @@ export function PortfolioBuilderPage() {
       {createPlan.isError && <ErrorState error={createPlan.error} compact />}
     </Panel> : <>
       <ol className="builder-steps" aria-label="Portfolio Builder steps">
-        {['Allocate goals', 'Select strategies & stocks', 'Preview', 'Apply'].map((label, index) => {
+        {['Allocate goals', 'Add stocks & assign strategies', 'Preview', 'Apply'].map((label, index) => {
           const number = index + 1
           return <li key={label} className={step === number ? 'active' : step > number ? 'complete' : ''}>
             <button type="button" onClick={() => number <= step && setStep(number)}><span>{step > number ? <Check /> : number}</span><strong>{label}</strong></button>
@@ -205,7 +228,7 @@ export function PortfolioBuilderPage() {
         </div>
         {(addGoal.isError || saveGoals.isError || removeGoal.isError) && <ErrorState title="Goal changes were not saved" error={addGoal.error || saveGoals.error || removeGoal.error} compact />}
       </Panel>}
-      {step === 2 && <Panel title="2. Select strategies and stocks" description="Selections are stored separately for every goal. Rejected strategies remain visible with a reason.">
+      {step === 2 && <Panel title="2. Add stocks and assign strategies" description="Stocks define each optimizer universe. Strategy assignments divide ownership of a stock weight without changing it.">
         <div className="goal-selection-list">
           {plan.goals.filter((goal) => goal.enabled).map((goal) => <GoalSelections key={goal.id} goal={goal} instruments={stockInstruments} />)}
         </div>
@@ -213,7 +236,10 @@ export function PortfolioBuilderPage() {
           <button className="button-secondary" onClick={() => setStep(1)}>Back to allocations</button>
           <button className="button-primary" disabled={!plan.ready_to_preview || previewMutation.isPending} onClick={() => previewMutation.mutate()}>{previewMutation.isPending ? 'Constructing goals…' : 'Preview combined portfolio'}</button>
         </div>
-        {previewMutation.isError && <ErrorState title="Construction preview failed" error={previewMutation.error} compact />}
+        {previewMutation.isError && <>
+          <ErrorState title="Construction preview failed" error={previewMutation.error} compact />
+          {previewErrorMessage.includes('Finnhub API key is not configured') && <p className="inline-note">Portfolio preview needs recent price history. <Link to="/system">Configure Finnhub in System</Link>, then retry.</p>}
+        </>}
       </Panel>}
       {step === 3 && <PreviewStep run={shownPreview} onBack={() => setStep(2)} onContinue={() => setStep(4)} />}
       {step === 4 && <Panel title="4. Apply once" description={`Apply one combined target through the existing ${system.data?.execution_mode || 'SHADOW'} rebalance and execution safety pipeline.`}>
@@ -223,7 +249,7 @@ export function PortfolioBuilderPage() {
             <div><strong>Construction run {shownPreview.id}</strong><span>{shownPreview.targets?.length || 0} merged stock targets · {shownPreview.goals?.length || 0} goals</span></div>
           </div>
           {shownPreview.applied_rebalance ? <div className="inline-success"><StatusBadge status={shownPreview.applied_rebalance.status} /><div><strong>Applied through rebalance {shownPreview.applied_rebalance.id}</strong><p>Strategy instances were left disabled in SHADOW mode for manual review.</p><div className="inline-links"><a href={`${API_BASE_URL}/portfolio-construction/runs/${shownPreview.id}/`} target="_blank" rel="noreferrer">Construction run {shownPreview.id}</a><a href={`${API_BASE_URL}/rebalancing/runs/${shownPreview.applied_rebalance.id}/`} target="_blank" rel="noreferrer">Rebalance {shownPreview.applied_rebalance.id}</a>{shownPreview.metrics.strategy_instances?.map((item) => <Link key={item.strategy_instance_id} to={`/strategies/${item.strategy_instance_id}`}>Strategy {item.strategy_instance_id}</Link>)}<Link to="/portfolio">View portfolio</Link><Link to="/strategies">Review strategies</Link><Link to="/activity">Orders & activity</Link></div></div></div> : <div className="system-actions"><button className="button-secondary" onClick={() => setStep(3)}>Back to preview</button><button className="button-primary" disabled={Boolean(shownPreview.goals?.some((goal) => goal.apply_blocked)) || applyMutation.isPending} onClick={() => setConfirmOpen(true)}>Apply combined target</button></div>}
-          {shownPreview.goals?.some((goal) => goal.apply_blocked) && <div className="inline-warning"><StatusBadge status="BLOCKED" /><p>Add at least one stock to every non-NOW goal before applying.</p></div>}
+          {shownPreview.goals?.some((goal) => goal.apply_blocked) && <div className="inline-warning"><StatusBadge status="BLOCKED" /><p>Add at least one stock to every non-NOW goal and make each stock's enabled strategy shares total 100% before applying.</p></div>}
           {applyMutation.isError && <ErrorState title="Construction application was blocked" error={applyMutation.error} compact />}
         </>}
       </Panel>}
@@ -268,61 +294,142 @@ function GoalEditor({goal, plan, onChange, onRemove, removeDisabled, index}: {
 function GoalSelections({goal, instruments}: {goal: PortfolioGoalAllocation; instruments: Instrument[]}) {
   const queryClient = useQueryClient()
   const eligibility = useQuery(queries.constructionEligibility(goal.id))
-  const selections = useQuery(queries.constructionSelections(goal.id))
-  const [strategyId, setStrategyId] = useState<number | ''>('')
-  const [instrumentId, setInstrumentId] = useState<number | ''>('')
-  const [timeframe, setTimeframe] = useState('')
-  const strategies = eligibility.data?.eligible || []
-  const strategy = strategies.find((item) => item.strategy_definition_id === strategyId)
-  useEffect(() => {
-    if (!strategyId && strategies[0]) setStrategyId(strategies[0].strategy_definition_id)
-  }, [strategyId, strategies])
-  useEffect(() => {
-    const selected = strategies.find((item) => item.strategy_definition_id === strategyId)
-    if (selected && !selected.execution_timeframes.includes(timeframe)) setTimeframe(selected.execution_timeframes[0] || '')
-  }, [strategyId, strategies, timeframe])
+  const policies = useQuery(queries.strategyPolicies())
+  const stocks = useQuery(queries.constructionInstruments(goal.id))
+  const [ticker, setTicker] = useState('')
+  const [resolution, setResolution] = useState<InstrumentResolution | null>(null)
   const refresh = async () => {
     await Promise.all([
-      queryClient.invalidateQueries({queryKey: ['construction-selections', goal.id]}),
+      queryClient.invalidateQueries({queryKey: ['construction-instruments', goal.id]}),
       queryClient.invalidateQueries({queryKey: ['construction-plans']}),
     ])
   }
   const add = useMutation({
     mutationFn: () => {
-      if (!strategy || !instrumentId || !timeframe) throw new Error('Choose a strategy, stock, and execution timeframe')
-      return request<GoalStrategySelection>(`portfolio-construction/goals/${goal.id}/selections/`, mutationOptions('POST', {
-        strategy_definition_id: strategy.strategy_definition_id,
-        instrument_id: instrumentId,
-        execution_timeframe: timeframe,
-        parameter_overrides: {...strategy.default_parameters, direction: 'LONG'},
+      if (!resolution?.instrument_id) throw new Error('Qualify an exact IBKR stock contract first')
+      return request<GoalInstrumentSelection>(`portfolio-construction/goals/${goal.id}/instruments/`, mutationOptions('POST', {
+        instrument_id: resolution.instrument_id,
       }))
     },
-    onSuccess: refresh,
+    onSuccess: async () => {setTicker(''); setResolution(null); await refresh()},
   })
   const remove = useMutation({
-    mutationFn: (selectionId: number) => request<{id: number}>(`portfolio-construction/selections/${selectionId}/`, mutationOptions('DELETE')),
+    mutationFn: (stockId: number) => request<{id: number}>(`portfolio-construction/instruments/${stockId}/`, mutationOptions('DELETE')),
     onSuccess: refresh,
   })
-  if (goal.timeframe_bucket === 'NOW') return <section className="goal-selection-card"><header><div><h3>{goal.name}</h3><p>{formatPercent(goal.allocation_weight)} · {goal.resolved_rules.timeframe_label} · {goal.resolved_rules.risk_label}</p></div><StatusBadge status="CASH ONLY" /></header><p className="inline-note">NOW goals are intentionally 100% cash and do not accept strategy-stock selections.</p></section>
+  if (goal.timeframe_bucket === 'NOW') return <section className="goal-selection-card"><header><div><h3>{goal.name}</h3><p>{formatPercent(goal.allocation_weight)} · {goal.resolved_rules.timeframe_label} · {goal.resolved_rules.risk_label}</p></div><StatusBadge status="CASH ONLY" /></header><p className="inline-note">NOW goals are intentionally 100% cash and do not accept stocks or strategy assignments.</p></section>
   return <section className="goal-selection-card">
-    <header><div><h3>{goal.name}</h3><p>{formatPercent(goal.allocation_weight)} · {goal.resolved_rules.timeframe_label} · {goal.resolved_rules.risk_label}</p></div><StatusBadge status={`${selections.data?.length || 0} SELECTED`} /></header>
-    {eligibility.isLoading || selections.isLoading ? <Skeleton lines={3} /> : eligibility.isError || selections.isError ? <ErrorState error={eligibility.error || selections.error} compact /> : <>
-      <div className="form-grid three-columns">
-        <label>Strategy<select aria-label={`${goal.name} strategy`} value={strategyId} onChange={(event) => setStrategyId(Number(event.target.value))}>{strategies.map((item) => <option key={item.strategy_definition_id} value={item.strategy_definition_id}>{item.name}</option>)}</select></label>
-        <label>Stock<select aria-label={`${goal.name} stock`} value={instrumentId} onChange={(event) => setInstrumentId(Number(event.target.value))}><option value="">Choose a stock</option>{instruments.map((item) => <option key={item.id} value={item.id}>{item.symbol} · {item.sector || item.exchange}</option>)}</select></label>
-        <label>Execution timeframe<select aria-label={`${goal.name} execution timeframe`} value={timeframe} onChange={(event) => setTimeframe(event.target.value)}>{(strategy?.execution_timeframes || []).map((item) => <option key={item}>{item}</option>)}</select></label>
-      </div>
-      {strategy && <p className="field-help">{strategy.summary} {strategy.limitations}</p>}
-      <button className="button-secondary" disabled={add.isPending || !strategy || !instrumentId || !timeframe} onClick={() => add.mutate()}><Plus />Add strategy-stock pair</button>
+    <header><div><h3>{goal.name}</h3><p>{formatPercent(goal.allocation_weight)} · {goal.resolved_rules.timeframe_label} · {goal.resolved_rules.risk_label}</p></div><StatusBadge status={`${stocks.data?.length || 0} STOCKS`} /></header>
+    {eligibility.isLoading || policies.isLoading || stocks.isLoading ? <Skeleton lines={3} /> : eligibility.isError || policies.isError || stocks.isError ? <ErrorState error={eligibility.error || policies.error || stocks.error} compact /> : <>
+      <div className="add-goal-stock"><BrokerInstrumentSearch value={ticker} suggestions={instruments} searchLabel={`${goal.name} IBKR stock search`} onValueChange={setTicker} onResolved={setResolution} /><button className="button-secondary" disabled={add.isPending || !resolution?.instrument_id} onClick={() => add.mutate()}><Plus />Add stock</button></div>
       {add.isError && <ErrorState error={add.error} compact />}
-      <ul className="selection-chips">{(selections.data || []).map((item) => <li key={item.id}><div><strong>{item.symbol}</strong><span>{item.strategy_name} · {item.execution_timeframe}</span></div><button className="icon-button" aria-label={`Remove ${item.strategy_name} ${item.symbol}`} disabled={remove.isPending} onClick={() => remove.mutate(item.id)}><Trash2 /></button></li>)}</ul>
+      <div className="goal-stock-list">{(stocks.data || []).map((stock) => <section className="goal-stock-card" key={stock.id}><header><div><strong>{stock.symbol}</strong><span>{stock.exchange} · {stock.currency}</span></div><button className="icon-button" aria-label={`Remove ${stock.symbol} from ${goal.name}`} disabled={remove.isPending} onClick={() => remove.mutate(stock.id)}><Trash2 /></button></header><StockAssignments stock={stock} strategies={eligibility.data?.eligible || []} policies={policies.data} /></section>)}</div>
+      {!stocks.data?.length && <p className="inline-note">Add a qualified stock to define this goal's optimizer universe.</p>}
       <details className="rejected-strategies"><summary>{eligibility.data?.rejected.length || 0} strategies not eligible</summary><ul>{eligibility.data?.rejected.map((item) => <li key={item.strategy_definition_id}><strong>{item.name}</strong><span>{item.reason}</span></li>)}</ul></details>
     </>}
   </section>
 }
 
+function StockAssignments({stock, strategies, policies}: {stock: GoalInstrumentSelection; strategies: ConstructionStrategyOption[]; policies?: StrategyPolicies}) {
+  const queryClient = useQueryClient()
+  const assignments = useQuery(queries.constructionAssignments(stock.id))
+  const refresh = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({queryKey: ['construction-assignments', stock.id]}),
+      queryClient.invalidateQueries({queryKey: ['construction-instruments', stock.goal_id]}),
+      queryClient.invalidateQueries({queryKey: ['construction-plans']}),
+    ])
+  }
+  const owners = (assignments.data || []).filter((item) => item.enabled && item.create_instance)
+  const total = owners.reduce((sum, item) => sum + toNumber(item.strategy_share), 0)
+  const valid = owners.length > 0 && Math.abs(total - 1) < 0.00000001
+  if (assignments.isLoading) return <Skeleton lines={2} />
+  if (assignments.isError) return <ErrorState error={assignments.error} compact />
+  return <div className="stock-assignments"><div className={valid ? 'positive-text' : 'field-error'}>{owners.length ? `Strategy ownership: ${formatPercent(total)}` : 'Add at least one strategy assignment'}{!valid && owners.length > 0 ? ' · must total 100%' : ''}</div>
+    {(assignments.data || []).map((assignment) => <AssignmentEditor key={assignment.id} assignment={assignment} strategies={strategies} policies={policies} onSaved={refresh} />)}
+    <NewAssignmentEditor stock={stock} strategies={strategies} policies={policies} hasOwners={owners.length > 0} onSaved={refresh} />
+  </div>
+}
+
+type AssignmentDraft = {
+  strategyDefinitionId: number | ''
+  timeframe: string
+  parameters: Record<string, Scalar>
+  sharePercentage: string
+  riskPolicyId: string
+  orderPolicyId: string
+  createInstance: boolean
+  enabled: boolean
+}
+
+function assignmentPayload(draft: AssignmentDraft) {
+  return {
+    strategy_definition_id: draft.strategyDefinitionId,
+    execution_timeframe: draft.timeframe,
+    parameter_overrides: {...draft.parameters, direction: 'LONG'},
+    strategy_share: Number(draft.sharePercentage) / 100,
+    risk_policy_id: draft.riskPolicyId ? Number(draft.riskPolicyId) : null,
+    order_policy_id: draft.orderPolicyId ? Number(draft.orderPolicyId) : null,
+    create_instance: draft.createInstance,
+    enabled: draft.enabled,
+  }
+}
+
+function NewAssignmentEditor({stock, strategies, policies, hasOwners, onSaved}: {stock: GoalInstrumentSelection; strategies: ConstructionStrategyOption[]; policies?: StrategyPolicies; hasOwners: boolean; onSaved: () => Promise<void>}) {
+  const first = strategies[0]
+  const [draft, setDraft] = useState<AssignmentDraft>(() => ({
+    strategyDefinitionId: first?.strategy_definition_id || '',
+    timeframe: first?.execution_timeframes[0] || '',
+    parameters: {...(first?.default_parameters || {}), direction: 'LONG'},
+    sharePercentage: hasOwners ? '' : '100', riskPolicyId: '', orderPolicyId: '', createInstance: true, enabled: true,
+  }))
+  const strategy = strategies.find((item) => item.strategy_definition_id === draft.strategyDefinitionId)
+  const create = useMutation({
+    mutationFn: () => {
+      if (!draft.strategyDefinitionId || !draft.timeframe || draft.sharePercentage === '') throw new Error('Choose a strategy, timeframe, and explicit ownership share')
+      return request<GoalStrategyAssignment>(`portfolio-construction/instruments/${stock.id}/assignments/`, mutationOptions('POST', assignmentPayload(draft)))
+    },
+    onSuccess: async () => {
+      setDraft((current) => ({...current, sharePercentage: ''}))
+      await onSaved()
+    },
+  })
+  return <details className="assignment-editor"><summary><Plus />Assign strategy</summary><AssignmentFields draft={draft} setDraft={setDraft} strategies={strategies} strategy={strategy} policies={policies} prefix={`New ${stock.symbol} `} /><button className="button-secondary" disabled={create.isPending} onClick={() => create.mutate()}>Add assignment</button>{create.isError && <ErrorState error={create.error} compact />}</details>
+}
+
+function AssignmentEditor({assignment, strategies, policies, onSaved}: {assignment: GoalStrategyAssignment; strategies: ConstructionStrategyOption[]; policies?: StrategyPolicies; onSaved: () => Promise<void>}) {
+  const [draft, setDraft] = useState<AssignmentDraft>(() => ({
+    strategyDefinitionId: assignment.strategy_definition_id,
+    timeframe: assignment.execution_timeframe,
+    parameters: assignment.parameter_overrides as Record<string, Scalar>,
+    sharePercentage: String(toNumber(assignment.strategy_share) * 100),
+    riskPolicyId: assignment.risk_policy_id ? String(assignment.risk_policy_id) : '',
+    orderPolicyId: assignment.order_policy_id ? String(assignment.order_policy_id) : '',
+    createInstance: assignment.create_instance,
+    enabled: assignment.enabled,
+  }))
+  const strategy = strategies.find((item) => item.strategy_definition_id === draft.strategyDefinitionId)
+  const save = useMutation({
+    mutationFn: () => request<GoalStrategyAssignment>(`portfolio-construction/assignments/${assignment.id}/`, mutationOptions('PATCH', assignmentPayload(draft))),
+    onSuccess: onSaved,
+  })
+  const remove = useMutation({
+    mutationFn: () => request<{id: number}>(`portfolio-construction/assignments/${assignment.id}/`, mutationOptions('DELETE')),
+    onSuccess: onSaved,
+  })
+  return <details className="assignment-editor" open><summary><strong>{assignment.strategy_name}</strong><span>{formatPercent(assignment.strategy_share)} · {assignment.execution_timeframe}</span>{assignment.created_strategy_instance_id && <Link to={`/strategies/${assignment.created_strategy_instance_id}`}>Strategy {assignment.created_strategy_instance_id}</Link>}</summary><AssignmentFields draft={draft} setDraft={setDraft} strategies={strategies} strategy={strategy} policies={policies} prefix={`${assignment.symbol} ${assignment.strategy_name} `} /><div className="system-actions"><button className="button-secondary" disabled={save.isPending} onClick={() => save.mutate()}>Save assignment</button><button className="icon-button" aria-label={`Remove ${assignment.strategy_name} from ${assignment.symbol}`} disabled={remove.isPending} onClick={() => remove.mutate()}><Trash2 /></button></div>{(save.isError || remove.isError) && <ErrorState error={save.error || remove.error} compact />}</details>
+}
+
+function AssignmentFields({draft, setDraft, strategies, strategy, policies, prefix}: {draft: AssignmentDraft; setDraft: React.Dispatch<React.SetStateAction<AssignmentDraft>>; strategies: ConstructionStrategyOption[]; strategy?: ConstructionStrategyOption; policies?: StrategyPolicies; prefix: string}) {
+  const selectStrategy = (id: number) => {
+    const selected = strategies.find((item) => item.strategy_definition_id === id)
+    setDraft((current) => ({...current, strategyDefinitionId: id, timeframe: selected?.execution_timeframes[0] || '', parameters: {...(selected?.default_parameters || {}), direction: 'LONG'}}))
+  }
+  return <div className="assignment-fields"><div className="form-grid three-columns"><label>Strategy<select aria-label={`${prefix}strategy`} value={draft.strategyDefinitionId} onChange={(event) => selectStrategy(Number(event.target.value))}>{strategies.map((item) => <option key={item.strategy_definition_id} value={item.strategy_definition_id}>{item.name}</option>)}</select></label><label>Execution timeframe<select aria-label={`${prefix}execution timeframe`} value={draft.timeframe} onChange={(event) => setDraft((current) => ({...current, timeframe: event.target.value}))}>{(strategy?.execution_timeframes || []).map((item) => <option key={item}>{item}</option>)}</select></label><label>Strategy share %<input aria-label={`${prefix}strategy share`} type="number" min="0" max="100" step="0.000001" value={draft.sharePercentage} onChange={(event) => setDraft((current) => ({...current, sharePercentage: event.target.value}))} /></label><label>Risk policy<select aria-label={`${prefix}risk policy`} value={draft.riskPolicyId} onChange={(event) => setDraft((current) => ({...current, riskPolicyId: event.target.value}))}><option value="">Default</option>{(policies?.risk_policies || []).filter((item) => !item.allow_short).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Order policy<select aria-label={`${prefix}order policy`} value={draft.orderPolicyId} onChange={(event) => setDraft((current) => ({...current, orderPolicyId: event.target.value}))}><option value="">Default</option>{(policies?.order_policies || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="goal-enabled"><input type="checkbox" checked={draft.createInstance} onChange={(event) => setDraft((current) => ({...current, createInstance: event.target.checked}))} />Create instance</label></div>{strategy && <><p className="field-help">{strategy.summary} {strategy.limitations}</p><SchemaParameterForm schema={strategy.parameter_schema} values={draft.parameters} fixedValues={{direction: 'LONG'}} ariaPrefix={prefix} onChange={(parameters) => setDraft((current) => ({...current, parameters}))} /></>}</div>
+}
+
 function PreviewStep({run, onBack, onContinue}: {run: PortfolioConstructionRun | null; onBack: () => void; onContinue: () => void}) {
-  if (!run) return <Panel title="3. Preview" description="Construct every goal before reviewing the combined portfolio."><EmptyState title="No preview yet" /><button className="button-secondary" onClick={onBack}>Back to selections</button></Panel>
+  if (!run) return <Panel title="3. Preview" description="Construct every goal before reviewing the combined portfolio."><EmptyState title="No preview yet" /><button className="button-secondary" onClick={onBack}>Back to stocks and assignments</button></Panel>
   const targets = run.targets || []
   return <Panel title="3. Preview" description="Local goal targets are weighted and merged into one final portfolio target and one net trade list.">
     <section className="metric-grid compact">
@@ -333,7 +440,12 @@ function PreviewStep({run, onBack, onContinue}: {run: PortfolioConstructionRun |
       <MetricCard label="Net turnover" value={formatPercent(run.rebalance?.planned_turnover)} />
       <MetricCard label="Planner" value={<StatusBadge status={run.rebalance?.mode || 'SHADOW'} />} />
     </section>
-    <div className="goal-preview-grid">{(run.goals || []).map((goal) => <section key={goal.goal_id} className="goal-preview-card"><header><div><h3>{goal.name}</h3><p>{formatPercent(goal.allocation_weight)} · {goal.timeframe_bucket} · Risk {goal.risk_level}</p></div><StatusBadge status={goal.optimizer_method || 'CASH ONLY'} /></header><div className="goal-preview-cash"><span>Cash inside goal</span><strong>{formatPercent(goal.cash_weight)}</strong></div><ul>{goal.stocks.map((stock) => <li key={stock.instrument_id}><strong>{stock.symbol}</strong><span>{formatPercent(stock.local_weight)} local · {formatPercent(stock.portfolio_contribution)} portfolio</span></li>)}</ul>{!goal.stocks.length && <p className="inline-note">Cash-only target</p>}{goal.warnings.length > 0 && <p className="field-help">{goal.warnings.map((item) => item.message || item.code).join(' · ')}</p>}</section>)}</div>
+    <div className="goal-preview-grid">{(run.goals || []).map((goal) => <section key={goal.goal_id} className="goal-preview-card"><header><div><h3>{goal.name}</h3><p>{formatPercent(goal.allocation_weight)} · {goal.timeframe_bucket} · Risk {goal.risk_level}</p></div><StatusBadge status={goal.optimizer_method || 'CASH ONLY'} /></header><div className="goal-preview-cash"><span>Cash inside goal</span><strong>{formatPercent(goal.cash_weight)}</strong></div><ul>{goal.stocks.map((stock) => <li key={stock.instrument_id}><strong>{stock.symbol}</strong><span>{formatPercent(stock.local_weight)} local stock weight · {formatPercent(stock.portfolio_contribution)} complete-portfolio stock contribution</span><ul>{stock.strategies.map((strategy) => <li key={strategy.assignment_id}><span>{strategy.strategy_name} · {formatPercent(strategy.strategy_share)} share · {formatPercent(strategy.portfolio_weight)} strategy-controlled portfolio weight</span></li>)}</ul>{!stock.strategy_share_valid && <span className="field-error">Strategy shares total {formatPercent(stock.strategy_share_total)}; 100% is required.</span>}</li>)}</ul>{!goal.stocks.length && <p className="inline-note">Cash-only target</p>}{goal.warnings.length > 0 && <p className="field-help">{goal.warnings.map((item) => item.message || item.code).join(' · ')}</p>}</section>)}</div>
+    <div><h3>Aggregated strategy instance targets</h3><DataTable rows={run.metrics.strategy_targets || []} columns={[
+      {id: 'strategy', header: 'Strategy', cell: (item) => <div className="primary-cell"><strong>{item.strategy_name}</strong><span>{item.symbol} · {item.execution_timeframe}</span></div>},
+      {id: 'assignments', header: 'Assignments', align: 'right' as const, cell: (item) => formatNumber(item.assignment_ids.length)},
+      {id: 'target', header: 'Aggregated target', align: 'right' as const, cell: (item) => formatPercent(item.target_weight)},
+    ]} getRowKey={(item) => item.identity} emptyTitle="No strategy-owned stock weight" /></div>
     <div><h3>Final combined allocation</h3><DataTable rows={targets} columns={[
       {id: 'stock', header: 'Stock', cell: (item) => <div className="primary-cell"><strong className="mono">{item.symbol}</strong>{item.shared_across_goals && <span>Shared by {item.goal_contributions.length} goals</span>}</div>},
       {id: 'current', header: 'Current', align: 'right' as const, cell: (item) => formatPercent(item.current_weight)},
@@ -349,6 +461,6 @@ function PreviewStep({run, onBack, onContinue}: {run: PortfolioConstructionRun |
       {id: 'state', header: 'State', cell: (item) => <StatusBadge status={item.suppressed ? item.suppression_reason || 'SUPPRESSED' : 'PLANNED'} />},
     ]} getRowKey={(item) => item.instrument_id} emptyTitle="No net trades required" /></div>
     {run.warnings.length > 0 && <div className="inline-warning"><StatusBadge status="WARNING" /><p>{formatCompact(run.warnings)}</p></div>}
-    <div className="system-actions"><button className="button-secondary" onClick={onBack}>Back to selections</button><button className="button-primary" onClick={onContinue}>Continue to apply</button></div>
+    <div className="system-actions"><button className="button-secondary" onClick={onBack}>Back to stocks and assignments</button><button className="button-primary" onClick={onContinue}>Continue to apply</button></div>
   </Panel>
 }
