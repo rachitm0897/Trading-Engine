@@ -4,6 +4,7 @@
   .context-selectors label { grid-template-columns: minmax(100px, 140px); }
   .context-selectors label > span { display: none; }
   .row-actions { flex-direction: column; align-items: flex-end; }
+  .goal-editor-row { grid-template-columns: auto repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 1024px) {
@@ -37,6 +38,10 @@
   .strategy-control-bar { align-items: flex-start; flex-direction: column; }
   .detail-list.columns { grid-template-columns: 1fr; }
   .sizing-result { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .builder-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .builder-total { align-items: flex-start; flex-direction: column; }
+  .goal-editor-row { grid-template-columns: auto 1fr; }
+  .goal-editor-row label { grid-column: 1 / -1; }
 }
 
 @media (max-width: 560px) {
@@ -53,4 +58,5 @@
   .job-list { grid-template-columns: 1fr; }
   .confirm-dialog footer { flex-direction: column-reverse; }
   .confirm-dialog footer button { width: 100%; }
+  .builder-steps { grid-template-columns: 1fr; }
 }

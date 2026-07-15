@@ -6,6 +6,8 @@ The API keeps expensive solvers, history downloads, and long-running workflows o
 | --- | --- | --- | --- |
 | Optimization preview | `POST /api/v1/portfolio-optimization/preview/` | `GET /api/v1/portfolio-optimization/runs/{id}/` | `COMPLETED` or `FAILED` |
 | Optimization application | `POST /api/v1/portfolio-optimization/run/` | `GET /api/v1/portfolio-optimization/runs/{id}/` | `APPLIED` or `FAILED` in `application_status` |
+| Multi-goal construction preview | `POST /api/v1/portfolio-construction/preview/` | `GET /api/v1/portfolio-construction/runs/{id}/` | `COMPLETED` or `FAILED` |
+| Multi-goal construction application | `POST /api/v1/portfolio-construction/runs/{id}/apply/` | `GET /api/v1/portfolio-construction/runs/{id}/` | `APPLIED` or `FAILED` in `application_status` |
 | Optimization-backed flow | `POST /api/v1/allocations/flows/` | `GET /api/v1/allocations/runs/{id}/` | `COMPLETED`, `PARTIALLY_ALLOCATED`, or `FAILED` |
 | Rebalance | `POST /api/v1/rebalancing/preview/` or `POST /api/v1/rebalancing/run/` | `GET /api/v1/rebalancing/runs/{id}/` | `COMPLETED`, `PARTIALLY_COMPLETED`, `BLOCKED`, or `FAILED` |
 | Kafka replay | `POST /api/v1/streaming/replay/` | `GET /api/v1/streaming/replay/{id}/` | `COMPLETED` or `FAILED` |
@@ -13,3 +15,5 @@ The API keeps expensive solvers, history downloads, and long-running workflows o
 Every mutating operation that requires idempotency rejects a missing `Idempotency-Key`. Reusing a key with a different canonical request returns a conflict. Retrying a persisted retryable failure requires the original key and `Idempotency-Retry: true`; uncertain broker submissions are reconciled rather than blindly resubmitted.
 
 All execution remains paper or shadow only. The worker paths do not enable live trading.
+
+Construction preview snapshots the plan version, enabled goals, selections, and resolved fixed rules before it is queued. Editing the draft afterward does not mutate an existing run. Reusing the preview key after editing the plan is an idempotency conflict. Construction application is one-time; matching strategy instances remain disabled in `SHADOW` mode and only one combined target is passed to each rebalance run.

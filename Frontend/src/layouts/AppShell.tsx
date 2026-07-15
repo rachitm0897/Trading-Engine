@@ -1,5 +1,5 @@
 import {useQuery, useQueryClient} from '@tanstack/react-query'
-import {Activity, BookOpen, Bot, ChevronRight, Gauge, LayoutDashboard, Menu, RefreshCw, ServerCog, X} from 'lucide-react'
+import {Activity, BookOpen, Bot, ChevronRight, Gauge, LayoutDashboard, Menu, RefreshCw, ServerCog, Target, X} from 'lucide-react'
 import {NavLink, Outlet, useLocation} from 'react-router-dom'
 import {queries} from '../api/queries'
 import {ErrorState, StatusBadge} from '../components/ui'
@@ -9,6 +9,7 @@ import {useSelection} from '../stores/useSelection'
 const navigation = [
   {to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard},
   {to: '/strategies', label: 'Strategies', icon: Bot},
+  {to: '/portfolio-builder', label: 'Portfolio Builder', icon: Target},
   {to: '/portfolio', label: 'Portfolio', icon: BookOpen},
   {to: '/activity', label: 'Orders & Activity', icon: Activity},
   {to: '/system', label: 'System', icon: ServerCog},

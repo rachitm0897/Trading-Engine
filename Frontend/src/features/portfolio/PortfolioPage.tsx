@@ -93,7 +93,7 @@ export function PortfolioPage() {
       <Panel title="Allocation by instrument" description="Current marked market value as a share of gross exposure"><AllocationBars rows={(series.data?.allocation_by_instrument || []).map((item) => ({id: item.instrument_id, name: item.symbol, weight: item.weight, value: item.value}))} currency={account?.base_currency} /></Panel>
       <Panel title="Allocation by strategy" description="Configured capital shares; actual attribution remains ledger-backed"><AllocationBars rows={policyRows.map((item) => ({id: item.id, name: item.strategy, weight: toNumber(item.target_share), value: null}))} currency={account?.base_currency} /></Panel>
     </div>
-    <Panel title="Portfolio construction" description="Build a multi-stock universe and preview long-only Markowitz targets before they enter the existing rebalance pipeline.">
+    <Panel title="Advanced target optimizer" description="Operator controls for a single-universe long-only Markowitz target. Everyday goal construction is available in Portfolio Builder.">
       <PortfolioConstruction portfolioId={selectedPortfolioId} instruments={instruments.data || []} universe={universes.data?.[0]} policy={optimizationPolicies.data?.[0]} preview={optimizationPreview} executionMode={system.data?.execution_mode || 'SHADOW'} onPreview={setOptimizationPreview} onChanged={async () => {await Promise.all([queryClient.invalidateQueries({queryKey: ['portfolio-universe']}), queryClient.invalidateQueries({queryKey: ['optimization-policies']}), queryClient.invalidateQueries({queryKey: ['optimization-runs']}), queryClient.invalidateQueries({queryKey: ['rebalance-runs']})])}} />
       {!optimizationPreview && (optimizationRuns.data || []).length > 0 && <p className="inline-note">Most recent optimization: run {(optimizationRuns.data || [])[0].id} · {(optimizationRuns.data || [])[0].status}.</p>}
     </Panel>
@@ -230,7 +230,7 @@ function PortfolioConstruction({portfolioId, instruments, universe, policy, prev
       </div>
       <div className="system-actions"><button className="button-secondary" disabled={save.isPending || instrumentIds.length > maximumInstruments}>{save.isPending ? 'Saving…' : 'Save universe & policy'}</button><button type="button" className="button-primary" disabled={!universe || !policy || optimize.isPending} onClick={() => optimize.mutate()}>{optimize.isPending ? 'Optimizing…' : 'Preview optimization'}</button>{preview && <button type="button" className="button-secondary" disabled={apply.isPending || preview.application_status === 'APPLIED' || Boolean(preview.applied_rebalance)} onClick={() => apply.mutate()}>{preview.applied_rebalance ? 'Optimization already applied' : apply.isPending ? 'Planning…' : `Apply through ${executionMode} rebalance`}</button>}</div>
     </form>
-    {save.isError && <ErrorState title="Portfolio construction settings were not saved" error={save.error} compact />}
+    {save.isError && <ErrorState title="Advanced optimizer settings were not saved" error={save.error} compact />}
     {optimize.isError && <ErrorState title="Optimization preview failed" error={optimize.error} compact />}
     {apply.isError && <ErrorState title="Optimized rebalance was blocked" error={apply.error} compact />}
     {preview?.applied_rebalance && <div className="inline-success"><StatusBadge status={preview.applied_rebalance.status} />Applied rebalance {preview.applied_rebalance.id} · {preview.applied_rebalance.mode}</div>}

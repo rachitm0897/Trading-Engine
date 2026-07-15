@@ -78,6 +78,7 @@ class RebalanceRun(models.Model):
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT)
     policy = models.ForeignKey(RebalancePolicy, on_delete=models.PROTECT, null=True, blank=True)
     optimization_run = models.ForeignKey("portfolio_optimization.PortfolioOptimizationRun", on_delete=models.PROTECT, null=True, blank=True, related_name="rebalances")
+    construction_run = models.ForeignKey("portfolio_construction.PortfolioConstructionRun", on_delete=models.PROTECT, null=True, blank=True, related_name="rebalances")
     target_source = models.CharField(max_length=40, default="STRATEGY_AGGREGATION")
     trigger = models.CharField(max_length=40)
     idempotency_key = models.CharField(max_length=128, unique=True)

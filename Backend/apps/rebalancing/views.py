@@ -21,6 +21,7 @@ def _row(run, detail=False):
     row={"id":run.pk,"portfolio_id":run.portfolio_id,"trigger":run.trigger,"mode":run.mode,"status":run.status,
         "phase":run.phase,"nav":run.nav,"total_drift":run.total_drift,"planned_turnover":run.planned_turnover,
         "target_source":run.target_source,"optimization_run_id":run.optimization_run_id,
+        "construction_run_id":run.construction_run_id,
         "created_at":run.created_at,"last_recalculated_at":run.last_recalculated_at}
     if detail:
         row["targets"]=_serialize(run.targets.select_related("instrument"),["instrument_id","target_weight","current_weight","drift",
