@@ -11,6 +11,9 @@ class AuditEvent(models.Model):
     idempotency_key = models.CharField(max_length=128, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        indexes = [models.Index(fields=["aggregate_type","aggregate_id","-created_at"],name="audit_aggregate_time_idx")]
+
 class OutboxEvent(models.Model):
     STATUSES = [(x, x) for x in ["PENDING", "PUBLISHING", "PUBLISHED", "FAILED"]]
     event_id = models.UUIDField(unique=True, editable=False, default=uuid.uuid4)
@@ -31,6 +34,9 @@ class OutboxEvent(models.Model):
     last_error = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        indexes = [models.Index(fields=["status","available_at","created_at"],name="outbox_publish_queue_idx")]
+
     def save(self, *args, **kwargs):
         import uuid
         from django.utils import timezone
@@ -47,3 +53,23 @@ class OutboxEvent(models.Model):
     @property
     def attempts(self):
         return self.attempt_count
+
+
+class OperationAttempt(models.Model):
+    operation_type = models.CharField(max_length=40)
+    operation_id = models.CharField(max_length=64)
+    attempt_number = models.PositiveIntegerField()
+    request_hash = models.CharField(max_length=64)
+    status = models.CharField(max_length=24, default="PROCESSING")
+    retryable = models.BooleanField(default=False)
+    error = models.CharField(max_length=1000, blank=True)
+    result = models.JSONField(default=dict)
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=["operation_type", "operation_id", "attempt_number"],
+            name="unique_operation_attempt",
+        )]
+        indexes = [models.Index(fields=["operation_type", "status"], name="operation_attempt_status_idx")]

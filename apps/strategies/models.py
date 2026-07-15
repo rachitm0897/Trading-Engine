@@ -3,23 +3,6 @@ from django.db import models
 from django.utils import timezone
 
 
-class TradingStrategy(models.Model):
-    """Legacy allocation identity retained as a compatibility adapter."""
-
-    TYPES = [(x, x) for x in ["fixed_weight", "sma_trend", "rsi_mean_reversion", "donchian_breakout", "volatility_target_momentum"]]
-    name = models.CharField(max_length=128)
-    strategy_type = models.CharField(max_length=40, choices=TYPES)
-    version = models.PositiveIntegerField(default=1)
-    enabled = models.BooleanField(default=True)
-    schedule = models.CharField(max_length=64, default="manual")
-    configuration = models.JSONField(default=dict)
-    universe = models.ManyToManyField("instruments.Instrument", blank=True)
-    allocated_capital = models.DecimalField(max_digits=24, decimal_places=8, default=0)
-    maximum_target_weight = models.DecimalField(max_digits=8, decimal_places=6, default=1)
-    kill_switch = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-
 class StrategyDefinition(models.Model):
     key = models.CharField(max_length=64, unique=True)
     name = models.CharField(max_length=128)
@@ -81,10 +64,11 @@ class StrategyInstance(models.Model):
     execution_mode = models.CharField(max_length=16, choices=MODES, default="SHADOW")
     state = models.CharField(max_length=24, choices=STATES, default="WARMING_UP")
     enabled = models.BooleanField(default=False)
+    allocated_capital = models.DecimalField(max_digits=24, decimal_places=8, default=0)
+    kill_switch = models.BooleanField(default=False)
     version = models.PositiveIntegerField(default=1)
     effective_from = models.DateTimeField(null=True, blank=True)
     effective_to = models.DateTimeField(null=True, blank=True)
-    legacy_strategy = models.OneToOneField(TradingStrategy, on_delete=models.PROTECT, related_name="strategy_instance", null=True, blank=True)
     state_data = models.JSONField(default=dict)
     warmup_progress = models.PositiveIntegerField(default=0)
     warmup_started_at = models.DateTimeField(null=True, blank=True)
@@ -95,6 +79,7 @@ class StrategyInstance(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["portfolio", "name"], name="unique_strategy_instance_name")]
+        indexes = [models.Index(fields=["enabled","state","instrument","timeframe"],name="strategy_active_input_idx")]
 
     def clean(self):
         if self.execution_mode == "LIVE":
@@ -145,20 +130,7 @@ class StrategyInputBinding(models.Model):
         constraints = [models.UniqueConstraint(fields=["strategy_version", "requirement"], name="unique_version_input_requirement")]
 
 
-class HistoricalBar(models.Model):
-    instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT)
-    timestamp = models.DateTimeField()
-    open = models.DecimalField(max_digits=24, decimal_places=8)
-    high = models.DecimalField(max_digits=24, decimal_places=8)
-    low = models.DecimalField(max_digits=24, decimal_places=8)
-    close = models.DecimalField(max_digits=24, decimal_places=8)
-    volume = models.DecimalField(max_digits=24, decimal_places=8, default=0)
-    class Meta:
-        constraints = [models.UniqueConstraint(fields=["instrument", "timestamp"], name="unique_historical_bar")]
-
-
 class StrategyRun(models.Model):
-    strategy = models.ForeignKey(TradingStrategy, on_delete=models.PROTECT, related_name="runs", null=True, blank=True)
     strategy_instance = models.ForeignKey(StrategyInstance, on_delete=models.PROTECT, related_name="runs", null=True, blank=True)
     strategy_version = models.ForeignKey(StrategyVersion, on_delete=models.PROTECT, related_name="runs", null=True, blank=True)
     input_hash = models.CharField(max_length=64)
@@ -172,7 +144,11 @@ class StrategyRun(models.Model):
     started_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["strategy", "input_hash"], name="unique_strategy_input")]
+        constraints = [models.UniqueConstraint(fields=["strategy_instance", "input_hash"], name="unique_strategy_instance_input")]
+        indexes = [
+            models.Index(fields=["strategy_instance","-started_at"],name="strategy_run_latest_idx"),
+            models.Index(fields=["status","started_at"],name="strategy_run_status_idx"),
+        ]
 
 
 class StrategySignal(models.Model):
@@ -208,6 +184,7 @@ class StrategyTarget(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     class Meta:
         constraints = [models.UniqueConstraint(fields=["run", "instrument"], name="unique_run_target")]
+        indexes = [models.Index(fields=["strategy_instance","status","-created_at"],name="strategy_target_latest_idx")]
 
 
 class StrategyAttributedPosition(models.Model):
@@ -223,7 +200,7 @@ class StrategyAttributedPosition(models.Model):
 
 
 class StrategyAllocation(models.Model):
-    strategy = models.ForeignKey(TradingStrategy, on_delete=models.PROTECT)
+    strategy_instance = models.ForeignKey(StrategyInstance, on_delete=models.PROTECT, related_name="allocations")
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT)
     weight = models.DecimalField(max_digits=12, decimal_places=8)
     minimum_share = models.DecimalField(max_digits=12, decimal_places=8, default=0)
@@ -233,4 +210,19 @@ class StrategyAllocation(models.Model):
     priority = models.PositiveIntegerField(default=100)
     idle_cash = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["strategy", "portfolio"], name="unique_strategy_allocation")]
+        constraints = [models.UniqueConstraint(fields=["strategy_instance", "portfolio"], name="unique_strategy_instance_allocation")]
+        indexes = [models.Index(fields=["portfolio","priority"],name="strategy_alloc_priority_idx")]
+
+
+class StrategyAction(models.Model):
+    strategy_instance = models.ForeignKey(StrategyInstance, on_delete=models.PROTECT, related_name="actions")
+    action = models.CharField(max_length=24)
+    idempotency_key = models.CharField(max_length=128, unique=True)
+    request_hash = models.CharField(max_length=64, db_index=True)
+    status = models.CharField(max_length=24, default="PROCESSING")
+    result = models.JSONField(default=dict)
+    last_error = models.CharField(max_length=1000, blank=True)
+    retryable = models.BooleanField(default=False)
+    attempt_count = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)

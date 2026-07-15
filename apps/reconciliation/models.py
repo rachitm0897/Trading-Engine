@@ -1,6 +1,13 @@
 from django.db import models
 
 class ReconciliationRun(models.Model):
+    broker_account = models.ForeignKey(
+        "accounts.BrokerAccount",
+        on_delete=models.PROTECT,
+        related_name="reconciliation_runs",
+        null=True,
+        blank=True,
+    )
     trigger = models.CharField(max_length=40)
     status = models.CharField(max_length=24, default="RUNNING")
     started_at = models.DateTimeField(auto_now_add=True)
@@ -17,3 +24,8 @@ class ReconciliationBreak(models.Model):
     resolution = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["run", "category", "material"], name="recon_break_run_cat_idx"),
+            models.Index(fields=["resolved", "material", "category"], name="recon_break_open_idx"),
+        ]

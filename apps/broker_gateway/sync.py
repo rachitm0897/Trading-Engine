@@ -2,6 +2,7 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from apps.accounts.models import BrokerAccount
@@ -13,8 +14,9 @@ from apps.oms.services import ALLOWED, apply_execution
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
 from apps.market_streams.models import MarketDataSubscription
 from apps.strategies.models import StrategyInstance
+from apps.core.idempotency import canonical_request_hash
 from .client import GatewayClient
-from .models import BrokerSyncCursor
+from .models import BrokerPositionSnapshot, BrokerSyncCursor
 
 TERMINAL={"FILLED","CANCELLED","REJECTED","EXPIRED"}
 STATUS_MAP={
@@ -79,17 +81,133 @@ def sync_account_summary(rows):
         account.buying_power=value("BuyingPower")
         account.daily_pnl=value("DailyPnL","RealizedPnL")
         account.save(update_fields=["base_currency","net_liquidation","available_cash","buying_power","daily_pnl","updated_at"])
+        from apps.risk.models import CapitalReservation
+        CapitalReservation.objects.filter(account=account,status="CONSUMED").update(status="RELEASED",released_at=timezone.now())
 
-def sync_positions(rows):
-    PortfolioPosition.objects.update(quantity=0,average_cost=0,market_price=0)
+def _position_snapshot_key(account_id, rows, snapshot_key=None):
+    if snapshot_key:
+        return str(snapshot_key)[:160]
+    body = json.dumps({"account": account_id, "positions": rows}, sort_keys=True, default=str, separators=(",", ":"))
+    return f"positions:{account_id}:{hashlib.sha256(body.encode()).hexdigest()}"[:160]
+
+
+def _sync_account_positions(account_id, rows, *, complete, snapshot_key):
+    account, default_portfolio = ensure_account(account_id)
+    key = _position_snapshot_key(account.account_id, rows, snapshot_key)
+    snapshot, _ = BrokerPositionSnapshot.objects.get_or_create(
+        snapshot_key=key,
+        defaults={
+            "broker_account": account,
+            "complete": bool(complete),
+            "row_count": len(rows),
+            "positions": rows,
+        },
+    )
+    if snapshot.broker_account_id != account.pk:
+        raise ValueError("Position snapshot key was reused for another broker account")
+    if snapshot.status == "COMPLETED":
+        return snapshot
+    if not complete:
+        snapshot.complete = False
+        snapshot.status = "INCOMPLETE"
+        snapshot.row_count = len(rows)
+        snapshot.positions = rows
+        snapshot.attempt_count += 1
+        snapshot.last_error = "Snapshot was not confirmed complete and was not applied"
+        snapshot.save(update_fields=["complete", "status", "row_count", "positions", "attempt_count", "last_error"])
+        return snapshot
+    try:
+        with transaction.atomic():
+            snapshot = BrokerPositionSnapshot.objects.select_for_update().get(pk=snapshot.pk)
+            if snapshot.status == "COMPLETED":
+                return snapshot
+            snapshot.status = "PROCESSING"
+            snapshot.complete = True
+            snapshot.row_count = len(rows)
+            snapshot.positions = rows
+            snapshot.attempt_count += 1
+            snapshot.last_error = ""
+            snapshot.save(update_fields=["status", "complete", "row_count", "positions", "attempt_count", "last_error"])
+
+            positions_by_instrument = {}
+            for row in rows:
+                row_account = str(row.get("account") or account.account_id)
+                if row_account != account.account_id:
+                    raise ValueError(
+                        f"Position snapshot for {account.account_id} contains row for {row_account}"
+                    )
+                instrument = ensure_instrument(row)
+                if instrument.pk in positions_by_instrument:
+                    raise ValueError(
+                        f"Position snapshot contains duplicate contract for instrument {instrument.pk}"
+                    )
+                positions_by_instrument[instrument.pk] = (instrument, row)
+
+            portfolios = list(TradingPortfolio.objects.select_for_update().filter(account=account))
+            if not portfolios:
+                portfolios = [default_portfolio]
+            authoritative_ids = set(positions_by_instrument)
+            missing = PortfolioPosition.objects.select_for_update().filter(portfolio__in=portfolios)
+            if authoritative_ids:
+                missing = missing.exclude(instrument_id__in=authoritative_ids)
+            missing.update(quantity=0, average_cost=0, market_price=0)
+            for portfolio in portfolios:
+                for instrument, row in positions_by_instrument.values():
+                    PortfolioPosition.objects.update_or_create(
+                        portfolio=portfolio,
+                        instrument=instrument,
+                        defaults={
+                            "quantity": dec(row.get("quantity")),
+                            "average_cost": dec(row.get("average_cost")),
+                            "market_price": dec(row.get("market_price")),
+                        },
+                    )
+            snapshot.status = "COMPLETED"
+            snapshot.completed_at = timezone.now()
+            snapshot.save(update_fields=["status", "completed_at"])
+            return snapshot
+    except Exception as exc:
+        BrokerPositionSnapshot.objects.filter(pk=snapshot.pk).update(
+            status="FAILED", last_error=str(exc)[:1000], completed_at=None,
+            attempt_count=F("attempt_count") + 1,
+        )
+        raise
+
+
+def sync_positions(rows, *, account_id=None, complete=False, snapshot_key=None):
+    grouped = {}
+    if account_id:
+        grouped[str(account_id)] = []
     for row in rows:
-        _,portfolio=ensure_account(row.get("account")); instrument=ensure_instrument(row)
-        PortfolioPosition.objects.update_or_create(portfolio=portfolio,instrument=instrument,defaults={"quantity":dec(row.get("quantity")),"average_cost":dec(row.get("average_cost")),"market_price":dec(row.get("market_price"))})
+        row_account = str(row.get("account") or account_id or "")
+        if not row_account:
+            raise ValueError("Position snapshot row is missing a broker account")
+        grouped.setdefault(row_account, []).append(row)
+    snapshots = []
+    for grouped_account, account_rows in sorted(grouped.items()):
+        account_key = f"{snapshot_key}:{grouped_account}" if snapshot_key and len(grouped) > 1 else snapshot_key
+        snapshots.append(
+            _sync_account_positions(
+                grouped_account,
+                account_rows,
+                complete=bool(complete),
+                snapshot_key=account_key,
+            )
+        )
+    return snapshots
 
 def _external_order(row, instrument, portfolio):
     identity=row.get("permanent_id") or row.get("broker_order_id")
     internal=(row.get("internal_id") or f"IBKR-{portfolio.account.account_id}-{identity}")[:64]
-    intent,_=OrderIntent.objects.get_or_create(idempotency_key=f"broker-import:{portfolio.account.account_id}:{identity}",defaults={"portfolio":portfolio,"instrument":instrument,"side":"BUY" if row.get("side") in {"BUY","BOT"} else "SELL","quantity":dec(row.get("quantity")),"order_type":row.get("order_type") or "MKT","limit_price":row.get("limit_price"),"stop_price":row.get("stop_price"),"time_in_force":row.get("time_in_force") or "DAY"})
+    intent_payload={"portfolio_id":portfolio.pk,"instrument_id":instrument.pk,
+        "side":"BUY" if row.get("side") in {"BUY","BOT"} else "SELL","quantity":dec(row.get("quantity")),
+        "order_type":row.get("order_type") or "MKT","limit_price":row.get("limit_price"),
+        "stop_price":row.get("stop_price"),"time_in_force":row.get("time_in_force") or "DAY"}
+    intent,_=OrderIntent.objects.get_or_create(idempotency_key=f"broker-import:{portfolio.account.account_id}:{identity}",
+        defaults={"request_hash":canonical_request_hash("broker_order_import",intent_payload),"portfolio":portfolio,
+        "instrument":instrument,"side":intent_payload["side"],"quantity":intent_payload["quantity"],
+        "order_type":intent_payload["order_type"],"limit_price":intent_payload["limit_price"],
+        "stop_price":intent_payload["stop_price"],"time_in_force":intent_payload["time_in_force"]})
     order,created=Order.objects.get_or_create(intent=intent,defaults={"internal_id":internal,"quantity":intent.quantity,"status":"ACKNOWLEDGED","broker_order_id":str(row.get("broker_order_id") or ""),"broker_permanent_id":str(row.get("permanent_id") or "")})
     if created: OrderStatusHistory.objects.create(order=order,from_status="",to_status="ACKNOWLEDGED",source="broker_import",reason="Discovered at IBKR",event_key=f"broker-import:{portfolio.account.account_id}:{identity}:ack")
     return order
@@ -111,6 +229,9 @@ def _record_broker_status(order,row,event_key,source="ibkr",target_override=None
         "occurred_at":occurred,"operator_requested":bool(row.get("operator_requested"))})
     if target and target!="FILLED" and order.status not in TERMINAL and target in ALLOWED.get(order.status,set()):
         order.status=target;order.save(update_fields=["status","updated_at"])
+        if target in TERMINAL:
+            from apps.risk.services import settle_order_reservation
+            settle_order_reservation(order,target)
     return history
 
 def sync_orders(rows, snapshot):
@@ -223,18 +344,35 @@ def process_snapshot(event):
     rows=payload.get("value",[])
     if event_type=="snapshot.accounts": sync_accounts(rows)
     elif event_type=="snapshot.account_summary": sync_account_summary(rows)
-    elif event_type=="snapshot.positions": sync_positions(rows)
+    elif event_type=="snapshot.positions":
+        sync_positions(
+            rows,
+            account_id=payload.get("account"),
+            complete=payload.get("complete") is True,
+            snapshot_key=payload.get("snapshot_id") or f"gateway-event:{event.get('id')}",
+        )
     elif event_type=="snapshot.open_orders": sync_orders(rows,"open")
     elif event_type=="snapshot.completed_orders": sync_orders(rows,"completed")
     elif event_type=="snapshot.executions": sync_executions(rows)
 
 def sync_events(client=None):
     client=client or GatewayClient()
-    with transaction.atomic():
-        cursor,_=BrokerSyncCursor.objects.select_for_update().get_or_create(name="gateway-events")
-        events=client.events(cursor.last_sequence) or []
-        for event in events:
-            process_snapshot(event); cursor.last_sequence=event["id"]
-        cursor.last_synced_at=timezone.now(); cursor.last_error=""; cursor.save(update_fields=["last_sequence","last_synced_at","last_error"])
+    cursor,_=BrokerSyncCursor.objects.get_or_create(name="gateway-events")
+    events=client.events(cursor.last_sequence) or []
+    for event in events:
+        if event["id"] <= cursor.last_sequence:
+            continue
+        try:
+            process_snapshot(event)
+        except Exception as exc:
+            BrokerSyncCursor.objects.filter(pk=cursor.pk).update(last_error=str(exc)[:1000])
+            raise
+        with transaction.atomic():
+            cursor=BrokerSyncCursor.objects.select_for_update().get(pk=cursor.pk)
+            if event["id"] > cursor.last_sequence:
+                cursor.last_sequence=event["id"]
+                cursor.last_synced_at=timezone.now()
+                cursor.last_error=""
+                cursor.save(update_fields=["last_sequence","last_synced_at","last_error"])
     if events: client.ack_events(cursor.last_sequence)
     return len(events)

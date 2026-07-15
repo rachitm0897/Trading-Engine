@@ -30,20 +30,27 @@ class KafkaPublisher:
         self.producer = producer
 
     def publish(self, event):
-        envelope = envelope_for(event)
-        validate_envelope(envelope)
-        error = []
-        def delivered(err, _message):
-            if err:
-                error.append(str(err))
+        error=self.publish_batch([event]).get(event.pk)
+        if error:raise RuntimeError(error)
+
+    def publish_batch(self, events):
         import json
-        self.producer.produce(event.topic, key=event.partition_key.encode(),
-                              value=json.dumps(envelope, separators=(",", ":")).encode(), callback=delivered)
-        remaining = self.producer.flush(10)
-        if error:
-            raise RuntimeError(error[0])
-        if remaining:
-            raise RuntimeError(f"Kafka acknowledgement timeout with {remaining} message(s) pending")
+        outcomes={event.pk:None for event in events}
+        for event in events:
+            try:
+                envelope=envelope_for(event);validate_envelope(envelope)
+                def delivered(err,_message,event_id=event.pk):
+                    outcomes[event_id]=str(err) if err else ""
+                self.producer.produce(event.topic,key=event.partition_key.encode(),
+                    value=json.dumps(envelope,separators=(",",":")).encode(),callback=delivered)
+            except Exception as exc:
+                outcomes[event.pk]=str(exc)
+        remaining=self.producer.flush(10)
+        for event_id,outcome in outcomes.items():
+            if outcome is None:
+                outcomes[event_id]=(f"Kafka acknowledgement timeout with {remaining} message(s) pending"
+                    if remaining else "Kafka delivery callback did not confirm the event")
+        return outcomes
 
 
 def publish_batch(publisher=None, limit=100):
@@ -55,32 +62,54 @@ def publish_batch(publisher=None, limit=100):
         ids = list(OutboxEvent.objects.select_for_update(skip_locked=True).filter(
             status__in=["PENDING", "FAILED", "PUBLISHING"], available_at__lte=now).order_by("created_at").values_list("pk", flat=True)[:limit])
         OutboxEvent.objects.filter(pk__in=ids).update(status="PUBLISHING",available_at=now+timedelta(seconds=60))
-    published = 0
-    for event in OutboxEvent.objects.filter(pk__in=ids):
-        try:
-            publisher.publish(event)
-            OutboxEvent.objects.filter(pk=event.pk).update(status="PUBLISHED", published_at=timezone.now(),
-                                                               attempt_count=event.attempt_count + 1, last_error="")
-            published += 1
-        except Exception as exc:
-            attempts = event.attempt_count + 1
-            delay = min(300, 2 ** min(attempts, 8))
-            OutboxEvent.objects.filter(pk=event.pk).update(status="FAILED", attempt_count=attempts,
-                available_at=timezone.now() + timedelta(seconds=delay), last_error=str(exc)[:2000])
+    events=list(OutboxEvent.objects.filter(pk__in=ids).order_by("created_at"))
+    if hasattr(publisher,"publish_batch"):
+        try:outcomes=publisher.publish_batch(events)
+        except Exception as exc:outcomes={event.pk:str(exc) for event in events}
+    else:
+        outcomes={}
+        for event in events:
+            try:publisher.publish(event);outcomes[event.pk]=""
+            except Exception as exc:outcomes[event.pk]=str(exc)
+    published=0;now=timezone.now()
+    for event in events:
+        error=outcomes[event.pk] if event.pk in outcomes else "Publisher returned no delivery result"
+        event.attempt_count+=1
+        if not error:
+            event.status="PUBLISHED";event.published_at=now;event.last_error="";published+=1
+        else:
+            event.status="FAILED";event.published_at=None;event.last_error=error[:2000]
+            event.available_at=now+timedelta(seconds=min(300,2**min(event.attempt_count,8)))
+    if events:
+        OutboxEvent.objects.bulk_update(events,["status","published_at","attempt_count","last_error","available_at"])
     return published
 
 
 def consume_once(consumer_name, envelope, handler):
     validate_envelope(envelope)
     event_id = uuid.UUID(envelope["event_id"])
-    with transaction.atomic():
-        try:
-            consumed=ConsumedEvent.objects.create(consumer_name=consumer_name,event_id=event_id,result={"status":"PROCESSING"})
-        except IntegrityError:
-            return {"duplicate": True}
-        result = handler(envelope) or {}
-        consumed.result=decimal_safe(result);consumed.save(update_fields=["result"])
-        return result
+    try:
+        with transaction.atomic():
+            consumed=ConsumedEvent.objects.select_for_update().filter(
+                consumer_name=consumer_name,event_id=event_id).first()
+            if consumed and consumed.result.get("status")!="FAILED":
+                return {"duplicate": True}
+            if consumed:
+                consumed.result={"status":"PROCESSING"};consumed.save(update_fields=["result"])
+            else:
+                try:
+                    with transaction.atomic():
+                        consumed=ConsumedEvent.objects.create(consumer_name=consumer_name,event_id=event_id,
+                            result={"status":"PROCESSING"})
+                except IntegrityError:
+                    return {"duplicate": True}
+            result = handler(envelope) or {}
+            consumed.result=decimal_safe(result);consumed.save(update_fields=["result"])
+            return result
+    except Exception as exc:
+        ConsumedEvent.objects.update_or_create(consumer_name=consumer_name,event_id=event_id,
+            defaults={"result":{"status":"FAILED","retryable":True,"error":str(exc)[:2000]}})
+        raise
 
 
 def route_dead_letter(source_topic, envelope, reason, consumer_name=""):

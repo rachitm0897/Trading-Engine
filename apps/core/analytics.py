@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.utils import timezone
 
-from apps.core.views import response
+from apps.core.views import method_guard, response
 
 
 def _portfolio(request):
@@ -50,6 +50,8 @@ def _portfolio_row(portfolio):
 
 
 def dashboard_summary(request):
+    invalid=method_guard(request,"GET")
+    if invalid:return invalid
     from apps.audit.models import AuditEvent
     from apps.broker_gateway.client import GatewayClient, GatewayError
     from apps.market_streams.models import InstrumentMarketState
@@ -107,7 +109,7 @@ def dashboard_summary(request):
     } for item in AuditEvent.objects.order_by("-created_at")[:12]]
     reconciled = bool(account and account.is_reconciled and not material_breaks.exists())
     return response({
-        "mode": "PAPER" if not settings.ALLOW_LIVE_TRADING else "LIVE",
+        "mode":"PAPER",
         "account": _account_row(account),
         "portfolio": _portfolio_row(portfolio),
         "gateway": gateway,
@@ -129,6 +131,8 @@ def dashboard_summary(request):
 
 
 def portfolio_series(request):
+    invalid=method_guard(request,"GET")
+    if invalid:return invalid
     from apps.market_streams.models import MarketBar
     from apps.portfolios.models import PortfolioPosition
 

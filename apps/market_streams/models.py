@@ -21,6 +21,7 @@ class MarketDataSubscription(models.Model):
 
     class Meta:
         constraints=[models.UniqueConstraint(fields=["instrument","timeframe"],name="unique_market_data_subscription")]
+        indexes=[models.Index(fields=["state","updated_at"],name="market_sub_state_idx")]
 
 
 class MarketBar(models.Model):
@@ -41,6 +42,7 @@ class MarketBar(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["bar_id", "version"], name="unique_market_bar_version")]
+        indexes = [models.Index(fields=["instrument","interval","is_final","-window_end"],name="market_bar_latest_idx")]
 
 
 class IndicatorValue(models.Model):
@@ -62,6 +64,33 @@ class IndicatorValue(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["source_key", "parameter_version"], name="unique_indicator_source_version")]
+        indexes = [
+            models.Index(fields=["instrument","timeframe","is_final","-event_time"],name="indicator_latest_idx"),
+            models.Index(fields=["source_bar_id","source_bar_version","parameters_hash","is_final"],name="indicator_ready_idx"),
+        ]
+
+
+class StrategyEvaluationReadiness(models.Model):
+    STATUSES = [(value, value) for value in ["PENDING", "EVALUATING", "COMPLETED", "ERROR"]]
+    strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.CASCADE, related_name="evaluation_readiness")
+    strategy_version = models.ForeignKey("strategies.StrategyVersion", on_delete=models.CASCADE)
+    bar = models.ForeignKey(MarketBar, on_delete=models.CASCADE, related_name="strategy_readiness")
+    expected_input_count = models.PositiveIntegerField(default=0)
+    received_input_hashes = models.JSONField(default=list)
+    status = models.CharField(max_length=16, choices=STATUSES, default="PENDING")
+    strategy_run = models.ForeignKey("strategies.StrategyRun", on_delete=models.SET_NULL, null=True, blank=True)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.CharField(max_length=1000, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=["strategy_instance", "strategy_version", "bar"],
+            name="unique_strategy_bar_readiness",
+        )]
+        indexes = [models.Index(fields=["status", "updated_at"], name="strategy_ready_status_idx")]
 
 
 class InstrumentMarketState(models.Model):

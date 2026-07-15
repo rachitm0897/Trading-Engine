@@ -33,7 +33,6 @@ from apps.strategies.models import (
     StrategyRun,
     StrategyTarget,
     StrategyVersion,
-    TradingStrategy,
 )
 
 
@@ -100,8 +99,6 @@ def test_deletion_removes_configuration_runtime_and_allocations_but_preserves_fi
 ):
     instance = make_instance(portfolio, instrument)
     instance_id = instance.pk
-    strategy = instance.legacy_strategy
-    strategy_id = strategy.pk
     version = instance.versions.get()
     requirement_ids = list(instance.input_bindings.values_list("requirement_id", flat=True))
 
@@ -121,7 +118,6 @@ def test_deletion_removes_configuration_runtime_and_allocations_but_preserves_fi
 
     intent = OrderIntent.objects.create(
         portfolio=portfolio,
-        strategy=strategy,
         strategy_instance=instance,
         strategy_version=version,
         instrument=instrument,
@@ -131,7 +127,6 @@ def test_deletion_removes_configuration_runtime_and_allocations_but_preserves_fi
     )
     attribution = OrderIntentAttribution.objects.create(
         order_intent=intent,
-        strategy=strategy,
         strategy_instance=instance,
         strategy_version=version,
         target_delta=1,
@@ -207,13 +202,13 @@ def test_deletion_removes_configuration_runtime_and_allocations_but_preserves_fi
     )
     capital_snapshot = StrategyCapitalSnapshot.objects.create(
         allocation_run=allocation_run,
-        strategy=strategy,
+        strategy_instance=instance,
         capital_before=1000,
         target_capital=1100,
     )
     allocation_decision = AllocationDecision.objects.create(
         run=allocation_run,
-        strategy=strategy,
+        strategy_instance=instance,
         source="CAPITAL_DEFICIT",
         requested_amount=100,
         approved_amount=100,
@@ -224,11 +219,10 @@ def test_deletion_removes_configuration_runtime_and_allocations_but_preserves_fi
     assert response.status_code == 200
     assert response.json()["data"]["id"] == instance_id
     assert not StrategyInstance.objects.filter(pk=instance_id).exists()
-    assert not TradingStrategy.objects.filter(pk=strategy_id).exists()
     assert not StrategyVersion.objects.filter(pk=version.pk).exists()
     assert not StrategyRun.objects.filter(pk=completed_run.pk).exists()
     assert not StrategyTarget.objects.filter(run_id=completed_run.pk).exists()
-    assert not StrategyAllocation.objects.filter(strategy_id=strategy_id).exists()
+    assert not StrategyAllocation.objects.filter(strategy_instance_id=instance_id).exists()
     assert not StrategyAttributedPosition.objects.filter(strategy_instance_id=instance_id).exists()
     assert not StrategyInputRequirement.objects.filter(pk__in=requirement_ids).exists()
 
@@ -236,12 +230,12 @@ def test_deletion_removes_configuration_runtime_and_allocations_but_preserves_fi
     attribution.refresh_from_db()
     capital_snapshot.refresh_from_db()
     allocation_decision.refresh_from_db()
-    assert intent.strategy_id is None and intent.strategy_instance_id is None and intent.strategy_version_id is None
+    assert intent.strategy_instance_id is None and intent.strategy_version_id is None
     assert intent.strategy_snapshot["strategy_instance_name"] == "Delete me"
-    assert attribution.strategy_id is None and attribution.strategy_instance_id is None and attribution.strategy_version_id is None
+    assert attribution.strategy_instance_id is None and attribution.strategy_version_id is None
     assert attribution.strategy_snapshot["strategy_name"] == "Delete me"
-    assert capital_snapshot.strategy_id is None and capital_snapshot.strategy_snapshot["strategy_id"] == strategy_id
-    assert allocation_decision.strategy_id is None and allocation_decision.strategy_snapshot["strategy_instance_id"] == instance_id
+    assert capital_snapshot.strategy_instance_id is None and capital_snapshot.strategy_snapshot["strategy_id"] == instance_id
+    assert allocation_decision.strategy_instance_id is None and allocation_decision.strategy_snapshot["strategy_instance_id"] == instance_id
     assert Fill.objects.filter(pk=fill.pk).exists()
     assert CashLedgerEntry.objects.filter(pk=cash.pk).exists()
     assert PositionLedgerEntry.objects.filter(pk=position_ledger.pk).exists()
@@ -259,7 +253,7 @@ def test_deletion_removes_configuration_runtime_and_allocations_but_preserves_fi
         f"/api/v1/allocations/runs/{allocation_run.pk}/"
     ).json()["data"]
     assert allocation_detail["snapshots"][0]["strategy"] == "Delete me"
-    assert allocation_detail["decisions"][0]["strategy_id"] == strategy_id
+    assert allocation_detail["decisions"][0]["strategy_id"] == instance_id
 
 
 @pytest.mark.parametrize(
@@ -280,7 +274,6 @@ def test_deletion_reports_every_blocker_and_audits_rejection(
     if kind in {"open_order", "pending_intent"}:
         intent = OrderIntent.objects.create(
             portfolio=portfolio,
-            strategy=instance.legacy_strategy,
             strategy_instance=instance,
             strategy_version=version,
             instrument=instrument,
@@ -297,7 +290,6 @@ def test_deletion_reports_every_blocker_and_audits_rejection(
             )
     elif kind == "running_strategy":
         StrategyRun.objects.create(
-            strategy=instance.legacy_strategy,
             strategy_instance=instance,
             strategy_version=version,
             input_hash="running-delete",
@@ -387,15 +379,14 @@ def test_strategy_deletion_is_atomic_on_unexpected_failure(
 ):
     instance = make_instance(portfolio, instrument, "Atomic deletion")
     instance_id = instance.pk
-    strategy_id = instance.legacy_strategy_id
-    original_delete = TradingStrategy.delete
+    original_delete = StrategyInstance.delete
 
     def fail_after_instance_delete(self, *args, **kwargs):
-        if self.pk == strategy_id:
+        if self.pk == instance_id:
             raise RuntimeError("simulated deletion failure")
         return original_delete(self, *args, **kwargs)
 
-    monkeypatch.setattr(TradingStrategy, "delete", fail_after_instance_delete)
+    monkeypatch.setattr(StrategyInstance, "delete", fail_after_instance_delete)
     with pytest.raises(RuntimeError, match="simulated deletion failure"):
         delete_strategy_instance(
             instance_id,
@@ -405,9 +396,8 @@ def test_strategy_deletion_is_atomic_on_unexpected_failure(
         )
 
     assert StrategyInstance.objects.filter(pk=instance_id).exists()
-    assert TradingStrategy.objects.filter(pk=strategy_id).exists()
     assert StrategyVersion.objects.filter(strategy_instance_id=instance_id).exists()
-    assert StrategyAllocation.objects.filter(strategy_id=strategy_id).exists()
+    assert StrategyAllocation.objects.filter(strategy_instance_id=instance_id).exists()
     assert not AuditEvent.objects.filter(
         event_type="strategy.deletion.succeeded", aggregate_id=str(instance_id)
     ).exists()

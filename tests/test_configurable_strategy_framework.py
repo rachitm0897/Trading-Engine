@@ -9,7 +9,7 @@ from apps.oms.models import Order, OrderIntent
 from apps.oms.services import apply_execution
 from apps.portfolios.models import TradingPortfolio
 from apps.rebalancing.services import aggregate_targets, plan_rebalance
-from apps.market_streams.models import IndicatorValue, MarketBar, MarketDataSubscription
+from apps.market_streams.models import IndicatorValue, MarketBar, MarketDataSubscription, StrategyEvaluationReadiness
 from apps.market_streams.services import evaluate_ready_strategies, persist_bar
 from apps.strategies.framework import create_instance, enable_instance, evaluate_instance, pause_instance, update_instance
 from apps.strategies.models import StrategyAttributedPosition, StrategyDefinition, StrategyInputRequirement, StrategyTarget, StrategyVersion
@@ -135,6 +135,12 @@ def test_plugin_failure_isolated_to_its_version(portfolio,monkeypatch):
     run=evaluate_instance(item,bar={"bar_id":"bad","close":"100","is_final":True},indicators={},event_id="bad")
     item.refresh_from_db()
     assert run.status=="ERROR" and "plugin exploded" in run.error and item.state=="ERROR" and not run.targets.exists()
+    from apps.strategies.plugins import get_plugin as registered_plugin
+    monkeypatch.setattr("apps.strategies.framework.get_plugin",registered_plugin)
+    retried=evaluate_instance(item,bar={"bar_id":"bad","close":"100","is_final":True},indicators={},event_id="bad",
+        retry_failed=True)
+    item.refresh_from_db()
+    assert retried.pk==run.pk and retried.status=="COMPLETED" and item.state!="ERROR"
 
 
 def test_persisted_final_inputs_trigger_once_and_corrected_bar_gets_new_namespace(portfolio):
@@ -150,7 +156,8 @@ def test_persisted_final_inputs_trigger_once_and_corrected_bar_gets_new_namespac
     assert evaluate_ready_strategies(first)==0
     IndicatorValue.objects.create(instrument=tsla,indicator="sma_slow",value=10,previous_value=10,parameters=requirements["slow"].parameters,
         parameters_hash=requirements["slow"].parameters_hash,timeframe="5m",source_bar_id="stable",source_bar_version=1,event_time=now,source_key="slow-1")
-    assert evaluate_ready_strategies(first)==1 and evaluate_ready_strategies(first)==1 and item.runs.count()==1
+    assert evaluate_ready_strategies(first)==1 and evaluate_ready_strategies(first)==0 and item.runs.count()==1
+    assert StrategyEvaluationReadiness.objects.get(bar=first).status=="COMPLETED"
     corrected=bar(2)
     for role,value in [("fast",12),("slow",10)]:
         requirement=requirements[role]
@@ -202,6 +209,9 @@ def test_real_final_bar_advances_strategy_warmup(portfolio):
     item=instrument("WARM",654);instance=make(portfolio,item,"FIXED_WEIGHT_REBALANCE","WARMUP_FINAL",{"direction":"LONG"})
     enable_instance(instance)
     persist_bar({"produced_at":"2026-07-13T00:01:01+00:00","payload":{"bar_id":"warm-1","instrument_id":item.pk,
+        "interval":"5m","window_start":"2026-07-13T00:00:00+00:00","window_end":"2026-07-13T00:05:00+00:00",
+        "open":"10","high":"11","low":"9","close":"10.5","volume":"100","is_final":True,"version":1}})
+    persist_bar({"produced_at":"2026-07-13T00:01:02+00:00","payload":{"bar_id":"warm-1","instrument_id":item.pk,
         "interval":"5m","window_start":"2026-07-13T00:00:00+00:00","window_end":"2026-07-13T00:05:00+00:00",
         "open":"10","high":"11","low":"9","close":"10.5","volume":"100","is_final":True,"version":1}})
     instance.refresh_from_db()

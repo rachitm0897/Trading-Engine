@@ -2,10 +2,11 @@ from decimal import Decimal, ROUND_HALF_UP
 from django.db import transaction
 from django.utils import timezone
 from apps.audit.models import OutboxEvent
+from apps.core.idempotency import canonical_request_hash, require_matching_request
 from apps.allocation.models import OrderIntentAttribution, RebalancePolicy, RebalanceRun, TargetPortfolioPosition
 from apps.oms.models import OrderIntent
 from apps.portfolios.models import PortfolioPosition
-from apps.strategies.models import StrategyAllocation
+from apps.strategies.models import StrategyAllocation, StrategyTarget
 
 D = Decimal
 VARIABLE_FEE_RATE = D("0.0005")
@@ -13,22 +14,22 @@ VARIABLE_FEE_RATE = D("0.0005")
 
 def aggregate_targets(portfolio):
     totals, attribution = {}, {}
-    allocations = StrategyAllocation.objects.filter(portfolio=portfolio, strategy__enabled=True,
-        strategy__kill_switch=False).select_related("strategy")
+    allocations = list(StrategyAllocation.objects.filter(portfolio=portfolio, strategy_instance__enabled=True,
+        strategy_instance__kill_switch=False).select_related("strategy_instance"))
+    latest_targets = {}
+    for target in StrategyTarget.objects.filter(
+            strategy_instance_id__in=[item.strategy_instance_id for item in allocations],
+            run__status="COMPLETED", status="ACTIVE").order_by("strategy_instance_id", "-created_at"):
+        latest_targets.setdefault(target.strategy_instance_id, target)
     for allocation in allocations:
         nav=D(portfolio.account.net_liquidation)
-        capital_share = D(allocation.strategy.allocated_capital)/nav if nav>0 and allocation.strategy.allocated_capital>0 else D(allocation.weight)
-        instance=getattr(allocation.strategy,"strategy_instance",None)
-        if instance:
-            latest_target=instance.targets.filter(run__status="COMPLETED",status="ACTIVE").order_by("-created_at").first()
-            targets=[latest_target] if latest_target else []
-        else:
-            latest=allocation.strategy.runs.filter(status="COMPLETED").order_by("-completed_at").first()
-            targets=list(latest.targets.all()) if latest else []
-        for target in targets:
+        instance=allocation.strategy_instance
+        capital_share = D(instance.allocated_capital)/nav if nav>0 and instance.allocated_capital>0 else D(allocation.weight)
+        target = latest_targets.get(instance.pk)
+        if target:
             contribution = D(target.target_weight) * capital_share
             totals[target.instrument_id] = totals.get(target.instrument_id, D(0)) + contribution
-            attribution.setdefault(target.instrument_id, {})[allocation.strategy_id] = contribution
+            attribution.setdefault(target.instrument_id, {})[instance.pk] = contribution
     return totals, attribution
 
 
@@ -57,11 +58,10 @@ def _reference_prices(portfolio, prices, strict):
 
 def _net_order_policy(portfolio, contributions, reference_price, side):
     """Select the highest-priority contributing policy for one net broker order."""
-    allocations=StrategyAllocation.objects.filter(portfolio=portfolio,strategy_id__in=contributions).select_related(
-        "strategy__strategy_instance__order_policy").order_by("priority","strategy_id")
+    allocations=StrategyAllocation.objects.filter(portfolio=portfolio,strategy_instance_id__in=contributions).select_related(
+        "strategy_instance__order_policy").order_by("priority","strategy_instance_id")
     for allocation in allocations:
-        instance=getattr(allocation.strategy,"strategy_instance",None)
-        policy=instance.order_policy if instance else None
+        policy=allocation.strategy_instance.order_policy
         if not policy:continue
         limit=None
         if policy.order_type=="LMT":
@@ -73,10 +73,9 @@ def _net_order_policy(portfolio, contributions, reference_price, side):
 
 def _net_strategy_risk_limits(portfolio, contributions, reference_price, target_weight):
     policies=[]
-    for allocation in StrategyAllocation.objects.filter(portfolio=portfolio,strategy_id__in=contributions).select_related(
-            "strategy__strategy_instance__risk_policy"):
-        instance=getattr(allocation.strategy,"strategy_instance",None)
-        if instance and instance.risk_policy:policies.append(instance.risk_policy)
+    for allocation in StrategyAllocation.objects.filter(portfolio=portfolio,strategy_instance_id__in=contributions).select_related(
+            "strategy_instance__risk_policy"):
+        if allocation.strategy_instance.risk_policy:policies.append(allocation.strategy_instance.risk_policy)
     if not policies:return {},{}
     maximum_quantity=min(min(D(x.maximum_quantity),D(x.maximum_notional)/reference_price) for x in policies)
     broker={"broker_max_quantity":maximum_quantity,"short_available":target_weight>=0 or all(x.allow_short for x in policies)}
@@ -86,17 +85,36 @@ def _net_strategy_risk_limits(portfolio, contributions, reference_price, target_
 
 @transaction.atomic
 def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None, mode=None,
-                   policy=None, strict_market_state=True, optimization_run=None, available_cash=None):
+                   policy=None, strict_market_state=True, optimization_run=None, available_cash=None,defer=False,
+                   retry_failed=False):
     policy = policy or RebalancePolicy.objects.filter(portfolio=portfolio).first() or RebalancePolicy.objects.create(portfolio=portfolio)
     mode = (mode or policy.mode).upper()
     if mode not in {"SHADOW", "PAPER"}:
         raise ValueError("Rebalancing supports SHADOW or PAPER mode only")
+    request_hash=canonical_request_hash("rebalance",{
+        "portfolio_id":portfolio.pk,"trigger":trigger,"prices":prices,"nav":nav,"mode":mode,
+        "policy_id":policy.pk,"strict_market_state":strict_market_state,
+        "optimization_run_id":optimization_run.pk if optimization_run else None,
+        "available_cash":available_cash})
     run, created = RebalanceRun.objects.get_or_create(idempotency_key=idempotency_key, defaults={
         "portfolio": portfolio, "policy": policy, "trigger": trigger, "mode": mode,
+        "request_hash":request_hash,
         "optimization_run": optimization_run,
         "target_source": "PORTFOLIO_OPTIMIZATION" if optimization_run else "STRATEGY_AGGREGATION"})
     if not created:
-        return run
+        require_matching_request(run.request_hash,request_hash)
+        if not run.request_hash:
+            run.request_hash=request_hash;run.save(update_fields=["request_hash"])
+        if run.status=="FAILED" and retry_failed and run.retryable:
+            run.targets.all().delete();run.status="QUEUED" if defer else "CALCULATING";run.last_error="";run.retryable=False
+            run.attempt_count+=1;run.completed_at=None
+            run.save(update_fields=["status","last_error","retryable","attempt_count","completed_at"])
+            if defer:return run
+        elif run.status!="QUEUED" or defer:return run
+        elif run.status=="QUEUED":
+            run.status="CALCULATING";run.save(update_fields=["status"])
+    elif defer:
+        run.status="QUEUED";run.save(update_fields=["status"]);return run
     nav = D(str(nav if nav is not None else portfolio.account.net_liquidation))
     available_cash = D(str(available_cash if available_cash is not None else portfolio.account.available_cash))
     if nav <= 0:
@@ -189,16 +207,24 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
             contributions = attribution.get(item["instrument"].pk, {})
             order_type,tif,limit_price=_net_order_policy(portfolio,contributions,item["price"],"BUY" if is_buy else "SELL")
             version_ids=[]
-            for strategy_id in contributions:
-                strategy=StrategyAllocation.objects.filter(portfolio=portfolio,strategy_id=strategy_id).select_related("strategy").first().strategy
-                instance=getattr(strategy,"strategy_instance",None)
-                if instance:
-                    version=instance.versions.filter(version=instance.version).first()
-                    if version:version_ids.append(version.pk)
+            contributing_allocations = {
+                allocation.strategy_instance_id: allocation
+                for allocation in StrategyAllocation.objects.filter(
+                    portfolio=portfolio, strategy_instance_id__in=contributions
+                ).select_related("strategy_instance")
+            }
+            for strategy_instance_id in contributions:
+                instance=contributing_allocations[strategy_instance_id].strategy_instance
+                version=instance.versions.filter(version=instance.version).first()
+                if version:version_ids.append(version.pk)
             intent = OrderIntent.objects.create(rebalance=run, portfolio=portfolio, instrument=item["instrument"],
                 side="BUY" if is_buy else "SELL", quantity=abs(item["delta"]), reference_price=item["price"],
                 order_type=order_type,time_in_force=tif,limit_price=limit_price,strategy_version_snapshot=sorted(version_ids),
-                idempotency_key=f"rebalance:{run.pk}:instrument:{item['instrument'].pk}:v1", source="REBALANCE",
+                idempotency_key=f"rebalance:{run.pk}:instrument:{item['instrument'].pk}:v1",
+                request_hash=canonical_request_hash("strategy_order_intent",{
+                    "rebalance_id":run.pk,"portfolio_id":portfolio.pk,"instrument_id":item["instrument"].pk,
+                    "side":"BUY" if is_buy else "SELL","quantity":abs(item["delta"]),"order_type":order_type,
+                    "time_in_force":tif,"limit_price":limit_price,"strategy_versions":sorted(version_ids)}), source="REBALANCE",
                 mode="PAPER", requires_fresh_price=True, execution_priority=item["target_row"].rank, eligible=eligible)
             if strict_market_state:
                 from apps.position_sizing.models import PositionSizingPolicy
@@ -212,13 +238,10 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
                     broker_limits=broker_limits,strategy_limits=strategy_limits,order_intent=intent,
                     idempotency_key=f"sizing:rebalance:{run.pk}:instrument:{item['instrument'].pk}:v1")
             net_contribution = sum(contributions.values()) or D(1)
-            for strategy_id, contribution in contributions.items():
-                strategy = StrategyAllocation.objects.select_related("strategy").filter(
-                    portfolio=portfolio, strategy_id=strategy_id).first().strategy
-                instance = getattr(strategy, "strategy_instance", None)
-                OrderIntentAttribution.objects.create(order_intent=intent, strategy_id=strategy_id,
-                    strategy_instance=instance,
-                    strategy_version=instance.versions.filter(version=instance.version).first() if instance else None,
+            for strategy_instance_id, contribution in contributions.items():
+                instance = contributing_allocations[strategy_instance_id].strategy_instance
+                OrderIntentAttribution.objects.create(order_intent=intent, strategy_instance=instance,
+                    strategy_version=instance.versions.filter(version=instance.version).first(),
                     target_delta=contribution, allocated_quantity=item["delta"]*contribution/net_contribution)
     OutboxEvent.objects.create(topic="portfolio.rebalance.planned.v1", event_type="portfolio.rebalance.planned",
         aggregate_type="portfolio", aggregate_id=str(portfolio.pk), partition_key=str(portfolio.pk),
@@ -238,7 +261,16 @@ def advance_rebalance(run):
     filled = sum((D(x.order.filled_quantity) for x in sell_intents if hasattr(x, "order")), D(0))
     threshold = D(run.policy.partial_fill_threshold if run.policy else "0.95")
     terminal = all(hasattr(x,"order") and x.order.status in {"FILLED","CANCELLED","REJECTED","EXPIRED"} for x in sell_intents)
-    if requested == 0 or filled/requested >= threshold or terminal:
+    fill_ratio=filled/requested if requested else D(1)
+    if terminal and fill_ratio < threshold:
+        run.phase="BLOCKED"
+        run.status="PARTIALLY_COMPLETED" if filled else "FAILED"
+        run.last_error=(f"Sell stage ended at fill ratio {fill_ratio}; required threshold is {threshold}. "
+            "Buy intents remain ineligible.")
+        run.last_recalculated_at=timezone.now()
+        run.save(update_fields=["phase","status","last_error","last_recalculated_at"])
+        return run
+    if requested == 0 or fill_ratio >= threshold:
         portfolio = run.portfolio
         cash = max(D(portfolio.account.available_cash)*(D(1)-D(run.policy.cash_buffer_percent)), D(0))
         positions = {x.instrument_id:D(x.quantity) for x in PortfolioPosition.objects.filter(portfolio=portfolio)}
@@ -273,9 +305,11 @@ def advance_rebalance(run):
                     target.suppression_reason="TURNOVER_LIMIT"
                 target.save(update_fields=["trade_quantity","suppressed","suppression_reason"])
         run.phase = "BUYS"
+        run.status = "EXECUTING"
+        run.last_error = ""
         run.planned_turnover = turnover_used
         run.last_recalculated_at = timezone.now()
-        run.save(update_fields=["phase","planned_turnover","last_recalculated_at"])
+        run.save(update_fields=["phase","status","last_error","planned_turnover","last_recalculated_at"])
     return run
 
 
@@ -299,6 +333,9 @@ def recover_incomplete():
                 OrderIntent.objects.get_or_create(idempotency_key=f"rebalance:{run.pk}:instrument:{target.instrument_id}:recovery:{version}",defaults={
                     "rebalance":run,"portfolio":run.portfolio,"instrument":target.instrument,"side":side,
                     "quantity":remaining,"reference_price":target.reference_price,"source":"REBALANCE","mode":"PAPER",
-                    "requires_fresh_price":True,"execution_priority":target.rank,"eligible":True})
+                    "requires_fresh_price":True,"execution_priority":target.rank,"eligible":True,
+                    "request_hash":canonical_request_hash("strategy_order_intent_recovery",{
+                        "rebalance_id":run.pk,"instrument_id":target.instrument_id,"side":side,
+                        "quantity":remaining,"version":version})})
         recovered += 1
     return recovered

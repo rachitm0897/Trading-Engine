@@ -8,8 +8,7 @@ from apps.audit.models import OutboxEvent
 from apps.instruments.services import resolve_instrument
 from apps.oms.models import Order
 from .models import (StrategyAllocation, StrategyAttributedPosition, StrategyDefinition, StrategyInputBinding,
-    StrategyInputRequirement, StrategyInstance, StrategyRun, StrategySignal, StrategyTarget, StrategyVersion,
-    TradingStrategy)
+    StrategyInputRequirement, StrategyInstance, StrategyRun, StrategySignal, StrategyTarget, StrategyVersion)
 from .plugins import get_plugin
 from .plugins.base import EvaluationContext
 
@@ -30,7 +29,6 @@ def current_version(instance):
     return instance.versions.get(version=instance.version)
 
 
-@transaction.atomic
 def create_instance(*, name, definition_key, portfolio, timeframe, parameters, target_configuration,
                     instrument_id=None, ticker=None, risk_policy=None, order_policy=None, execution_mode="SHADOW",
                     exchange="SMART", currency="USD", primary_exchange=None, qualify=True, gateway=None):
@@ -46,19 +44,16 @@ def create_instance(*, name, definition_key, portfolio, timeframe, parameters, t
     mode = execution_mode.upper()
     if mode not in {"OBSERVE", "SHADOW", "PAPER"}:
         raise ValueError("Execution mode must be OBSERVE, SHADOW, or PAPER; LIVE is disabled")
-    legacy = TradingStrategy.objects.create(name=name, strategy_type={"SMA_CROSSOVER":"sma_trend",
-        "FIXED_WEIGHT_REBALANCE":"fixed_weight"}.get(definition.key, definition.key.lower()), enabled=False,
-        configuration={**parameters, **target_configuration}, maximum_target_weight=(risk_policy.maximum_weight if risk_policy else 1))
-    legacy.universe.add(instrument)
-    instance = StrategyInstance.objects.create(name=name, definition=definition, portfolio=portfolio, instrument=instrument,
-        timeframe=timeframe, parameters=parameters, target_configuration=target_configuration or {}, risk_policy=risk_policy,
-        order_policy=order_policy, execution_mode=mode, state="BLOCKED" if not contract else "WARMING_UP",
-        block_reason="IBKR contract qualification pending" if not contract else "", legacy_strategy=legacy)
-    version = _create_version(instance)
-    StrategyAllocation.objects.create(strategy=legacy, portfolio=portfolio,
-        weight=Decimal(str((target_configuration or {}).get("capital_share", 1))),
-        priority=int((target_configuration or {}).get("priority", 100)))
-    register_inputs(instance, version)
+    with transaction.atomic():
+        instance = StrategyInstance.objects.create(name=name, definition=definition, portfolio=portfolio, instrument=instrument,
+            timeframe=timeframe, parameters=parameters, target_configuration=target_configuration or {}, risk_policy=risk_policy,
+            order_policy=order_policy, execution_mode=mode, state="BLOCKED" if not contract else "WARMING_UP",
+            block_reason="IBKR contract qualification pending" if not contract else "")
+        version = _create_version(instance)
+        StrategyAllocation.objects.create(strategy_instance=instance, portfolio=portfolio,
+            weight=Decimal(str((target_configuration or {}).get("capital_share", 1))),
+            priority=int((target_configuration or {}).get("priority", 100)))
+        register_inputs(instance, version)
     return instance, qualification
 
 
@@ -86,16 +81,13 @@ def update_instance(instance, changes):
     if "instrument" in changes and not hasattr(instance.instrument,"broker_contract"):
         instance.enabled=False;instance.state="BLOCKED";instance.block_reason="Instrument does not have a qualified IBKR contract"
     instance.clean();instance.save()
+    if "target_configuration" in changes:
+        StrategyAllocation.objects.filter(strategy_instance=instance, portfolio=instance.portfolio).update(
+            weight=Decimal(str(instance.target_configuration.get("capital_share", 1))),
+            priority=int(instance.target_configuration.get("priority", 100)),
+        )
     if material & set(changes):
         version=_create_version(instance);register_inputs(instance,version)
-        instance.legacy_strategy.version=instance.version
-        instance.legacy_strategy.strategy_type={"SMA_CROSSOVER":"sma_trend","FIXED_WEIGHT_REBALANCE":"fixed_weight"}.get(
-            instance.definition.key,instance.definition.key.lower())
-        instance.legacy_strategy.configuration={**instance.parameters,**instance.target_configuration}
-        instance.legacy_strategy.save(update_fields=["version","strategy_type","configuration"])
-        if not instance.enabled:
-            instance.legacy_strategy.enabled=False;instance.legacy_strategy.save(update_fields=["enabled"])
-        instance.legacy_strategy.universe.set([instance.instrument])
     return instance
 
 
@@ -147,28 +139,29 @@ def register_inputs(instance, version=None):
     return requirements
 
 
-@transaction.atomic
 def enable_instance(instance,gateway=None):
-    if not hasattr(instance.instrument,"broker_contract"):
-        instance.state="BLOCKED";instance.block_reason="Instrument does not have a qualified IBKR contract"
-        instance.save(update_fields=["state","block_reason","updated_at"]);raise ValueError(instance.block_reason)
-    now=timezone.now();instance.enabled=True;instance.state="WARMING_UP";instance.block_reason="";instance.effective_from=now;instance.effective_to=None
-    instance.warmup_started_at=now;instance.warmup_last_progress_at=now;instance.warmup_progress=0
-    instance.save(update_fields=["enabled","state","block_reason","effective_from","effective_to","warmup_started_at","warmup_last_progress_at","warmup_progress","updated_at"])
-    instance.legacy_strategy.enabled=True;instance.legacy_strategy.kill_switch=False;instance.legacy_strategy.save(update_fields=["enabled","kill_switch"])
-    StrategyVersion.objects.filter(pk=current_version(instance).pk).update(activated_at=now)
-    register_inputs(instance)
+    with transaction.atomic():
+        instance=StrategyInstance.objects.select_for_update().select_related("instrument").get(pk=instance.pk)
+        if not hasattr(instance.instrument,"broker_contract"):
+            instance.state="BLOCKED";instance.block_reason="Instrument does not have a qualified IBKR contract"
+            instance.save(update_fields=["state","block_reason","updated_at"]);raise ValueError(instance.block_reason)
+        now=timezone.now();instance.enabled=True;instance.state="WARMING_UP";instance.block_reason="";instance.effective_from=now;instance.effective_to=None
+        instance.warmup_started_at=now;instance.warmup_last_progress_at=now;instance.warmup_progress=0
+        instance.kill_switch=False
+        instance.save(update_fields=["enabled","kill_switch","state","block_reason","effective_from","effective_to","warmup_started_at","warmup_last_progress_at","warmup_progress","updated_at"])
+        StrategyVersion.objects.filter(pk=current_version(instance).pk).update(activated_at=now)
+        register_inputs(instance)
     if settings.KAFKA_ENABLED or gateway is not None:
         from apps.market_streams.subscriptions import reconcile_market_subscription
         reconcile_market_subscription(instance.instrument,instance.timeframe,gateway)
     return instance
 
 
-@transaction.atomic
 def pause_instance(instance,gateway=None):
-    instance.enabled=False;instance.state="PAUSED";instance.effective_to=timezone.now();instance.save(update_fields=["enabled","state","effective_to","updated_at"])
-    instance.legacy_strategy.enabled=False;instance.legacy_strategy.save(update_fields=["enabled"])
-    deactivate_inputs(instance)
+    with transaction.atomic():
+        instance=StrategyInstance.objects.select_for_update().select_related("instrument").get(pk=instance.pk)
+        instance.enabled=False;instance.state="PAUSED";instance.effective_to=timezone.now();instance.save(update_fields=["enabled","state","effective_to","updated_at"])
+        deactivate_inputs(instance)
     if settings.KAFKA_ENABLED or gateway is not None:
         from apps.market_streams.subscriptions import reconcile_market_subscription
         reconcile_market_subscription(instance.instrument,instance.timeframe,gateway)
@@ -182,49 +175,59 @@ def _latest_target_weight(instance):
 
 @transaction.atomic
 def evaluate_instance(instance, *, bar, indicators, previous_indicators=None, event_id=None, source_data_version=1,
-                      event_time=None, force=False):
-    instance=StrategyInstance.objects.select_for_update().select_related("definition","instrument","portfolio","legacy_strategy").get(pk=instance.pk)
-    if not force and (not instance.enabled or instance.state in {"PAUSED","BLOCKED","ERROR"}):
+                      event_time=None, force=False, retry_failed=False):
+    instance=StrategyInstance.objects.select_for_update().select_related("definition","instrument","portfolio").get(pk=instance.pk)
+    if not force and (not instance.enabled or instance.state in {"PAUSED","BLOCKED"} or
+            (instance.state=="ERROR" and not retry_failed)):
         raise ValueError("Strategy instance is not ready for evaluation")
     if not bar.get("is_final",True):
         raise ValueError("Strategies evaluate final bars only")
     version=current_version(instance);event_id=str(event_id or bar.get("event_id") or bar.get("bar_id") or _json_hash(bar))
     key=f"strategy:{instance.pk}:v{version.version}:{instance.instrument_id}:{instance.timeframe}:{event_id}:{source_data_version}"
-    existing=StrategyRun.objects.filter(idempotency_key=key).first()
-    if existing:return existing
-    snapshot=configuration_snapshot(instance);digest=_json_hash({"key":key,"bar":bar,"indicators":indicators})
-    run=StrategyRun.objects.create(strategy=instance.legacy_strategy,strategy_instance=instance,strategy_version=version,
-        input_hash=digest,idempotency_key=key,triggering_event_id=event_id,source_data_version=source_data_version,
-        configuration_snapshot=snapshot,context_snapshot=json.loads(json.dumps(
-            {"bar":bar,"indicators":indicators,"previous_indicators":previous_indicators or {}},default=str)))
+    existing=StrategyRun.objects.select_for_update().filter(idempotency_key=key).first()
+    if existing and (existing.status!="ERROR" or not retry_failed):return existing
+    if existing:
+        prior_state=existing.context_snapshot.get("strategy_state")
+        if not prior_state:raise ValueError("This legacy failed strategy run does not retain enough state for a safe retry")
+        StrategySignal.objects.filter(run=existing).delete();existing.targets.all().delete()
+        OutboxEvent.objects.filter(idempotency_key=f"strategy-run:{existing.pk}:completed").delete()
+        instance.state=prior_state;instance.state_data=existing.context_snapshot.get("strategy_state_data") or {}
+        instance.block_reason="";instance.save(update_fields=["state","state_data","block_reason","updated_at"])
+        existing.status="RUNNING";existing.error="";existing.completed_at=None
+        existing.save(update_fields=["status","error","completed_at"]);run=existing
+    else:
+        snapshot=configuration_snapshot(instance);digest=_json_hash({"key":key,"bar":bar,"indicators":indicators})
+        run=StrategyRun.objects.create(strategy_instance=instance,strategy_version=version,
+            input_hash=digest,idempotency_key=key,triggering_event_id=event_id,source_data_version=source_data_version,
+            configuration_snapshot=snapshot,context_snapshot=json.loads(json.dumps(
+                {"bar":bar,"indicators":indicators,"previous_indicators":previous_indicators or {},
+                "strategy_state":instance.state,"strategy_state_data":instance.state_data},default=str)))
     try:
-        attributed=StrategyAttributedPosition.objects.filter(strategy_instance=instance,instrument=instance.instrument,portfolio=instance.portfolio).first()
-        active_orders=tuple(Order.objects.filter(intent__attributions__strategy=instance.legacy_strategy,
-            status__in=["CREATED","RISK_APPROVED","QUEUED","SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED"]))
-        context=EvaluationContext(instance,version,instance.instrument,bar,indicators,previous_indicators or {},instance.state,
-            instance.state_data,attributed,active_orders,event_metadata={"event_id":event_id,"source_data_version":source_data_version})
-        plugin=get_plugin(instance.definition);decision=plugin.evaluate(context);when=event_time or timezone.now()
-        StrategySignal.objects.create(run=run,strategy_instance=instance,strategy_version=version,signal_type=decision.signal_type,
-            signal_time=when,reason=decision.reason,details={"direction":decision.direction,"confidence":str(decision.confidence) if decision.confidence else None})
-        target_data=plugin.build_target(decision,context);latest_weight=_latest_target_weight(instance)
-        if instance.execution_mode != "OBSERVE" and target_data and (latest_weight is None or latest_weight != Decimal(target_data["target_weight"])):
-            StrategyTarget.objects.create(run=run,strategy_instance=instance,strategy_version=version,portfolio=instance.portfolio,
-                instrument=instance.instrument,signal_time=when,source_event_id=event_id,**target_data,rationale=target_data["reason"])
-        from apps.market_streams.models import MarketBar
-        required=get_plugin(instance.definition).warmup_bars(instance.parameters)
-        progress=MarketBar.objects.filter(instrument=instance.instrument,interval=instance.timeframe,is_final=True).values("bar_id").distinct().count()
-        old_progress=instance.warmup_progress;instance.state=decision.next_state;instance.state_data=decision.state_data;instance.warmup_progress=min(progress,required)
-        fields=["state","state_data","warmup_progress","updated_at"]
-        if instance.warmup_progress>old_progress:instance.warmup_last_progress_at=timezone.now();fields.append("warmup_last_progress_at")
-        instance.save(update_fields=fields)
-        run.status="COMPLETED";run.completed_at=timezone.now();run.save(update_fields=["status","completed_at"])
-        OutboxEvent.objects.create(topic="strategy.targets.v1",event_type="strategy.evaluated",aggregate_type="strategy_instance",
-            aggregate_id=str(instance.pk),partition_key=str(instance.instrument_id),payload={"strategy_run_id":run.pk,
-            "strategy_instance_id":instance.pk,"strategy_version":version.version,"signal_type":decision.signal_type,
-            "target_ids":list(run.targets.values_list("pk",flat=True)),"execution_mode":instance.execution_mode},
-            idempotency_key=f"strategy-run:{run.pk}:completed")
+        with transaction.atomic():
+            attributed=StrategyAttributedPosition.objects.filter(strategy_instance=instance,instrument=instance.instrument,portfolio=instance.portfolio).first()
+            active_orders=tuple(Order.objects.filter(intent__attributions__strategy_instance=instance,
+                status__in=["CREATED","RISK_APPROVED","QUEUED","SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED"]))
+            context=EvaluationContext(instance,version,instance.instrument,bar,indicators,previous_indicators or {},instance.state,
+                instance.state_data,attributed,active_orders,event_metadata={"event_id":event_id,"source_data_version":source_data_version})
+            plugin=get_plugin(instance.definition);decision=plugin.evaluate(context);when=event_time or timezone.now()
+            StrategySignal.objects.create(run=run,strategy_instance=instance,strategy_version=version,signal_type=decision.signal_type,
+                signal_time=when,reason=decision.reason,details={"direction":decision.direction,"confidence":str(decision.confidence) if decision.confidence else None})
+            target_data=plugin.build_target(decision,context);latest_weight=_latest_target_weight(instance)
+            if instance.execution_mode != "OBSERVE" and target_data and (latest_weight is None or latest_weight != Decimal(target_data["target_weight"])):
+                StrategyTarget.objects.create(run=run,strategy_instance=instance,strategy_version=version,portfolio=instance.portfolio,
+                    instrument=instance.instrument,signal_time=when,source_event_id=event_id,**target_data,rationale=target_data["reason"])
+            instance.state=decision.next_state;instance.state_data=decision.state_data
+            instance.save(update_fields=["state","state_data","updated_at"])
+            run.status="COMPLETED";run.completed_at=timezone.now();run.save(update_fields=["status","completed_at"])
+            OutboxEvent.objects.create(topic="strategy.targets.v1",event_type="strategy.evaluated",aggregate_type="strategy_instance",
+                aggregate_id=str(instance.pk),partition_key=str(instance.instrument_id),payload={"strategy_run_id":run.pk,
+                "strategy_instance_id":instance.pk,"strategy_version":version.version,"signal_type":decision.signal_type,
+                "target_ids":list(run.targets.values_list("pk",flat=True)),"execution_mode":instance.execution_mode},
+                idempotency_key=f"strategy-run:{run.pk}:completed")
         return run
     except Exception as exc:
+        run=StrategyRun.objects.get(pk=run.pk)
+        instance=StrategyInstance.objects.get(pk=instance.pk)
         run.status="ERROR";run.error=str(exc);run.completed_at=timezone.now();run.save(update_fields=["status","error","completed_at"])
         instance.state="ERROR";instance.block_reason=str(exc)[:255];instance.save(update_fields=["state","block_reason","updated_at"])
         return run
@@ -232,12 +235,12 @@ def evaluate_instance(instance, *, bar, indicators, previous_indicators=None, ev
 
 @transaction.atomic
 def flatten_instance(instance, *, event_id=None, event_time=None):
-    instance=StrategyInstance.objects.select_for_update().select_related("definition","instrument","portfolio","legacy_strategy").get(pk=instance.pk)
+    instance=StrategyInstance.objects.select_for_update().select_related("definition","instrument","portfolio").get(pk=instance.pk)
     version=current_version(instance);event_id=str(event_id or f"manual-flatten-{instance.pk}-v{version.version}")
     key=f"strategy:{instance.pk}:v{version.version}:{instance.instrument_id}:{instance.timeframe}:{event_id}:1"
     run=StrategyRun.objects.filter(idempotency_key=key).first()
     if run:return run
-    run=StrategyRun.objects.create(strategy=instance.legacy_strategy,strategy_instance=instance,strategy_version=version,
+    run=StrategyRun.objects.create(strategy_instance=instance,strategy_version=version,
         input_hash=_json_hash({"key":key}),idempotency_key=key,triggering_event_id=event_id,
         configuration_snapshot=configuration_snapshot(instance),context_snapshot={"operator_action":"FLATTEN"})
     when=event_time or timezone.now()

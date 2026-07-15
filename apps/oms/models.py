@@ -6,7 +6,6 @@ ORDER_STATES = [x for x in "CREATED RISK_APPROVED QUEUED BROKER_BLOCKED SUBMITTE
 class OrderIntent(models.Model):
     rebalance = models.ForeignKey("allocation.RebalanceRun", on_delete=models.PROTECT, null=True, blank=True)
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT)
-    strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.SET_NULL, null=True, blank=True)
     strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.SET_NULL, null=True, blank=True)
     strategy_version = models.ForeignKey("strategies.StrategyVersion", on_delete=models.SET_NULL, null=True, blank=True)
     strategy_snapshot = models.JSONField(default=dict)
@@ -20,12 +19,25 @@ class OrderIntent(models.Model):
     reference_price = models.DecimalField(max_digits=24, decimal_places=8, null=True, blank=True)
     time_in_force = models.CharField(max_length=8, default="DAY")
     idempotency_key = models.CharField(max_length=128, unique=True)
+    request_hash = models.CharField(max_length=64, default="", db_index=True)
+    operation_status = models.CharField(max_length=24, default="PENDING")
+    operation_error = models.CharField(max_length=1000, blank=True)
+    retryable = models.BooleanField(default=False)
+    attempt_count = models.PositiveIntegerField(default=1)
     source = models.CharField(max_length=32, default="MANUAL")
     mode = models.CharField(max_length=16, default="PAPER")
     requires_fresh_price = models.BooleanField(default=False)
     execution_priority = models.PositiveIntegerField(default=100)
     eligible = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["portfolio", "-created_at"], name="intent_portfolio_created_idx"),
+            models.Index(fields=["operation_status", "eligible", "created_at"], name="intent_operation_queue_idx"),
+            models.Index(fields=["rebalance", "side"], name="intent_rebalance_side_idx"),
+            models.Index(fields=["strategy_instance", "-created_at"], name="intent_strategy_created_idx"),
+        ]
 
 class Order(models.Model):
     intent = models.OneToOneField(OrderIntent, on_delete=models.PROTECT, related_name="order")
@@ -38,6 +50,13 @@ class Order(models.Model):
     average_fill_price = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "updated_at"], name="order_status_updated_idx"),
+            models.Index(fields=["broker_order_id"], name="order_broker_id_idx"),
+            models.Index(fields=["broker_permanent_id"], name="order_permanent_id_idx"),
+        ]
 
 class OrderStatusHistory(models.Model):
     order = models.ForeignKey(Order, on_delete=models.PROTECT, related_name="status_history")
@@ -52,3 +71,6 @@ class OrderStatusHistory(models.Model):
     operator_requested = models.BooleanField(default=False)
     event_key = models.CharField(max_length=128, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["order", "occurred_at"], name="order_history_time_idx")]

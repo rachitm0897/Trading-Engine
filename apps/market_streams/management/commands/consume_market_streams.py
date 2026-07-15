@@ -45,15 +45,20 @@ class Command(BaseCommand):
                 if message.error():
                     raise RuntimeError(str(message.error()))
                 envelope=None
+                processing_error=None
+                dead_letter=None
                 try:
                     envelope=json.loads(message.value())
                     consume_market_event("market-persistence-v1",envelope)
                 except Exception as exc:
-                    route_dead_letter(message.topic(),envelope or {"raw":message.value().decode(errors="replace")},exc,"market-persistence-v1")
+                    processing_error=str(exc)
+                    dead_letter=route_dead_letter(message.topic(),envelope or {"raw":message.value().decode(errors="replace")},
+                        exc,"market-persistence-v1")
                 consumer.commit(message=message,asynchronous=False)
                 StreamHealthMetric.objects.update_or_create(component="backend-market-consumer",metric="last_event",
-                    defaults={"status":"HEALTHY","value":{"topic":message.topic(),"partition":message.partition(),
-                        "offset":message.offset()}})
+                    defaults={"status":"DEGRADED" if processing_error else "HEALTHY","value":{"topic":message.topic(),
+                        "partition":message.partition(),"offset":message.offset(),"processing_error":processing_error,
+                        "dead_letter_id":dead_letter.pk if dead_letter else None}})
                 if options["once"]:break
         except Exception as exc:
             failed=True;heartbeat("DEGRADED",error=str(exc)[:255]);raise

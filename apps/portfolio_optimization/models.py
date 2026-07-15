@@ -43,11 +43,15 @@ class PortfolioOptimizationPolicy(models.Model):
 
 
 class PortfolioOptimizationRun(models.Model):
-    APPLICATION_STATUSES = [(value, value) for value in ["NOT_APPLIED", "APPLYING", "APPLIED"]]
+    APPLICATION_STATUSES = [(value, value) for value in ["NOT_APPLIED", "QUEUED", "APPLYING", "APPLIED", "FAILED"]]
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT, related_name="optimization_runs")
     policy = models.ForeignKey(PortfolioOptimizationPolicy, on_delete=models.PROTECT)
     universe = models.ForeignKey(PortfolioUniverse, on_delete=models.PROTECT)
     idempotency_key = models.CharField(max_length=128, unique=True)
+    request_hash = models.CharField(max_length=64, default="", db_index=True)
+    retryable = models.BooleanField(default=False)
+    last_error = models.CharField(max_length=1000, blank=True)
+    attempt_count = models.PositiveIntegerField(default=1)
     trigger = models.CharField(max_length=40, default="MANUAL")
     status = models.CharField(max_length=24, default="CALCULATING")
     input_start_date = models.DateField(null=True, blank=True)

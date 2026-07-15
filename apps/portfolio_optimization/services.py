@@ -6,7 +6,8 @@ from django.db import transaction
 from django.utils import timezone
 from scipy.optimize import minimize
 
-from apps.audit.models import AuditEvent, OutboxEvent
+from apps.audit.models import AuditEvent, OperationAttempt, OutboxEvent
+from apps.core.idempotency import canonical_request_hash, require_matching_request
 from apps.market_data.models import InstrumentPriceHistory
 from apps.market_data.services import fetch_daily_history
 from apps.portfolios.models import PortfolioPosition
@@ -179,11 +180,11 @@ def universe_instruments(universe):
     }
     if universe.include_strategy_instruments:
         allocations = StrategyAllocation.objects.filter(
-            portfolio=universe.portfolio, strategy__enabled=True, strategy__kill_switch=False
-        ).select_related("strategy__strategy_instance__instrument")
+            portfolio=universe.portfolio, strategy_instance__enabled=True, strategy_instance__kill_switch=False
+        ).select_related("strategy_instance__instrument")
         for allocation in allocations:
-            instance = getattr(allocation.strategy, "strategy_instance", None)
-            if instance and instance.instrument.active and instance.instrument.tradable and instance.instrument.asset_class == "STK":
+            instance = allocation.strategy_instance
+            if instance.instrument.active and instance.instrument.tradable and instance.instrument.asset_class == "STK":
                 instrument_map[instance.instrument_id] = instance.instrument
     if len(instrument_map) > universe.maximum_instruments:
         raise UniverseSizeError(len(instrument_map), universe.maximum_instruments)
@@ -266,14 +267,37 @@ def _policy_snapshot(policy):
 
 
 def run_optimization(portfolio, idempotency_key, *, trigger="MANUAL", nav=None, available_cash=None,
-                     refresh_history=True, flow_reference=""):
+                     refresh_history=True, flow_reference="", retry_failed=False, defer=False,stored_request_hash=None):
+    request_hash=stored_request_hash or canonical_request_hash("portfolio_optimization",{
+        "portfolio_id":portfolio.pk,"trigger":trigger,"nav":nav,"available_cash":available_cash,
+        "refresh_history":refresh_history,"flow_reference":flow_reference})
     existing = PortfolioOptimizationRun.objects.filter(idempotency_key=idempotency_key).first()
     if existing:
-        if existing.portfolio_id != portfolio.pk:
-            raise OptimizationError("Idempotency-Key was already used for a different portfolio optimization")
-        return existing
-    policy = PortfolioOptimizationPolicy.objects.filter(portfolio=portfolio, enabled=True).first()
-    universe = PortfolioUniverse.objects.filter(portfolio=portfolio, enabled=True).first()
+        try:require_matching_request(existing.request_hash,request_hash)
+        except ValueError as exc:raise OptimizationError(str(exc)) from exc
+        if not existing.request_hash:
+            existing.request_hash=request_hash;existing.save(update_fields=["request_hash"])
+        if existing.status in {"QUEUED","DISPATCHED"}:
+            run=existing
+        elif existing.status!="FAILED":
+            return existing
+        elif not retry_failed:
+            return existing
+        elif not existing.retryable:
+            raise OptimizationError("Failed optimization is not retryable")
+        else:
+            with transaction.atomic():
+                run=PortfolioOptimizationRun.objects.select_for_update().get(pk=existing.pk)
+                run.targets.all().delete()
+                run.status="QUEUED" if defer else "CALCULATING";run.retryable=False;run.last_error="";run.error_details={}
+                run.solver_status="";run.completed_at=None;run.attempt_count+=1
+                run.save(update_fields=["status","retryable","last_error","error_details","solver_status","completed_at","attempt_count"])
+                OperationAttempt.objects.create(operation_type="PORTFOLIO_OPTIMIZATION",operation_id=str(run.pk),
+                    attempt_number=run.attempt_count,request_hash=run.request_hash,status="QUEUED" if defer else "PROCESSING")
+    else:
+        run=None
+    policy = run.policy if run is not None else PortfolioOptimizationPolicy.objects.filter(portfolio=portfolio, enabled=True).first()
+    universe = run.universe if run is not None else PortfolioUniverse.objects.filter(portfolio=portfolio, enabled=True).first()
     if not policy or not universe:
         raise OptimizationError("An enabled portfolio universe and optimization policy are required")
     if policy.execution_mode not in {"SHADOW", "PAPER"}:
@@ -281,17 +305,23 @@ def run_optimization(portfolio, idempotency_key, *, trigger="MANUAL", nav=None, 
     nav = D(str(nav if nav is not None else portfolio.account.net_liquidation))
     if nav <= 0:
         raise OptimizationError("Portfolio NAV must be positive")
-    run = PortfolioOptimizationRun.objects.create(
-        portfolio=portfolio,
-        policy=policy,
-        universe=universe,
-        idempotency_key=idempotency_key,
-        trigger=trigger,
-        nav=nav,
-        cash_weight=policy.target_cash_weight,
-        policy_snapshot=_policy_snapshot(policy),
-        flow_reference=flow_reference,
-    )
+    if run is None:
+        run,created = PortfolioOptimizationRun.objects.get_or_create(idempotency_key=idempotency_key,defaults={
+            "portfolio":portfolio,"policy":policy,"universe":universe,"request_hash":request_hash,"trigger":trigger,
+            "nav":nav,"cash_weight":policy.target_cash_weight,"policy_snapshot":_policy_snapshot(policy),
+            "flow_reference":flow_reference,"status":"QUEUED" if defer else "CALCULATING"})
+        if not created:
+            try:require_matching_request(run.request_hash,request_hash)
+            except ValueError as exc:raise OptimizationError(str(exc)) from exc
+            return run
+        OperationAttempt.objects.create(operation_type="PORTFOLIO_OPTIMIZATION",operation_id=str(run.pk),
+            attempt_number=run.attempt_count,request_hash=run.request_hash,status="QUEUED" if defer else "PROCESSING")
+    if defer:
+        return run
+    if run.status in {"QUEUED","DISPATCHED"}:
+        run.status="CALCULATING";run.save(update_fields=["status"])
+        OperationAttempt.objects.filter(operation_type="PORTFOLIO_OPTIMIZATION",operation_id=str(run.pk),
+            attempt_number=run.attempt_count,status="QUEUED").update(status="PROCESSING")
     try:
         instruments = universe_instruments(universe)
         if len(instruments) < 2:
@@ -379,13 +409,21 @@ def run_optimization(portfolio, idempotency_key, *, trigger="MANUAL", nav=None, 
                 data={"optimization_run_id": run.pk, "trigger": trigger, "policy_version": policy.version},
                 idempotency_key=f"audit:optimization:{run.pk}:completed",
             )
+            OperationAttempt.objects.filter(operation_type="PORTFOLIO_OPTIMIZATION",operation_id=str(run.pk),
+                attempt_number=run.attempt_count).update(status="COMPLETED",result={"optimization_run_id":run.pk},
+                completed_at=timezone.now())
         return run
     except Exception as exc:
         run.status = "FAILED"
         run.solver_status = "FAILED"
         run.error_details = {"message": str(exc), "type": exc.__class__.__name__}
+        run.last_error = str(exc)[:1000]
+        run.retryable = not isinstance(exc, (OptimizationError, ValueError))
         run.completed_at = timezone.now()
-        run.save(update_fields=["status", "solver_status", "error_details", "completed_at"])
+        run.save(update_fields=["status", "solver_status", "error_details", "last_error", "retryable", "completed_at"])
+        OperationAttempt.objects.filter(operation_type="PORTFOLIO_OPTIMIZATION",operation_id=str(run.pk),
+            attempt_number=run.attempt_count).update(status="FAILED",retryable=run.retryable,
+            error=run.last_error,completed_at=run.completed_at)
         if isinstance(exc, OptimizationError):
             raise
         raise OptimizationError(str(exc)) from exc
@@ -429,7 +467,7 @@ def plan_optimized_rebalance(optimization_run, idempotency_key, *, mode="SHADOW"
 def apply_optimization_run(optimization_run, idempotency_key, *, mode="SHADOW", strict_market_state=False):
     run_id = optimization_run.pk if isinstance(optimization_run, PortfolioOptimizationRun) else optimization_run
     run = (
-        PortfolioOptimizationRun.objects.select_for_update()
+        PortfolioOptimizationRun.objects.select_for_update(of=("self",))
         .select_related("portfolio__account", "policy", "universe", "applied_rebalance")
         .get(pk=run_id)
     )

@@ -2,11 +2,13 @@ from django.conf import settings
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse
-from apps.core.views import response, _serialize
+from apps.core.views import method_guard, response, _serialize
 from .models import DeadLetterEvent, ReplayRequest, StreamHealthMetric
 
 
 def health(request):
+    invalid=method_guard(request,"GET")
+    if invalid:return invalid
     from apps.audit.models import OutboxEvent
     from apps.market_streams.models import InstrumentMarketState
     metric_objects=list(StreamHealthMetric.objects.all())
@@ -28,9 +30,10 @@ def health(request):
     except Exception as exc:
         flink = {"status":"DEGRADED" if settings.KAFKA_ENABLED else "DISABLED", "error":str(exc)[:120]}
     from apps.strategies.models import StrategyInstance
-    from apps.market_streams.health import strategy_stream_status
-    strategies=[strategy_stream_status(item) for item in StrategyInstance.objects.filter(enabled=True).select_related(
-        "definition","instrument__broker_contract").order_by("name")]
+    from apps.market_streams.health import annotate_stream_health, strategy_stream_status
+    strategy_query=annotate_stream_health(StrategyInstance.objects.filter(enabled=True).select_related(
+        "definition","instrument__broker_contract").order_by("name"))
+    strategies=[strategy_stream_status(item) for item in strategy_query]
     gateway_metric=next((item for item in metric_objects if item.component=="gateway" and item.metric=="connectivity"),None)
     gateway={"status":gateway_metric.status if gateway_metric else "UNKNOWN",
         "value":gateway_metric.value if gateway_metric else {},"observed_at":gateway_metric.observed_at if gateway_metric else None}
@@ -57,6 +60,8 @@ def health(request):
 
 
 def prometheus_metrics(request):
+    invalid=method_guard(request,"GET")
+    if invalid:return invalid
     from prometheus_client import CollectorRegistry, Gauge, generate_latest, CONTENT_TYPE_LATEST
     from apps.audit.models import OutboxEvent
     from apps.market_streams.models import InstrumentMarketState
@@ -68,6 +73,8 @@ def prometheus_metrics(request):
 
 
 def topics(request):
+    invalid=method_guard(request,"GET")
+    if invalid:return invalid
     from pathlib import Path
     import json
     path = Path(settings.BASE_DIR).parent / "streaming" / "kafka" / "topics.yml"
@@ -76,13 +83,28 @@ def topics(request):
 
 
 def consumer_lag(request):
+    invalid=method_guard(request,"GET")
+    if invalid:return invalid
     metrics = StreamHealthMetric.objects.filter(metric__icontains="lag")
     return response(_serialize(metrics,["component","metric","status","value","observed_at"]))
 
 
 def dead_letter(request):
+    invalid=method_guard(request,"GET")
+    if invalid:return invalid
     return response(_serialize(DeadLetterEvent.objects.order_by("-created_at")[:250],
         ["event_id","source_topic","consumer_name","reason","envelope","replayed_at","created_at"]))
+
+
+def replay_status(request,replay_id):
+    invalid=method_guard(request,"GET")
+    if invalid:return invalid
+    try:item=ReplayRequest.objects.get(pk=replay_id)
+    except ReplayRequest.DoesNotExist:
+        return response(status=404,error={"code":"NOT_FOUND","message":"Replay request not found","details":{}})
+    return response({"id":item.pk,"topic":item.topic,"consumer_name":item.consumer_name,"status":item.status,
+        "processed_count":item.processed_count,"from_timestamp":item.from_timestamp,"to_timestamp":item.to_timestamp,
+        "created_at":item.created_at,"completed_at":item.completed_at})
 
 
 @csrf_exempt
@@ -91,10 +113,18 @@ def replay(request):
     import json
     key=request.headers.get("Idempotency-Key")
     if not key:return response(status=400,error={"code":"IDEMPOTENCY_KEY_REQUIRED","message":"Idempotency-Key header is required","details":{}})
-    payload=json.loads(request.body or b"{}")
-    from .services import request_replay
-    item=request_replay(payload["topic"],payload["consumer_name"],key,payload.get("from_timestamp"),payload.get("to_timestamp"))
-    if item.status=="REQUESTED":
-        from .tasks import execute_replay_request
-        execute_replay_request.delay(item.pk)
-    return response({"id":item.pk,"status":item.status},status=202)
+    try:
+        payload=json.loads(request.body or b"{}")
+        if not isinstance(payload,dict):raise ValueError("Request body must be a JSON object")
+        unknown=set(payload)-{"topic","consumer_name","from_timestamp","to_timestamp"}
+        if unknown:raise ValueError(f"Unsupported replay fields: {', '.join(sorted(unknown))}")
+        if not str(payload.get("topic") or "").strip() or not str(payload.get("consumer_name") or "").strip():
+            raise ValueError("topic and consumer_name are required")
+        from .services import request_replay
+        item=request_replay(payload["topic"],payload["consumer_name"],key,payload.get("from_timestamp"),payload.get("to_timestamp"))
+        if item.status=="REQUESTED":
+            from .tasks import execute_replay_request
+            execute_replay_request.delay(item.pk)
+        return response({"id":item.pk,"status":item.status},status=202)
+    except (json.JSONDecodeError,ValueError,TypeError) as exc:
+        return response(status=400,error={"code":"INVALID_REPLAY_REQUEST","message":str(exc),"details":{}})

@@ -8,6 +8,7 @@ from django.test import Client
 from django.utils import timezone
 
 from apps.accounts.models import BrokerAccount
+from apps.audit.models import OperationAttempt
 from apps.allocation.models import AllocationDecision, RebalancePolicy, StrategyCapitalSnapshot
 from apps.allocation.services import create_flow
 from apps.instruments.models import BrokerContract, Instrument
@@ -27,7 +28,7 @@ from apps.portfolio_optimization.services import (
 )
 from apps.portfolios.models import TradingPortfolio
 from apps.position_sizing.models import PositionSizingDecision
-from apps.strategies.models import StrategyAllocation, TradingStrategy
+from apps.strategies.models import StrategyAllocation, StrategyDefinition, StrategyInstance
 
 
 pytestmark = pytest.mark.django_db
@@ -111,6 +112,14 @@ def _optimization_case():
     return portfolio, instruments, policy
 
 
+def _allocated_strategy(portfolio, instrument, name, capital):
+    instance=StrategyInstance.objects.create(name=name,definition=StrategyDefinition.objects.get(key="FIXED_WEIGHT_REBALANCE"),
+        portfolio=portfolio,instrument=instrument,timeframe="1d",parameters={"direction":"LONG"},enabled=True,
+        allocated_capital=capital)
+    StrategyAllocation.objects.create(portfolio=portfolio,strategy_instance=instance,weight=1)
+    return instance
+
+
 def test_optimization_targets_use_existing_rebalance_and_sizing_pipeline():
     portfolio, instruments, _ = _optimization_case()
     RebalancePolicy.objects.create(
@@ -136,7 +145,27 @@ def test_optimization_targets_use_existing_rebalance_and_sizing_pipeline():
     assert PositionSizingDecision.objects.filter(order_intent__rebalance=rebalance).count() == OrderIntent.objects.filter(rebalance=rebalance).count()
 
 
-def test_optimization_preview_api_returns_metrics_targets_and_shadow_trades(client):
+def test_failed_optimization_requires_explicit_retry_and_preserves_attempts(monkeypatch):
+    portfolio,_,_=_optimization_case()
+    from apps.portfolio_optimization import services
+    real=services.solve_markowitz
+    calls={"count":0}
+    def flaky(**kwargs):
+        calls["count"]+=1
+        if calls["count"]==1:raise RuntimeError("temporary solver process failure")
+        return real(**kwargs)
+    monkeypatch.setattr(services,"solve_markowitz",flaky)
+    with pytest.raises(Exception,match="temporary solver process failure"):
+        services.run_optimization(portfolio,"optimization-retry",refresh_history=False)
+    stored=services.run_optimization(portfolio,"optimization-retry",refresh_history=False)
+    assert stored.status=="FAILED" and calls["count"]==1
+    completed=services.run_optimization(portfolio,"optimization-retry",refresh_history=False,retry_failed=True)
+    assert completed.status=="COMPLETED" and calls["count"]==2
+    attempts=list(OperationAttempt.objects.filter(operation_type="PORTFOLIO_OPTIMIZATION").order_by("attempt_number"))
+    assert [(item.status,item.retryable) for item in attempts]==[("FAILED",True),("COMPLETED",False)]
+
+
+def test_optimization_preview_api_queues_then_task_builds_metrics_targets_and_shadow_trades(client):
     portfolio, _, _ = _optimization_case()
     RebalancePolicy.objects.create(portfolio=portfolio, maximum_turnover="2", minimum_trade_notional="1", fee_buffer="0")
     result = client.post(
@@ -145,8 +174,12 @@ def test_optimization_preview_api_returns_metrics_targets_and_shadow_trades(clie
         content_type="application/json",
         HTTP_IDEMPOTENCY_KEY="api-optimization-preview",
     )
-    assert result.status_code == 201
-    body = result.json()["data"]
+    assert result.status_code == 202
+    queued=result.json()["data"]
+    assert queued["status"]=="QUEUED" and queued["targets"]==[]
+    from apps.portfolio_optimization.tasks import execute_optimization_run
+    execute_optimization_run.run(queued["id"],False,None,True)
+    body=client.get(f"/api/v1/portfolio-optimization/runs/{queued['id']}/").json()["data"]
     assert body["status"] == "COMPLETED"
     assert body["expected_volatility"] is not None
     assert len(body["targets"]) == 2
@@ -160,9 +193,8 @@ def test_optimization_preview_api_returns_metrics_targets_and_shadow_trades(clie
     ("WITHDRAWAL", "1000", Decimal("9000"), Decimal("9000")),
 ])
 def test_deposits_and_withdrawals_recalculate_post_flow_optimized_weights(flow_type, amount, expected_nav, expected_cash):
-    portfolio, _, _ = _optimization_case()
-    strategy = TradingStrategy.objects.create(name=f"Flow strategy {flow_type}", strategy_type="fixed_weight", allocated_capital=10000)
-    StrategyAllocation.objects.create(portfolio=portfolio, strategy=strategy, weight=1)
+    portfolio, instruments, _ = _optimization_case()
+    strategy = _allocated_strategy(portfolio, instruments[0], f"Flow strategy {flow_type}", 10000)
     allocation = create_flow(
         portfolio,
         flow_type,
@@ -189,10 +221,9 @@ def test_deposits_and_withdrawals_recalculate_post_flow_optimized_weights(flow_t
 
 
 def test_auto_with_enabled_universe_and_policy_resolves_to_optimization():
-    portfolio, _, _ = _optimization_case()
+    portfolio, instruments, _ = _optimization_case()
     RebalancePolicy.objects.create(portfolio=portfolio, maximum_turnover="2", minimum_trade_notional="1", fee_buffer="0")
-    strategy = TradingStrategy.objects.create(name="Auto optimization strategy", strategy_type="fixed_weight", allocated_capital=321)
-    StrategyAllocation.objects.create(portfolio=portfolio, strategy=strategy, weight=1)
+    strategy = _allocated_strategy(portfolio, instruments[0], "Auto optimization strategy", 321)
 
     allocation = create_flow(portfolio, "DEPOSIT", "100", "flow-auto-optimization", allocation_mode="AUTO")
 
@@ -201,6 +232,20 @@ def test_auto_with_enabled_universe_and_policy_resolves_to_optimization():
     assert allocation.optimization_run_id is not None
     assert strategy.allocated_capital == Decimal("321")
     assert not allocation.decisions.exists()
+
+
+def test_optimized_flow_http_returns_queued_run_and_celery_completes_it(client):
+    portfolio, _, _ = _optimization_case()
+    RebalancePolicy.objects.create(portfolio=portfolio,maximum_turnover="2",minimum_trade_notional="1",fee_buffer="0")
+    result=client.post("/api/v1/allocations/flows/",data={"portfolio_id":portfolio.pk,"flow_type":"DEPOSIT",
+        "amount":"100","allocation_mode":"PORTFOLIO_OPTIMIZATION"},content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="async-optimized-flow")
+    assert result.status_code==202 and result.json()["data"]["status"]=="QUEUED"
+    from apps.allocation.tasks import execute_flow_allocation_task
+    execute_flow_allocation_task.run(result.json()["data"]["id"])
+    allocation=client.get(f"/api/v1/allocations/runs/{result.json()['data']['id']}/").json()["data"]
+    assert allocation["status"] in {"COMPLETED","PARTIALLY_ALLOCATED"}
+    assert allocation["optimization_run_id"] is not None
 
 
 def test_optimization_application_is_one_time_and_identical_retry_returns_existing(client):
@@ -212,6 +257,8 @@ def test_optimization_application_is_one_time_and_identical_retry_returns_existi
         content_type="application/json",
         HTTP_IDEMPOTENCY_KEY="preview-once",
     ).json()["data"]
+    from apps.portfolio_optimization.tasks import apply_optimization_run_task, execute_optimization_run
+    execute_optimization_run.run(preview["id"],False,None,True)
     payload = json.dumps({
         "optimization_run_id": preview["id"],
         "portfolio_id": portfolio.pk,
@@ -225,6 +272,8 @@ def test_optimization_application_is_one_time_and_identical_retry_returns_existi
         content_type="application/json",
         HTTP_IDEMPOTENCY_KEY="apply-once",
     )
+    assert first.status_code==202
+    apply_optimization_run_task.run(preview["id"],"apply-once","SHADOW")
     retry = client.post(
         "/api/v1/portfolio-optimization/run/",
         data=payload,
@@ -238,8 +287,9 @@ def test_optimization_application_is_one_time_and_identical_retry_returns_existi
         HTTP_IDEMPOTENCY_KEY="apply-again",
     )
 
-    assert first.status_code == retry.status_code == 201
-    assert first.json()["data"]["applied_rebalance"]["id"] == retry.json()["data"]["applied_rebalance"]["id"]
+    assert retry.status_code == 200
+    assert first.json()["data"]["application_status"]=="QUEUED"
+    assert retry.json()["data"]["applied_rebalance"]["id"]
     assert duplicate.status_code == 409
     assert duplicate.json()["error"]["code"] == "OPTIMIZATION_ALREADY_APPLIED"
     run = PortfolioOptimizationRun.objects.get(pk=preview["id"])
