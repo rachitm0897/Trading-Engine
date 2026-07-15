@@ -29,6 +29,10 @@ import type {
   PortfolioUniverse,
   PortfolioOptimizationPolicy,
   PortfolioOptimizationRun,
+  PortfolioConstructionPlan,
+  PortfolioConstructionRun,
+  ConstructionEligibility,
+  GoalStrategySelection,
 } from './types'
 
 const POLL_INTERVAL = 15_000
@@ -201,5 +205,29 @@ export const queries = {
     queryFn: () => request<PortfolioOptimizationRun[]>(withQuery('portfolio-optimization/runs/', {portfolio: portfolioId})),
     enabled: Boolean(portfolioId),
     refetchInterval: POLL_INTERVAL,
+  }),
+  constructionPlans: (portfolioId?: number | null) => queryOptions({
+    queryKey: ['construction-plans', portfolioId ?? 'none'],
+    queryFn: () => request<PortfolioConstructionPlan[]>(withQuery('portfolio-construction/plans/', {portfolio: portfolioId})),
+    enabled: Boolean(portfolioId),
+    staleTime: 15_000,
+  }),
+  constructionRuns: (portfolioId?: number | null) => queryOptions({
+    queryKey: ['construction-runs', portfolioId ?? 'none'],
+    queryFn: () => request<PortfolioConstructionRun[]>(withQuery('portfolio-construction/runs/', {portfolio: portfolioId})),
+    enabled: Boolean(portfolioId),
+    refetchInterval: POLL_INTERVAL,
+  }),
+  constructionEligibility: (goalId?: number | null) => queryOptions({
+    queryKey: ['construction-eligibility', goalId ?? 'none'],
+    queryFn: () => request<ConstructionEligibility>(`portfolio-construction/goals/${goalId}/eligible-strategies/`),
+    enabled: Boolean(goalId),
+    staleTime: 30_000,
+  }),
+  constructionSelections: (goalId?: number | null) => queryOptions({
+    queryKey: ['construction-selections', goalId ?? 'none'],
+    queryFn: () => request<GoalStrategySelection[]>(`portfolio-construction/goals/${goalId}/selections/`),
+    enabled: Boolean(goalId),
+    staleTime: 15_000,
   }),
 }

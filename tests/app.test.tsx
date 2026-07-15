@@ -29,6 +29,42 @@ const strategy = {
   requirements: [{identity_hash: 'input-1', input_type: 'INDICATOR', name: 'channel', parameters: {window: 21}, parameters_hash: 'hash', warmup_bars: 22, shared_by: 1, active: true}],
 }
 
+const constructionPlan = {
+  id: 301, portfolio_id: 10, name: 'Primary goals', status: 'DRAFT', version: 4,
+  allocated_weight: 1, allocated_percentage: 100, enabled_goal_count: 2, ready_to_preview: true,
+  validation_errors: [], created_at: '2026-07-13T01:00:00Z', updated_at: '2026-07-13T01:00:00Z',
+  timeframe_options: [
+    {code: 'NOW', label: 'Now, up to 30 days'}, {code: 'HURRY', label: 'Hurry, 1-3 months'},
+    {code: 'FAST', label: 'Fast, 3-12 months'}, {code: 'BUILD', label: 'Build, 1-3 years'},
+    {code: 'GROW', label: 'Grow, 3-7 years'}, {code: 'COMPOUND', label: 'Compound, 7+ years'},
+  ],
+  risk_options: [
+    {level: 1, code: 'PRESERVATION', label: 'Capital Preservation'}, {level: 2, code: 'CONSERVATIVE', label: 'Conservative'},
+    {level: 3, code: 'BALANCED', label: 'Balanced'}, {level: 4, code: 'GROWTH', label: 'Growth'},
+    {level: 5, code: 'AGGRESSIVE', label: 'Aggressive / High Risk-High Reward'},
+  ],
+  goals: [
+    {id: 401, plan_id: 301, name: 'Near-term reserve', allocation_weight: .5, allocation_percentage: 50, timeframe_bucket: 'HURRY', risk_level: 2, enabled: true, display_order: 0, selection_count: 1, created_at: '', updated_at: '', resolved_rules: {timeframe_bucket: 'HURRY', timeframe_label: 'Hurry, 1-3 months', risk_level: 2, risk_code: 'CONSERVATIVE', risk_label: 'Conservative', maximum_allowed_risk: 2, minimum_cash_weight: .7, maximum_stock_weight: .1, optimizer_method: 'MINIMUM_VARIANCE', lookback_days: 252, minimum_history_observations: 60, long_only: true}},
+    {id: 402, plan_id: 301, name: 'Long-term growth', allocation_weight: .5, allocation_percentage: 50, timeframe_bucket: 'GROW', risk_level: 5, enabled: true, display_order: 1, selection_count: 2, created_at: '', updated_at: '', resolved_rules: {timeframe_bucket: 'GROW', timeframe_label: 'Grow, 3-7 years', risk_level: 5, risk_code: 'AGGRESSIVE', risk_label: 'Aggressive / High Risk-High Reward', maximum_allowed_risk: 5, minimum_cash_weight: .05, maximum_stock_weight: .25, optimizer_method: 'MAXIMUM_SHARPE', lookback_days: 252, minimum_history_observations: 60, long_only: true}},
+  ],
+}
+
+const constructionPreview = {
+  id: 501, plan_id: 301, portfolio_id: 10, status: 'COMPLETED', application_status: 'NOT_APPLIED', retryable: false,
+  last_error: '', attempt_count: 1, nav: 100000, final_target_weights: {cash: .7, stocks: {'5': .175, '6': .125}},
+  metrics: {expected_return: .08, expected_volatility: .12, sharpe_ratio: .66}, warnings: [], applied_rebalance: null, applied_at: null,
+  created_at: '', started_at: '', completed_at: '', rebalance: {id: 601, mode: 'SHADOW', status: 'PLANNED', phase: 'SHADOW_COMPLETE', planned_turnover: .3},
+  goals: [
+    {goal_id: 401, name: 'Near-term reserve', allocation_weight: .5, goal_nav: 50000, timeframe_bucket: 'HURRY', risk_level: 2, optimizer_method: 'MINIMUM_VARIANCE', cash_weight: .8, maximum_stock_weight: .1, intentionally_cash_only: false, apply_blocked: false, warnings: [], stocks: [{instrument_id: 5, symbol: 'NVDA', goal_id: 401, goal_name: 'Near-term reserve', goal_allocation_weight: .5, local_weight: .1, portfolio_contribution: .05}]},
+    {goal_id: 402, name: 'Long-term growth', allocation_weight: .5, goal_nav: 50000, timeframe_bucket: 'GROW', risk_level: 5, optimizer_method: 'MAXIMUM_SHARPE', cash_weight: .5, maximum_stock_weight: .25, intentionally_cash_only: false, apply_blocked: false, warnings: [], stocks: [{instrument_id: 5, symbol: 'NVDA', goal_id: 402, goal_name: 'Long-term growth', goal_allocation_weight: .5, local_weight: .25, portfolio_contribution: .125}, {instrument_id: 6, symbol: 'MSFT', goal_id: 402, goal_name: 'Long-term growth', goal_allocation_weight: .5, local_weight: .25, portfolio_contribution: .125}]},
+  ],
+  targets: [
+    {id: 1, instrument_id: 5, symbol: 'NVDA', current_weight: .1, target_weight: .175, weight_change: .075, target_value: 17500, expected_return_contribution: .03, risk_contribution: .04, shared_across_goals: true, rank: 0, goal_contributions: [{goal_id: 401, goal_name: 'Near-term reserve', local_weight: .1, portfolio_contribution: .05}, {goal_id: 402, goal_name: 'Long-term growth', local_weight: .25, portfolio_contribution: .125}]},
+    {id: 2, instrument_id: 6, symbol: 'MSFT', current_weight: 0, target_weight: .125, weight_change: .125, target_value: 12500, expected_return_contribution: .05, risk_contribution: .08, shared_across_goals: false, rank: 1, goal_contributions: [{goal_id: 402, goal_name: 'Long-term growth', local_weight: .25, portfolio_contribution: .125}]},
+  ],
+  planned_trades: [{instrument_id: 5, symbol: 'NVDA', current_weight: .1, target_weight: .175, side: 'BUY', quantity: 60, reference_price: 125, estimated_cost: 1, suppressed: false, suppression_reason: ''}, {instrument_id: 6, symbol: 'MSFT', current_weight: 0, target_weight: .125, side: 'BUY', quantity: 31, reference_price: 400, estimated_cost: 1, suppressed: false, suppression_reason: ''}],
+}
+
 const data: Record<string, unknown> = {
   system: {mode: 'PAPER', execution_mode: 'SHADOW', is_admin: true, global_kill_switch: false, material_breaks: 0, time: '2026-07-13T01:00:00Z'},
   gateway: {connected: true, reconciled: true, mode: 'paper', last_callback: '2026-07-13T01:00:00Z', worker: 'paper-worker'},
@@ -81,6 +117,12 @@ const data: Record<string, unknown> = {
   'portfolio-universe': [{id: 1, portfolio_id: 10, name: 'Default universe', include_strategy_instruments: false, minimum_history_observations: 60, maximum_instruments: 50, selected_count: 2, enabled: true, instruments: [{instrument_id: 5, symbol: 'NVDA', enabled: true}, {instrument_id: 6, symbol: 'MSFT', enabled: true}], updated_at: '2026-07-13T01:00:00Z'}],
   'portfolio-optimization/policies': [{id: 1, portfolio_id: 10, name: 'Default Markowitz policy', method: 'MINIMUM_VARIANCE', lookback_days: 252, return_estimation: 'HISTORICAL_MEAN', covariance_estimation: 'SAMPLE', risk_free_rate: 0, target_cash_weight: .05, minimum_weight: 0, maximum_weight: .8, maximum_turnover: .5, transaction_cost_penalty: .01, long_only: true, enabled: true, execution_mode: 'SHADOW', version: 1, updated_at: '2026-07-13T01:00:00Z'}],
   'portfolio-optimization/runs': [],
+  'portfolio-construction/plans': [constructionPlan],
+  'portfolio-construction/runs': [],
+  'portfolio-construction/goals/401/eligible-strategies': {goal_id: 401, eligible: [{strategy_definition_id: 44, key: definition.key, name: definition.name, summary: definition.description, limitations: 'Long only', execution_timeframes: definition.supported_timeframes, default_parameters: {...definition.default_parameters, direction: 'LONG'}, parameter_schema: definition.parameter_schema, eligible: true, reason: ''}], rejected: [{strategy_definition_id: 45, key: 'BREAKOUT', name: 'Breakout', summary: '', limitations: '', execution_timeframes: ['1d'], default_parameters: {}, parameter_schema: {}, eligible: false, reason: 'Strategy supports risk levels 3-5'}]},
+  'portfolio-construction/goals/402/eligible-strategies': {goal_id: 402, eligible: [{strategy_definition_id: 44, key: definition.key, name: definition.name, summary: definition.description, limitations: 'Long only', execution_timeframes: definition.supported_timeframes, default_parameters: {...definition.default_parameters, direction: 'LONG'}, parameter_schema: definition.parameter_schema, eligible: true, reason: ''}], rejected: []},
+  'portfolio-construction/goals/401/selections': [{id: 701, goal_id: 401, strategy_definition_id: 44, strategy_key: definition.key, strategy_name: definition.name, instrument_id: 5, symbol: 'NVDA', execution_timeframe: '15m', parameter_overrides: {...definition.default_parameters, direction: 'LONG'}, enabled: true, created_strategy_instance_id: null, created_at: '', updated_at: ''}],
+  'portfolio-construction/goals/402/selections': [{id: 702, goal_id: 402, strategy_definition_id: 44, strategy_key: definition.key, strategy_name: definition.name, instrument_id: 5, symbol: 'NVDA', execution_timeframe: '15m', parameter_overrides: {...definition.default_parameters, direction: 'LONG'}, enabled: true, created_strategy_instance_id: null, created_at: '', updated_at: ''}],
 }
 
 const optimizationPreview = {
@@ -119,6 +161,8 @@ beforeEach(() => {
       if (path === 'orders') return {ok: true, status: 201, json: async () => ({ok: true, data: {internal_id: 'created-order', status: 'QUEUED', decision: 'APPROVED'}, error: null, meta: {}})} as Response
       if (path === 'portfolio-optimization/preview') return {ok: true, status: 201, json: async () => ({ok: true, data: optimizationPreview, error: null, meta: {}})} as Response
       if (path === 'portfolio-optimization/run') return {ok: true, status: 201, json: async () => ({ok: true, data: {...optimizationPreview, application_status: 'APPLIED', applied_at: '2026-07-13T01:02:00Z', applied_rebalance: {id: 82, mode: 'SHADOW', status: 'PLANNED', phase: 'SHADOW_COMPLETE', planned_turnover: .24}}, error: null, meta: {}})} as Response
+      if (path === 'portfolio-construction/preview') return {ok: true, status: 202, json: async () => ({ok: true, data: constructionPreview, error: null, meta: {}})} as Response
+      if (path === 'portfolio-construction/runs/501/apply') return {ok: true, status: 202, json: async () => ({ok: true, data: {...constructionPreview, application_status: 'APPLIED', applied_at: '2026-07-13T01:03:00Z', applied_rebalance: {id: 602, mode: 'SHADOW', status: 'PLANNED', phase: 'SHADOW_COMPLETE', planned_turnover: .3}, metrics: {...constructionPreview.metrics, strategy_instances: [{selection_id: 701, strategy_instance_id: 801}]}}, error: null, meta: {}})} as Response
       if (path === 'allocations/flows') return {ok: true, status: 201, json: async () => ({ok: true, data: {id: 92, status: 'COMPLETED', allocation_mode: 'PORTFOLIO_OPTIMIZATION'}, error: null, meta: {}})} as Response
       if (path === 'data-providers/finnhub/configure') return {ok: true, status: 200, json: async () => ({ok: true, data: {...data['data-providers/finnhub'] as object, database_configured: true, masked_api_key: '••••CRET'}, error: null, meta: {}})} as Response
       if (path === 'data-providers/finnhub/test') return {ok: true, status: 200, json: async () => ({ok: true, data: {...data['data-providers/finnhub'] as object, connected: true, source: 'TRANSIENT'}, error: null, meta: {}})} as Response
@@ -131,12 +175,12 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals())
 
-test('renders five bookmarkable primary routes and paper status', async () => {
+test('renders six bookmarkable primary routes and paper status', async () => {
   render(<App />)
   expect(await screen.findByRole('heading', {name: 'Good overview, Primary paper'})).toBeInTheDocument()
   const nav = screen.getByRole('navigation', {name: 'Primary navigation'})
   const links = within(nav).getAllByRole('link')
-  expect(links.map((link) => link.textContent)).toEqual(['Dashboard', 'Strategies', 'Portfolio', 'Orders & Activity', 'System'])
+  expect(links.map((link) => link.textContent)).toEqual(['Dashboard', 'Strategies', 'Portfolio Builder', 'Portfolio', 'Orders & Activity', 'System'])
   expect(within(nav).getByRole('link', {name: 'Strategies'})).toHaveAttribute('href', '/strategies')
   expect(screen.getAllByText('PAPER').length).toBeGreaterThan(0)
 })
@@ -257,11 +301,35 @@ test('kill switch requires confirmation and an audit reason', async () => {
   expect(screen.getByText('22 / 22')).toBeInTheDocument()
 })
 
-test('portfolio construction previews optimized metrics and planned SHADOW trades', async () => {
+test('portfolio builder filters risk, previews merged goals, and applies once', async () => {
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/portfolio-builder')
+  render(<App />)
+  expect(await screen.findByRole('heading', {name: 'Portfolio Builder'})).toBeInTheDocument()
+  expect(await screen.findByText('Allocated: 100% of 100%')).toBeInTheDocument()
+  const nearTermRisk = screen.getByLabelText('Near-term reserve risk')
+  expect(within(nearTermRisk).queryByRole('option', {name: 'Growth'})).not.toBeInTheDocument()
+  expect(within(nearTermRisk).getByRole('option', {name: 'Conservative'})).toBeInTheDocument()
+  await user.click(screen.getByRole('button', {name: 'Save & select investments'}))
+  expect(await screen.findByRole('heading', {name: 'Near-term reserve'})).toBeInTheDocument()
+  expect(screen.getByText('1 strategies not eligible')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', {name: 'Preview combined portfolio'}))
+  expect(await screen.findByText('Final combined allocation')).toBeInTheDocument()
+  expect(screen.getByText('Shared by 2 goals')).toBeInTheDocument()
+  expect(screen.getByText('One net rebalance')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', {name: 'Continue to apply'}))
+  await user.click(screen.getByRole('button', {name: 'Apply combined target'}))
+  const dialog = screen.getByRole('dialog', {name: 'Apply the combined portfolio target?'})
+  await user.click(within(dialog).getByRole('button', {name: 'Apply one combined target'}))
+  expect(await screen.findByText(/Applied through rebalance 602/)).toBeInTheDocument()
+  expect(screen.getByRole('link', {name: 'Review strategies'})).toHaveAttribute('href', '/strategies')
+})
+
+test('advanced target optimizer previews metrics and planned SHADOW trades', async () => {
   const user = userEvent.setup()
   window.history.replaceState({}, '', '/portfolio')
   render(<App />)
-  expect(await screen.findByRole('heading', {name: 'Portfolio construction'})).toBeInTheDocument()
+  expect(await screen.findByRole('heading', {name: 'Advanced target optimizer'})).toBeInTheDocument()
   await waitFor(() => {
     expect(queryClient.getQueryData(['portfolio-universe', 10])).toEqual(data['portfolio-universe'])
     expect(queryClient.getQueryData(['optimization-policies', 10])).toEqual(data['portfolio-optimization/policies'])

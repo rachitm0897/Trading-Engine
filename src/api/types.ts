@@ -710,3 +710,167 @@ export interface PortfolioOptimizationRun {
   rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
   applied_rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
 }
+
+export type GoalTimeframe = 'NOW' | 'HURRY' | 'FAST' | 'BUILD' | 'GROW' | 'COMPOUND'
+
+export interface GoalResolvedRules {
+  timeframe_bucket: GoalTimeframe
+  timeframe_label: string
+  risk_level: number
+  risk_code: string
+  risk_label: string
+  maximum_allowed_risk: number
+  minimum_cash_weight: DecimalValue
+  maximum_stock_weight: DecimalValue
+  optimizer_method: 'MINIMUM_VARIANCE' | 'MAXIMUM_SHARPE' | null
+  lookback_days: number
+  minimum_history_observations: number
+  long_only: boolean
+}
+
+export interface PortfolioGoalAllocation {
+  id: number
+  plan_id: number
+  name: string
+  allocation_weight: DecimalValue
+  allocation_percentage: DecimalValue
+  timeframe_bucket: GoalTimeframe
+  risk_level: number
+  enabled: boolean
+  display_order: number
+  resolved_rules: GoalResolvedRules
+  selection_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ConstructionValidationError {
+  code: string
+  message: string
+  goal_id?: number
+  allocated_weight?: DecimalValue
+}
+
+export interface PortfolioConstructionPlan {
+  id: number
+  portfolio_id: number
+  name: string
+  status: 'DRAFT' | 'ACTIVE' | 'PAUSED'
+  version: number
+  allocated_weight: DecimalValue
+  allocated_percentage: DecimalValue
+  enabled_goal_count: number
+  ready_to_preview: boolean
+  validation_errors: ConstructionValidationError[]
+  timeframe_options: {code: GoalTimeframe; label: string}[]
+  risk_options: {level: number; code: string; label: string}[]
+  goals: PortfolioGoalAllocation[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ConstructionStrategyOption {
+  strategy_definition_id: number
+  key: string
+  name: string
+  summary: string
+  limitations: string
+  execution_timeframes: string[]
+  default_parameters: Record<string, Scalar>
+  parameter_schema: ParameterSchema
+  eligible: boolean
+  reason: string
+}
+
+export interface ConstructionEligibility {
+  goal_id: number
+  eligible: ConstructionStrategyOption[]
+  rejected: ConstructionStrategyOption[]
+}
+
+export interface GoalStrategySelection {
+  id: number
+  goal_id: number
+  strategy_definition_id: number
+  strategy_key: string
+  strategy_name: string
+  instrument_id: number
+  symbol: string
+  execution_timeframe: string
+  parameter_overrides: JsonRecord
+  enabled: boolean
+  created_strategy_instance_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface GoalConstructionStock {
+  instrument_id: number
+  symbol: string
+  goal_id: number
+  goal_name: string
+  goal_allocation_weight: DecimalValue
+  local_weight: DecimalValue
+  portfolio_contribution: DecimalValue
+}
+
+export interface GoalConstructionResult {
+  goal_id: number
+  name: string
+  allocation_weight: DecimalValue
+  goal_nav: DecimalValue
+  timeframe_bucket: GoalTimeframe
+  risk_level: number
+  optimizer_method: string | null
+  cash_weight: DecimalValue
+  maximum_stock_weight: DecimalValue
+  stocks: GoalConstructionStock[]
+  metrics: {expected_return: DecimalValue; expected_volatility: DecimalValue; sharpe_ratio: DecimalValue}
+  warnings: {code: string; message?: string}[]
+  intentionally_cash_only: boolean
+  apply_blocked: boolean
+}
+
+export interface PortfolioConstructionTarget {
+  id: number
+  instrument_id: number
+  symbol: string
+  current_weight: DecimalValue
+  target_weight: DecimalValue
+  weight_change: DecimalValue
+  target_value: DecimalValue
+  expected_return_contribution: DecimalValue
+  risk_contribution: DecimalValue
+  goal_contributions: {goal_id: number; goal_name: string; local_weight: DecimalValue; portfolio_contribution: DecimalValue}[]
+  shared_across_goals: boolean
+  rank: number
+}
+
+export interface PlannedConstructionTrade extends PlannedOptimizationTrade {
+  current_weight: DecimalValue
+  target_weight: DecimalValue
+}
+
+export interface PortfolioConstructionRun {
+  id: number
+  plan_id: number
+  portfolio_id: number
+  status: string
+  application_status: 'NOT_APPLIED' | 'QUEUED' | 'APPLYING' | 'APPLIED' | 'FAILED'
+  retryable: boolean
+  last_error: string
+  attempt_count: number
+  nav: DecimalValue
+  final_target_weights: {cash?: DecimalValue; stocks?: Record<string, DecimalValue>}
+  metrics: {expected_return?: DecimalValue; expected_volatility?: DecimalValue; sharpe_ratio?: DecimalValue; strategy_instances?: {selection_id: number; strategy_instance_id: number}[]}
+  warnings: unknown[]
+  goals?: GoalConstructionResult[]
+  targets?: PortfolioConstructionTarget[]
+  planned_trades?: PlannedConstructionTrade[]
+  rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
+  applied_rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
+  applied_at: string | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+}
