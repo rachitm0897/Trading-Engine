@@ -22,6 +22,12 @@ from apps.portfolios.models import (
     PositionLedgerEntry,
     TradingPortfolio,
 )
+from apps.portfolio_construction.models import (
+    GoalInstrumentSelection,
+    GoalStrategyAssignment,
+    PortfolioConstructionPlan,
+    PortfolioGoalAllocation,
+)
 from apps.reconciliation.models import ReconciliationBreak, ReconciliationRun
 from apps.strategies.deletion import delete_strategy_instance
 from apps.strategies.framework import create_instance, enable_instance, evaluate_instance
@@ -351,6 +357,40 @@ def test_deletion_requires_exact_name_and_audits_not_found(client, portfolio, in
     assert AuditEvent.objects.filter(
         event_type="strategy.deletion.rejected", aggregate_id="999999"
     ).exists()
+
+
+def test_deletion_detaches_portfolio_builder_assignment(client, portfolio, instrument):
+    instance = make_instance(portfolio, instrument, name="Builder-created strategy")
+    plan = PortfolioConstructionPlan.objects.create(portfolio=portfolio, name="Deletion plan")
+    goal = PortfolioGoalAllocation.objects.create(
+        plan=plan,
+        name="Deletion goal",
+        allocation_weight=1,
+        timeframe_bucket="BUILD",
+        risk_level=3,
+    )
+    selection = GoalInstrumentSelection.objects.create(
+        goal_allocation=goal,
+        instrument=instrument,
+    )
+    assignment = GoalStrategyAssignment.objects.create(
+        goal_instrument_selection=selection,
+        strategy_definition=instance.definition,
+        execution_timeframe=instance.timeframe,
+        parameter_overrides=instance.parameters,
+        parameter_hash="builder-deletion-parameter-hash",
+        created_strategy_instance=instance,
+    )
+
+    response = delete_request(client, instance, key="delete-builder-created-strategy")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["deleted"]["construction_assignments_detached"] == 1
+    assert not StrategyInstance.objects.filter(pk=instance.pk).exists()
+    assignment.refresh_from_db()
+    assert assignment.created_strategy_instance_id is None
+    assert assignment.strategy_definition_id == instance.definition_id
+    assert assignment.enabled is True and assignment.create_instance is True
 
 
 def test_deletion_updates_shared_input_reference_counts(portfolio, instrument):

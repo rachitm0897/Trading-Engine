@@ -7,15 +7,17 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 
 from apps.audit.models import AuditEvent
+from apps.core.idempotency import canonical_request_hash
 from apps.core.throttling import throttle_response
 from apps.core.validation import decimal_field, require_fields
 from apps.core.views import response
 from apps.instruments.models import Instrument
 from apps.portfolios.models import TradingPortfolio
-from apps.strategies.models import StrategyDefinition
+from apps.strategies.models import OrderPolicy, StrategyDefinition, StrategyRiskPolicy
 
 from .models import (
-    GoalStrategySelection,
+    GoalInstrumentSelection,
+    GoalStrategyAssignment,
     PortfolioConstructionPlan,
     PortfolioConstructionRun,
     PortfolioGoalAllocation,
@@ -28,7 +30,8 @@ from .services import (
     create_construction_run,
     eligible_strategies,
     plan_validation,
-    validate_selection,
+    validate_assignment,
+    validate_instrument_selection,
 )
 
 
@@ -70,7 +73,7 @@ def _goal_row(goal):
         "enabled": goal.enabled,
         "display_order": goal.display_order,
         "resolved_rules": rules,
-        "selection_count": goal.selections.filter(enabled=True).count(),
+        "instrument_count": goal.instrument_selections.filter(enabled=True).count(),
         "created_at": goal.created_at,
         "updated_at": goal.updated_at,
     }
@@ -95,21 +98,46 @@ def _plan_row(plan):
     }
 
 
-def _selection_row(selection):
+def _instrument_row(selection):
     return {
         "id": selection.pk,
         "goal_id": selection.goal_allocation_id,
-        "strategy_definition_id": selection.strategy_definition_id,
-        "strategy_key": selection.strategy_definition.key,
-        "strategy_name": selection.strategy_definition.name,
         "instrument_id": selection.instrument_id,
         "symbol": selection.instrument.symbol,
-        "execution_timeframe": selection.execution_timeframe,
-        "parameter_overrides": selection.parameter_overrides,
+        "asset_class": selection.instrument.asset_class,
+        "exchange": selection.instrument.exchange,
+        "currency": selection.instrument.currency,
+        "minimum_weight": selection.minimum_weight,
+        "maximum_weight": selection.maximum_weight,
+        "display_order": selection.display_order,
         "enabled": selection.enabled,
-        "created_strategy_instance_id": selection.created_strategy_instance_id,
+        "assignment_count": selection.assignments.filter(enabled=True).count(),
         "created_at": selection.created_at,
         "updated_at": selection.updated_at,
+    }
+
+
+def _assignment_row(assignment):
+    return {
+        "id": assignment.pk,
+        "goal_instrument_id": assignment.goal_instrument_selection_id,
+        "goal_id": assignment.goal_instrument_selection.goal_allocation_id,
+        "strategy_definition_id": assignment.strategy_definition_id,
+        "strategy_key": assignment.strategy_definition.key,
+        "strategy_name": assignment.strategy_definition.name,
+        "instrument_id": assignment.goal_instrument_selection.instrument_id,
+        "symbol": assignment.goal_instrument_selection.instrument.symbol,
+        "execution_timeframe": assignment.execution_timeframe,
+        "parameter_overrides": assignment.parameter_overrides,
+        "parameter_hash": assignment.parameter_hash,
+        "strategy_share": assignment.strategy_share,
+        "risk_policy_id": assignment.risk_policy_id,
+        "order_policy_id": assignment.order_policy_id,
+        "create_instance": assignment.create_instance,
+        "enabled": assignment.enabled,
+        "created_strategy_instance_id": assignment.created_strategy_instance_id,
+        "created_at": assignment.created_at,
+        "updated_at": assignment.updated_at,
     }
 
 
@@ -148,6 +176,8 @@ def _run_row(run, detail=False):
     if detail:
         row.update({
             "plan_snapshot": run.plan_snapshot,
+            "instrument_snapshot": run.instrument_snapshot,
+            "assignment_snapshot": run.assignment_snapshot,
             "goals": run.goal_results,
             "policy_snapshot": run.policy_snapshot,
             "targets": [
@@ -350,25 +380,120 @@ def goal_eligible_strategies(request, goal_id):
         return response(status=404, error={"code": "NOT_FOUND", "message": "Goal not found", "details": {}})
 
 
-def goal_selections(request, goal_id):
+def goal_instruments(request, goal_id):
     try:
         goal = PortfolioGoalAllocation.objects.select_related("plan").get(pk=goal_id)
     except PortfolioGoalAllocation.DoesNotExist:
         return response(status=404, error={"code": "NOT_FOUND", "message": "Goal not found", "details": {}})
     if request.method == "GET":
         return response([
-            _selection_row(item)
-            for item in goal.selections.select_related("strategy_definition", "instrument").order_by("pk")
+            _instrument_row(item)
+            for item in goal.instrument_selections.select_related("instrument").order_by("display_order", "pk")
         ])
     if request.method != "POST":
         return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "GET or POST required", "details": {}})
     try:
         payload = _payload(request)
-        allowed = {"strategy_definition_id", "strategy_key", "instrument_id", "execution_timeframe", "parameter_overrides", "enabled"}
+        allowed = {"instrument_id", "enabled", "minimum_weight", "maximum_weight", "display_order"}
         unknown = set(payload) - allowed
         if unknown:
-            raise ValueError(f"Unsupported selection fields: {', '.join(sorted(unknown))}")
-        require_fields(payload, "instrument_id", "execution_timeframe")
+            raise ValueError(f"Unsupported instrument fields: {', '.join(sorted(unknown))}")
+        require_fields(payload, "instrument_id")
+        instrument = Instrument.objects.get(pk=payload["instrument_id"])
+        minimum, maximum = validate_instrument_selection(
+            instrument=instrument,
+            minimum_weight=payload.get("minimum_weight"),
+            maximum_weight=payload.get("maximum_weight"),
+        )
+        enabled = payload.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be a boolean")
+        with transaction.atomic():
+            selection = GoalInstrumentSelection(
+                goal_allocation=goal,
+                instrument=instrument,
+                enabled=enabled,
+                minimum_weight=minimum,
+                maximum_weight=maximum,
+                display_order=int(payload.get("display_order", goal.instrument_selections.count())),
+            )
+            selection.full_clean()
+            selection.save()
+            bump_plan_version(goal.plan)
+        _audit(request, "portfolio.construction_instrument.created", goal.plan.portfolio_id, {
+            "plan_id": goal.plan_id, "goal_id": goal.pk, "goal_instrument_id": selection.pk,
+        })
+        return response(_instrument_row(selection), status=201)
+    except (ValueError, TypeError, json.JSONDecodeError, IntegrityError, ConstructionError,
+            DjangoValidationError, Instrument.DoesNotExist) as exc:
+        return response(status=400, error={"code": "INVALID_CONSTRUCTION_INSTRUMENT", "message": str(exc), "details": {}})
+
+
+def instrument_detail(request, goal_instrument_id):
+    if request.method not in {"PATCH", "DELETE"}:
+        return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "PATCH or DELETE required", "details": {}})
+    try:
+        with transaction.atomic():
+            selection = GoalInstrumentSelection.objects.select_related(
+                "goal_allocation__plan", "instrument",
+            ).get(pk=goal_instrument_id)
+            plan = PortfolioConstructionPlan.objects.select_for_update().get(pk=selection.goal_allocation.plan_id)
+            if request.method == "DELETE":
+                result = {"id": selection.pk, "goal_id": selection.goal_allocation_id}
+                selection.delete()
+                event = "portfolio.construction_instrument.deleted"
+            else:
+                payload = _payload(request)
+                allowed = {"enabled", "minimum_weight", "maximum_weight", "display_order"}
+                unknown = set(payload) - allowed
+                if unknown:
+                    raise ValueError(f"Unsupported instrument fields: {', '.join(sorted(unknown))}")
+                if "enabled" in payload:
+                    if not isinstance(payload["enabled"], bool):
+                        raise ValueError("enabled must be a boolean")
+                    selection.enabled = payload["enabled"]
+                if "display_order" in payload:
+                    selection.display_order = int(payload["display_order"])
+                minimum, maximum = validate_instrument_selection(
+                    instrument=selection.instrument,
+                    minimum_weight=payload.get("minimum_weight", selection.minimum_weight),
+                    maximum_weight=payload.get("maximum_weight", selection.maximum_weight),
+                )
+                if "minimum_weight" in payload:
+                    selection.minimum_weight = minimum
+                if "maximum_weight" in payload:
+                    selection.maximum_weight = maximum
+                selection.full_clean()
+                selection.save()
+                result = _instrument_row(selection)
+                event = "portfolio.construction_instrument.changed"
+            bump_plan_version(plan)
+        _audit(request, event, plan.portfolio_id, {
+            "plan_id": plan.pk, "goal_instrument_id": goal_instrument_id,
+        })
+        return response(result)
+    except GoalInstrumentSelection.DoesNotExist:
+        return response(status=404, error={"code": "NOT_FOUND", "message": "Selection not found", "details": {}})
+    except (ValueError, TypeError, json.JSONDecodeError, ConstructionError, DjangoValidationError) as exc:
+        return response(status=400, error={"code": "INVALID_CONSTRUCTION_INSTRUMENT", "message": str(exc), "details": {}})
+
+
+def _assignment_values(payload, selection, assignment=None):
+    allowed = {
+        "strategy_definition_id", "strategy_key", "execution_timeframe", "parameter_overrides",
+        "strategy_share", "risk_policy_id", "order_policy_id", "create_instance", "enabled",
+    }
+    unknown = set(payload) - allowed
+    if unknown:
+        raise ValueError(f"Unsupported assignment fields: {', '.join(sorted(unknown))}")
+    if assignment is None and bool(payload.get("strategy_definition_id")) == bool(payload.get("strategy_key")):
+        raise ValueError("Provide exactly one of strategy_definition_id or strategy_key")
+    definition = assignment.strategy_definition if assignment else (
+        StrategyDefinition.objects.get(pk=payload["strategy_definition_id"])
+        if payload.get("strategy_definition_id") else
+        StrategyDefinition.objects.get(key=str(payload["strategy_key"]).upper())
+    )
+    if "strategy_definition_id" in payload or "strategy_key" in payload:
         if bool(payload.get("strategy_definition_id")) == bool(payload.get("strategy_key")):
             raise ValueError("Provide exactly one of strategy_definition_id or strategy_key")
         definition = (
@@ -376,52 +501,119 @@ def goal_selections(request, goal_id):
             if payload.get("strategy_definition_id") else
             StrategyDefinition.objects.get(key=str(payload["strategy_key"]).upper())
         )
-        instrument = Instrument.objects.get(pk=payload["instrument_id"])
-        parameters = validate_selection(
-            goal=goal,
-            definition=definition,
-            instrument=instrument,
-            execution_timeframe=str(payload["execution_timeframe"]),
-            parameter_overrides=payload.get("parameter_overrides", {}),
-        )
-        enabled = payload.get("enabled", True)
-        if not isinstance(enabled, bool):
-            raise ValueError("enabled must be a boolean")
+    timeframe = str(payload.get("execution_timeframe", assignment.execution_timeframe if assignment else ""))
+    if not timeframe:
+        raise ValueError("execution_timeframe is required")
+    parameters = payload.get("parameter_overrides", assignment.parameter_overrides if assignment else {})
+    existing_owners = selection.assignments.filter(enabled=True, create_instance=True)
+    if assignment:
+        existing_owners = existing_owners.exclude(pk=assignment.pk)
+    if "strategy_share" in payload:
+        share = decimal_field(payload, "strategy_share", required=True, positive=True)
+    elif assignment:
+        share = assignment.strategy_share
+    elif not existing_owners.exists():
+        share = Decimal(1)
+    else:
+        raise ValueError("strategy_share is required when a stock has multiple assignments")
+    risk_policy = assignment.risk_policy if assignment else None
+    if "risk_policy_id" in payload:
+        risk_policy = StrategyRiskPolicy.objects.get(pk=payload["risk_policy_id"]) if payload["risk_policy_id"] else None
+    order_policy = assignment.order_policy if assignment else None
+    if "order_policy_id" in payload:
+        order_policy = OrderPolicy.objects.get(pk=payload["order_policy_id"]) if payload["order_policy_id"] else None
+    create_instance = payload.get("create_instance", assignment.create_instance if assignment else True)
+    enabled = payload.get("enabled", assignment.enabled if assignment else True)
+    if not isinstance(create_instance, bool) or not isinstance(enabled, bool):
+        raise ValueError("create_instance and enabled must be booleans")
+    parameters = validate_assignment(
+        goal_instrument_selection=selection,
+        definition=definition,
+        execution_timeframe=timeframe,
+        parameter_overrides=parameters,
+        strategy_share=share,
+        risk_policy=risk_policy,
+        order_policy=order_policy,
+    )
+    return {
+        "strategy_definition": definition,
+        "execution_timeframe": timeframe,
+        "parameter_overrides": parameters,
+        "parameter_hash": canonical_request_hash("parameters", parameters),
+        "strategy_share": share,
+        "risk_policy": risk_policy,
+        "order_policy": order_policy,
+        "create_instance": create_instance,
+        "enabled": enabled,
+    }
+
+
+def instrument_assignments(request, goal_instrument_id):
+    try:
+        selection = GoalInstrumentSelection.objects.select_related(
+            "goal_allocation__plan", "instrument",
+        ).get(pk=goal_instrument_id)
+    except GoalInstrumentSelection.DoesNotExist:
+        return response(status=404, error={"code": "NOT_FOUND", "message": "Goal instrument not found", "details": {}})
+    if request.method == "GET":
+        return response([
+            _assignment_row(item) for item in selection.assignments.select_related(
+                "strategy_definition", "goal_instrument_selection__goal_allocation",
+                "goal_instrument_selection__instrument",
+            ).order_by("pk")
+        ])
+    if request.method != "POST":
+        return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "GET or POST required", "details": {}})
+    try:
+        values = _assignment_values(_payload(request), selection)
         with transaction.atomic():
-            selection = GoalStrategySelection.objects.create(
-                goal_allocation=goal,
-                strategy_definition=definition,
-                instrument=instrument,
-                execution_timeframe=str(payload["execution_timeframe"]),
-                parameter_overrides=parameters,
-                enabled=enabled,
+            assignment = GoalStrategyAssignment.objects.create(
+                goal_instrument_selection=selection, **values,
             )
-            bump_plan_version(goal.plan)
-        _audit(request, "portfolio.construction_selection.created", goal.plan.portfolio_id, {
-            "plan_id": goal.plan_id, "goal_id": goal.pk, "selection_id": selection.pk,
+            bump_plan_version(selection.goal_allocation.plan)
+        _audit(request, "portfolio.construction_assignment.created", selection.goal_allocation.plan.portfolio_id, {
+            "plan_id": selection.goal_allocation.plan_id,
+            "goal_instrument_id": selection.pk,
+            "assignment_id": assignment.pk,
         })
-        return response(_selection_row(selection), status=201)
+        return response(_assignment_row(assignment), status=201)
     except (ValueError, TypeError, json.JSONDecodeError, IntegrityError, ConstructionError,
-            StrategyDefinition.DoesNotExist, Instrument.DoesNotExist) as exc:
-        return response(status=400, error={"code": "INVALID_CONSTRUCTION_SELECTION", "message": str(exc), "details": {}})
+            StrategyDefinition.DoesNotExist, StrategyRiskPolicy.DoesNotExist, OrderPolicy.DoesNotExist) as exc:
+        return response(status=400, error={"code": "INVALID_CONSTRUCTION_ASSIGNMENT", "message": str(exc), "details": {}})
 
 
-def selection_detail(request, selection_id):
-    if request.method != "DELETE":
-        return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "DELETE required", "details": {}})
+def assignment_detail(request, assignment_id):
+    if request.method not in {"PATCH", "DELETE"}:
+        return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "PATCH or DELETE required", "details": {}})
     try:
         with transaction.atomic():
-            selection = GoalStrategySelection.objects.select_related("goal_allocation__plan").get(pk=selection_id)
+            assignment = GoalStrategyAssignment.objects.select_related(
+                "goal_instrument_selection__goal_allocation__plan",
+                "goal_instrument_selection__instrument", "strategy_definition", "risk_policy", "order_policy",
+            ).get(pk=assignment_id)
+            selection = assignment.goal_instrument_selection
             plan = PortfolioConstructionPlan.objects.select_for_update().get(pk=selection.goal_allocation.plan_id)
-            result = {"id": selection.pk, "goal_id": selection.goal_allocation_id}
-            selection.delete()
+            if request.method == "DELETE":
+                result = {"id": assignment.pk, "goal_instrument_id": selection.pk}
+                assignment.delete()
+                event = "portfolio.construction_assignment.deleted"
+            else:
+                values = _assignment_values(_payload(request), selection, assignment)
+                for field, value in values.items():
+                    setattr(assignment, field, value)
+                assignment.full_clean()
+                assignment.save()
+                result = _assignment_row(assignment)
+                event = "portfolio.construction_assignment.changed"
             bump_plan_version(plan)
-        _audit(request, "portfolio.construction_selection.deleted", plan.portfolio_id, {
-            "plan_id": plan.pk, "selection_id": selection_id,
-        })
+        _audit(request, event, plan.portfolio_id, {"plan_id": plan.pk, "assignment_id": assignment_id})
         return response(result)
-    except GoalStrategySelection.DoesNotExist:
-        return response(status=404, error={"code": "NOT_FOUND", "message": "Selection not found", "details": {}})
+    except GoalStrategyAssignment.DoesNotExist:
+        return response(status=404, error={"code": "NOT_FOUND", "message": "Assignment not found", "details": {}})
+    except (ValueError, TypeError, json.JSONDecodeError, IntegrityError, ConstructionError,
+            DjangoValidationError, StrategyDefinition.DoesNotExist, StrategyRiskPolicy.DoesNotExist,
+            OrderPolicy.DoesNotExist) as exc:
+        return response(status=400, error={"code": "INVALID_CONSTRUCTION_ASSIGNMENT", "message": str(exc), "details": {}})
 
 
 def preview(request):

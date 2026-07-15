@@ -65,7 +65,7 @@ def _feasible_start(current, lower, upper, total):
         if not len(available):
             break
         step = difference / len(available)
-        weights[available] = np.clip(weights[available] + step, lower, upper)
+        weights[available] = np.clip(weights[available] + step, lower[available], upper[available])
     if abs(float(weights.sum()) - total) > 1e-7:
         raise OptimizationError("Weight bounds cannot satisfy the target cash weight")
     return weights
@@ -85,13 +85,21 @@ def solve_markowitz(*, expected_returns, covariance, current_weights, method, ca
         raise OptimizationError("Optimization inputs have inconsistent dimensions")
     cash_weight = float(cash_weight)
     stock_total = 1.0 - cash_weight
-    lower = max(float(minimum_weight), 0.0) if long_only else float(minimum_weight)
-    upper = float(maximum_weight)
+    lower = np.asarray(minimum_weight, dtype=float)
+    upper = np.asarray(maximum_weight, dtype=float)
+    if lower.ndim == 0:
+        lower = np.full(count, max(float(lower), 0.0) if long_only else float(lower))
+    elif long_only:
+        lower = np.maximum(lower, 0.0)
+    if upper.ndim == 0:
+        upper = np.full(count, float(upper))
+    if lower.shape != (count,) or upper.shape != (count,):
+        raise OptimizationError("Weight bounds have inconsistent dimensions")
     if not 0 <= cash_weight < 1:
         raise OptimizationError("Target cash weight must be between zero and one")
-    if upper <= 0 or lower > upper:
+    if np.any(upper <= 0) or np.any(lower > upper):
         raise OptimizationError("Minimum and maximum weights are invalid")
-    if count * lower > stock_total + 1e-10 or count * upper < stock_total - 1e-10:
+    if float(lower.sum()) > stock_total + 1e-10 or float(upper.sum()) < stock_total - 1e-10:
         raise OptimizationError("Weight bounds are infeasible for the selected universe and cash target")
     if not np.all(np.isfinite(expected_returns)) or not np.all(np.isfinite(covariance)):
         raise OptimizationError("Expected returns and covariance must be finite")
@@ -115,7 +123,7 @@ def solve_markowitz(*, expected_returns, covariance, current_weights, method, ca
             lambda weights: float(np.abs(weights - current).sum()),
             start,
             method="SLSQP",
-            bounds=[(lower, upper)] * count,
+            bounds=list(zip(lower, upper)),
             constraints=[{"type": "eq", "fun": lambda weights: float(weights.sum()) - stock_total}],
             options={"maxiter": 500, "ftol": 1e-12},
         )
@@ -144,7 +152,7 @@ def solve_markowitz(*, expected_returns, covariance, current_weights, method, ca
         objective,
         start,
         method="SLSQP",
-        bounds=[(lower, upper)] * count,
+        bounds=list(zip(lower, upper)),
         constraints=constraints,
         options={"maxiter": 1000, "ftol": 1e-12},
     )

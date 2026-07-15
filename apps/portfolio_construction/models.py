@@ -77,16 +77,76 @@ class StrategyConstructionProfile(models.Model):
         ]
 
 
-class GoalStrategySelection(models.Model):
-    goal_allocation = models.ForeignKey(PortfolioGoalAllocation, on_delete=models.CASCADE, related_name="selections")
-    strategy_definition = models.ForeignKey("strategies.StrategyDefinition", on_delete=models.PROTECT)
+class GoalInstrumentSelection(models.Model):
+    goal_allocation = models.ForeignKey(
+        PortfolioGoalAllocation, on_delete=models.CASCADE, related_name="instrument_selections"
+    )
     instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT)
+    enabled = models.BooleanField(default=True)
+    minimum_weight = models.DecimalField(max_digits=10, decimal_places=8, null=True, blank=True)
+    maximum_weight = models.DecimalField(max_digits=10, decimal_places=8, null=True, blank=True)
+    display_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["display_order", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["goal_allocation", "instrument"],
+                name="unique_goal_instrument_selection",
+            ),
+            models.CheckConstraint(
+                condition=(models.Q(minimum_weight__isnull=True) |
+                           (models.Q(minimum_weight__gte=0) & models.Q(minimum_weight__lte=1))),
+                name="goal_instrument_minimum_weight_range",
+            ),
+            models.CheckConstraint(
+                condition=(models.Q(maximum_weight__isnull=True) |
+                           (models.Q(maximum_weight__gte=0) & models.Q(maximum_weight__lte=1))),
+                name="goal_instrument_maximum_weight_range",
+            ),
+            models.CheckConstraint(
+                condition=(models.Q(minimum_weight__isnull=True) |
+                           models.Q(maximum_weight__isnull=True) |
+                           models.Q(minimum_weight__lte=models.F("maximum_weight"))),
+                name="goal_instrument_weight_order",
+            ),
+        ]
+
+    def clean(self):
+        if self.instrument_id and (
+            not self.instrument.active or not self.instrument.tradable or self.instrument.asset_class != "STK"
+        ):
+            raise ValidationError("Instrument must be an active, tradable stock")
+        if (
+            self.minimum_weight is not None
+            and self.maximum_weight is not None
+            and self.minimum_weight > self.maximum_weight
+        ):
+            raise ValidationError("minimum_weight must not exceed maximum_weight")
+
+
+class GoalStrategyAssignment(models.Model):
+    goal_instrument_selection = models.ForeignKey(
+        GoalInstrumentSelection, on_delete=models.CASCADE, related_name="assignments"
+    )
+    strategy_definition = models.ForeignKey("strategies.StrategyDefinition", on_delete=models.PROTECT)
     execution_timeframe = models.CharField(max_length=16)
     parameter_overrides = models.JSONField(default=dict)
+    parameter_hash = models.CharField(max_length=64)
+    strategy_share = models.DecimalField(max_digits=10, decimal_places=8, default=1)
+    risk_policy = models.ForeignKey(
+        "strategies.StrategyRiskPolicy", on_delete=models.PROTECT, null=True, blank=True
+    )
+    order_policy = models.ForeignKey(
+        "strategies.OrderPolicy", on_delete=models.PROTECT, null=True, blank=True
+    )
+    create_instance = models.BooleanField(default=True)
     enabled = models.BooleanField(default=True)
     created_strategy_instance = models.ForeignKey(
-        "strategies.StrategyInstance", on_delete=models.PROTECT, null=True, blank=True,
-        related_name="construction_selections",
+        "strategies.StrategyInstance", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="construction_assignments",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -94,9 +154,15 @@ class GoalStrategySelection(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["goal_allocation", "strategy_definition", "instrument", "execution_timeframe"],
-                name="unique_goal_strategy_stock_timeframe",
-            )
+                fields=[
+                    "goal_instrument_selection", "strategy_definition", "execution_timeframe", "parameter_hash"
+                ],
+                name="unique_goal_strategy_assignment_identity",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(strategy_share__gte=0) & models.Q(strategy_share__lte=1),
+                name="goal_strategy_share_between_zero_one",
+            ),
         ]
 
 
@@ -114,7 +180,8 @@ class PortfolioConstructionRun(models.Model):
     nav = models.DecimalField(max_digits=24, decimal_places=8)
     plan_snapshot = models.JSONField(default=dict)
     goal_snapshot = models.JSONField(default=list)
-    selection_snapshot = models.JSONField(default=list)
+    instrument_snapshot = models.JSONField(default=list)
+    assignment_snapshot = models.JSONField(default=list)
     policy_snapshot = models.JSONField(default=dict)
     goal_results = models.JSONField(default=list)
     final_target_weights = models.JSONField(default=dict)
@@ -148,4 +215,3 @@ class PortfolioConstructionTarget(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["construction_run", "instrument"], name="unique_construction_run_instrument")
         ]
-
