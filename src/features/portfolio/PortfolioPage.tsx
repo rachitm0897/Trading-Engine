@@ -8,6 +8,15 @@ import {TimeSeriesChart} from '../../components/charts/TimeSeriesChart'
 import {CollapsibleSection, DataTable, ErrorState, Freshness, MetricCard, PageHeader, Panel, Skeleton, StatusBadge, formatCompact, formatMoney, formatNumber, formatPercent, toNumber} from '../../components/ui'
 import {useSelection} from '../../stores/useSelection'
 
+async function pollRun<T>(initial: T, path: string, complete: (value: T) => boolean): Promise<T> {
+  let value = initial
+  for (let attempt = 0; attempt < 120 && !complete(value); attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 500))
+    value = await request<T>(path)
+  }
+  return value
+}
+
 export function PortfolioPage() {
   const queryClient = useQueryClient()
   const {portfolio, account, selectedPortfolioId} = useSelection()
@@ -35,11 +44,17 @@ export function PortfolioPage() {
   const rebalancePolicyRows = (rebalancePolicies.data || []).filter((item) => !selectedPortfolioId || item.portfolio_id === selectedPortfolioId)
 
   const flow = useMutation({
-    mutationFn: (payload: {flow_type: string; amount: string; liquidation_policy: string; allocation_mode: string}) => request<{id: number; status: string; allocation_mode: string}>('allocations/flows/', mutationOptions('POST', {portfolio_id: selectedPortfolioId, ...payload}, true)),
+    mutationFn: async (payload: {flow_type: string; amount: string; liquidation_policy: string; allocation_mode: string}) => {
+      const run=await request<{id: number; status: string; allocation_mode: string}>('allocations/flows/', mutationOptions('POST', {portfolio_id: selectedPortfolioId, ...payload}, true))
+      return pollRun(run,`allocations/runs/${run.id}/`,(value) => !['QUEUED','CALCULATING'].includes(value.status))
+    },
     onSuccess: async () => { await Promise.all([queryClient.invalidateQueries({queryKey: ['allocation-runs']}), queryClient.invalidateQueries({queryKey: ['optimization-runs']})]) },
   })
   const rebalance = useMutation({
-    mutationFn: () => request<RebalanceRun>('rebalancing/preview/', mutationOptions('POST', {portfolio_id: selectedPortfolioId, trigger: 'MANUAL'}, true)),
+    mutationFn: async () => {
+      const run=await request<RebalanceRun>('rebalancing/preview/', mutationOptions('POST', {portfolio_id: selectedPortfolioId, trigger: 'MANUAL'}, true))
+      return pollRun(run,`rebalancing/runs/${run.id}/`,(value) => !['QUEUED','CALCULATING'].includes(value.status))
+    },
     onSuccess: async (data) => {setPreview(data); await queryClient.invalidateQueries({queryKey: ['rebalance-runs']})},
   })
   const size = useMutation({
@@ -168,11 +183,17 @@ function PortfolioConstruction({portfolioId, instruments, universe, policy, prev
     onSuccess: onChanged,
   })
   const optimize = useMutation({
-    mutationFn: () => request<PortfolioOptimizationRun>('portfolio-optimization/preview/', mutationOptions('POST', {portfolio_id: portfolioId, universe_id: universe?.id, policy_id: policy?.id, trigger: 'PREVIEW', refresh_history: true}, true)),
+    mutationFn: async () => {
+      const run=await request<PortfolioOptimizationRun>('portfolio-optimization/preview/', mutationOptions('POST', {portfolio_id: portfolioId, universe_id: universe?.id, policy_id: policy?.id, trigger: 'PREVIEW', refresh_history: true}, true))
+      return pollRun(run,`portfolio-optimization/runs/${run.id}/`,(value) => !['QUEUED','DISPATCHED','CALCULATING'].includes(value.status))
+    },
     onSuccess: async (run) => {onPreview(run); await onChanged()},
   })
   const apply = useMutation({
-    mutationFn: () => request<PortfolioOptimizationRun>('portfolio-optimization/run/', mutationOptions('POST', {optimization_run_id: preview?.id, portfolio_id: portfolioId, universe_id: preview?.universe_id, policy_id: preview?.policy_id}, true)),
+    mutationFn: async () => {
+      const run=await request<PortfolioOptimizationRun>('portfolio-optimization/run/', mutationOptions('POST', {optimization_run_id: preview?.id, portfolio_id: portfolioId, universe_id: preview?.universe_id, policy_id: preview?.policy_id}, true))
+      return pollRun(run,`portfolio-optimization/runs/${run.id}/`,(value) => !['QUEUED','APPLYING'].includes(value.application_status))
+    },
     onSuccess: async (run) => {onPreview(run); await onChanged()},
   })
   const stockInstruments = instruments.filter((item) => item.asset_class === 'STK' && item.active && item.tradable)
