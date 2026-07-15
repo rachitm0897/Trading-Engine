@@ -9,6 +9,7 @@ from apps.strategies import views as strategy_views
 from apps.core import analytics as analytics_views
 from apps.market_data import views as market_data_views
 from apps.portfolio_optimization import views as optimization_views
+from apps.portfolio_construction import views as construction_views
 
 api_patterns = [
     path("system/", views.system), path("auth/session/",views.auth_session), path("gateway/", views.gateway), path("accounts/", views.accounts),
@@ -51,6 +52,17 @@ new_api = [
     path("portfolio-optimization/run/",optimization_views.execute,{"preview":False}),
     path("portfolio-optimization/runs/",optimization_views.runs),
     path("portfolio-optimization/runs/<int:run_id>/",optimization_views.runs),
+    path("portfolio-construction/plans/",construction_views.plans),
+    path("portfolio-construction/plans/<int:plan_id>/",construction_views.plans),
+    path("portfolio-construction/plans/<int:plan_id>/goals/",construction_views.plan_goals),
+    path("portfolio-construction/goals/<int:goal_id>/",construction_views.goal_detail),
+    path("portfolio-construction/goals/<int:goal_id>/eligible-strategies/",construction_views.goal_eligible_strategies),
+    path("portfolio-construction/goals/<int:goal_id>/selections/",construction_views.goal_selections),
+    path("portfolio-construction/selections/<int:selection_id>/",construction_views.selection_detail),
+    path("portfolio-construction/preview/",construction_views.preview),
+    path("portfolio-construction/runs/",construction_views.runs),
+    path("portfolio-construction/runs/<int:run_id>/",construction_views.runs),
+    path("portfolio-construction/runs/<int:run_id>/apply/",construction_views.apply),
 ]
 urlpatterns += [path("api/v1/" + str(p.pattern),p.callback,p.default_args) for p in new_api]
 if settings.APP_BASE_PATH:

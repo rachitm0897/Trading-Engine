@@ -191,9 +191,9 @@ def universe_instruments(universe):
     return [instrument_map[key] for key in sorted(instrument_map)]
 
 
-def _load_prices(instruments, policy, minimum_observations, refresh_history):
+def _load_prices(instruments, *, lookback_days, minimum_observations, refresh_history, minimum_instruments=2):
     end_date = timezone.now().date()
-    calendar_days = max(policy.lookback_days * 2, minimum_observations * 2)
+    calendar_days = max(lookback_days * 2, minimum_observations * 2)
     start_date = end_date - timedelta(days=calendar_days)
     warnings = []
     if refresh_history:
@@ -209,7 +209,7 @@ def _load_prices(instruments, policy, minimum_observations, refresh_history):
     for instrument in instruments:
         prices = list(
             InstrumentPriceHistory.objects.filter(instrument=instrument, provider="FINNHUB")
-            .order_by("-trading_date")[: policy.lookback_days + 1]
+            .order_by("-trading_date")[: lookback_days + 1]
             .values_list("trading_date", "adjusted_close", "close")
         )
         mapping = {date: float(adjusted if adjusted is not None else close) for date, adjusted, close in prices if (adjusted or close) and float(adjusted if adjusted is not None else close) > 0}
@@ -219,12 +219,13 @@ def _load_prices(instruments, policy, minimum_observations, refresh_history):
             series[instrument.pk] = mapping
     if excluded:
         warnings.append({"code": "INSTRUMENTS_EXCLUDED", "instruments": excluded})
-    if len(series) < 2:
-        raise OptimizationError("At least two universe instruments need sufficient aligned price history")
+    if len(series) < minimum_instruments:
+        noun = "instrument" if minimum_instruments == 1 else "instruments"
+        raise OptimizationError(f"At least {minimum_instruments} universe {noun} need sufficient aligned price history")
     common_dates = sorted(set.intersection(*(set(values) for values in series.values())))
     if len(common_dates) < minimum_observations + 1:
         raise OptimizationError(f"Only {max(len(common_dates) - 1, 0)} aligned returns are available; {minimum_observations} are required")
-    common_dates = common_dates[-(policy.lookback_days + 1):]
+    common_dates = common_dates[-(lookback_days + 1):]
     instrument_ids = sorted(series)
     matrix = np.asarray([[series[instrument_id][date] for instrument_id in instrument_ids] for date in common_dates], dtype=float)
     returns = matrix[1:] / matrix[:-1] - 1.0
@@ -263,6 +264,132 @@ def _policy_snapshot(policy):
         "transaction_cost_penalty": str(policy.transaction_cost_penalty),
         "long_only": policy.long_only,
         "execution_mode": policy.execution_mode,
+    }
+
+
+def optimize_explicit_universe(
+    instruments,
+    *,
+    method,
+    cash_weight,
+    maximum_weight,
+    lookback_days=252,
+    minimum_history_observations=60,
+    minimum_weight=0,
+    maximum_turnover=10,
+    transaction_cost_penalty=0,
+    risk_free_rate=0,
+    long_only=True,
+    refresh_history=True,
+    portfolio=None,
+    nav=None,
+    available_cash=None,
+    current_weights=None,
+    current_cash_weight=0,
+    external_current_weight=0,
+):
+    """Reusable Markowitz core for an explicit stock universe and resolved policy values."""
+    instruments = list(instruments)
+    if len(instruments) < 2:
+        raise OptimizationError("At least two instruments are required for Markowitz optimization")
+    instrument_ids, dates, prices, returns, warnings = _load_prices(
+        instruments,
+        lookback_days=lookback_days,
+        minimum_observations=minimum_history_observations,
+        refresh_history=refresh_history,
+    )
+    expected_returns = returns.mean(axis=0) * TRADING_DAYS
+    covariance = np.cov(returns, rowvar=False, ddof=1) * TRADING_DAYS
+    if portfolio is not None:
+        if nav is None:
+            raise OptimizationError("Portfolio NAV is required when resolving current weights")
+        current, current_cash, outside = _current_weights(portfolio, D(str(nav)), instrument_ids, available_cash)
+    else:
+        current = {int(key): D(str(value)) for key, value in (current_weights or {}).items()}
+        current_cash = D(str(current_cash_weight))
+        outside = D(str(external_current_weight))
+    current_vector = np.asarray([float(current.get(instrument_id, 0)) for instrument_id in instrument_ids])
+    solved = solve_markowitz(
+        expected_returns=expected_returns,
+        covariance=covariance,
+        current_weights=current_vector,
+        method=method,
+        cash_weight=cash_weight,
+        current_cash_weight=current_cash,
+        minimum_weight=minimum_weight,
+        maximum_weight=maximum_weight,
+        maximum_turnover=maximum_turnover,
+        transaction_cost_penalty=transaction_cost_penalty,
+        risk_free_rate=risk_free_rate,
+        long_only=long_only,
+        external_current_weight=outside,
+    )
+    return {
+        **solved,
+        "instrument_ids": instrument_ids,
+        "dates": dates,
+        "prices": prices,
+        "returns": returns,
+        "expected_returns": expected_returns,
+        "warnings": warnings,
+        "current_weights": current,
+        "current_cash_weight": current_cash,
+        "external_current_weight": outside,
+    }
+
+
+def calculate_weighted_metrics(
+    instruments,
+    target_weights,
+    *,
+    lookback_days=252,
+    minimum_history_observations=60,
+    risk_free_rate=0,
+    refresh_history=False,
+):
+    """Calculate annualized metrics for fixed long-only stock weights without optimizing them."""
+    instruments = [item for item in instruments if D(str(target_weights.get(item.pk, 0))) > 0]
+    if not instruments:
+        return {
+            "expected_return": 0.0,
+            "expected_volatility": 0.0,
+            "sharpe_ratio": 0.0,
+            "expected_return_contributions": {},
+            "risk_contributions": {},
+            "warnings": [],
+        }
+    instrument_ids, _, _, returns, warnings = _load_prices(
+        instruments,
+        lookback_days=lookback_days,
+        minimum_observations=minimum_history_observations,
+        refresh_history=refresh_history,
+        minimum_instruments=1,
+    )
+    expected_returns = returns.mean(axis=0) * TRADING_DAYS
+    if len(instrument_ids) == 1:
+        covariance = np.asarray([[float(np.var(returns[:, 0], ddof=1) * TRADING_DAYS)]])
+    else:
+        covariance = np.cov(returns, rowvar=False, ddof=1) * TRADING_DAYS
+    covariance = np.atleast_2d(covariance)
+    weights = np.asarray([float(target_weights[instrument_id]) for instrument_id in instrument_ids])
+    expected_return = float(expected_returns @ weights)
+    variance = max(float(weights @ covariance @ weights), 0.0)
+    volatility = float(np.sqrt(variance))
+    sharpe = (expected_return - float(risk_free_rate)) / volatility if volatility else 0.0
+    marginal = covariance @ weights
+    risk = weights * marginal / volatility if volatility else np.zeros(len(weights))
+    return {
+        "expected_return": expected_return,
+        "expected_volatility": volatility,
+        "sharpe_ratio": sharpe,
+        "expected_return_contributions": {
+            instrument_id: float(weights[index] * expected_returns[index])
+            for index, instrument_id in enumerate(instrument_ids)
+        },
+        "risk_contributions": {
+            instrument_id: float(risk[index]) for index, instrument_id in enumerate(instrument_ids)
+        },
+        "warnings": warnings,
     }
 
 
@@ -326,28 +453,31 @@ def run_optimization(portfolio, idempotency_key, *, trigger="MANUAL", nav=None, 
         instruments = universe_instruments(universe)
         if len(instruments) < 2:
             raise OptimizationError("Select at least two active stock instruments in the portfolio universe")
-        instrument_ids, dates, prices, returns, warnings = _load_prices(
-            instruments, policy, universe.minimum_history_observations, refresh_history
-        )
-        expected_returns = returns.mean(axis=0) * TRADING_DAYS
-        covariance = np.cov(returns, rowvar=False, ddof=1) * TRADING_DAYS
-        current, current_cash, outside = _current_weights(portfolio, nav, instrument_ids, available_cash)
-        current_vector = np.asarray([float(current.get(instrument_id, 0)) for instrument_id in instrument_ids])
-        solved = solve_markowitz(
-            expected_returns=expected_returns,
-            covariance=covariance,
-            current_weights=current_vector,
+        solved = optimize_explicit_universe(
+            instruments,
             method=policy.method,
             cash_weight=policy.target_cash_weight,
-            current_cash_weight=current_cash,
+            lookback_days=policy.lookback_days,
+            minimum_history_observations=universe.minimum_history_observations,
             minimum_weight=policy.minimum_weight,
             maximum_weight=policy.maximum_weight,
             maximum_turnover=policy.maximum_turnover,
             transaction_cost_penalty=policy.transaction_cost_penalty,
             risk_free_rate=policy.risk_free_rate,
             long_only=policy.long_only,
-            external_current_weight=outside,
+            refresh_history=refresh_history,
+            portfolio=portfolio,
+            nav=nav,
+            available_cash=available_cash,
         )
+        instrument_ids = solved["instrument_ids"]
+        dates = solved["dates"]
+        returns = solved["returns"]
+        expected_returns = solved["expected_returns"]
+        warnings = solved["warnings"]
+        current = solved["current_weights"]
+        current_cash = solved["current_cash_weight"]
+        outside = solved["external_current_weight"]
         instrument_map = {instrument.pk: instrument for instrument in instruments}
         with transaction.atomic():
             for rank, (instrument_id, weight) in enumerate(sorted(zip(instrument_ids, solved["weights"]), key=lambda item: -item[1])):

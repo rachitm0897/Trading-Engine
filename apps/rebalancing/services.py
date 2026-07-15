@@ -85,8 +85,11 @@ def _net_strategy_risk_limits(portfolio, contributions, reference_price, target_
 
 @transaction.atomic
 def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None, mode=None,
-                   policy=None, strict_market_state=True, optimization_run=None, available_cash=None,defer=False,
+                   policy=None, strict_market_state=True, optimization_run=None, construction_run=None,
+                   available_cash=None,defer=False,
                    retry_failed=False):
+    if optimization_run and construction_run:
+        raise ValueError("A rebalance may use either optimization or goal-construction targets, not both")
     policy = policy or RebalancePolicy.objects.filter(portfolio=portfolio).first() or RebalancePolicy.objects.create(portfolio=portfolio)
     mode = (mode or policy.mode).upper()
     if mode not in {"SHADOW", "PAPER"}:
@@ -95,12 +98,16 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
         "portfolio_id":portfolio.pk,"trigger":trigger,"prices":prices,"nav":nav,"mode":mode,
         "policy_id":policy.pk,"strict_market_state":strict_market_state,
         "optimization_run_id":optimization_run.pk if optimization_run else None,
+        "construction_run_id":construction_run.pk if construction_run else None,
         "available_cash":available_cash})
     run, created = RebalanceRun.objects.get_or_create(idempotency_key=idempotency_key, defaults={
         "portfolio": portfolio, "policy": policy, "trigger": trigger, "mode": mode,
         "request_hash":request_hash,
         "optimization_run": optimization_run,
-        "target_source": "PORTFOLIO_OPTIMIZATION" if optimization_run else "STRATEGY_AGGREGATION"})
+        "construction_run": construction_run,
+        "target_source": "PORTFOLIO_OPTIMIZATION" if optimization_run else (
+            "GOAL_CONSTRUCTION" if construction_run else "STRATEGY_AGGREGATION"
+        )})
     if not created:
         require_matching_request(run.request_hash,request_hash)
         if not run.request_hash:
@@ -125,6 +132,11 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
             raise ValueError("Optimization run is not a completed target set for this portfolio")
         target_weights = {item.instrument_id: D(item.optimized_weight) for item in optimization_run.targets.all()}
         attribution = {}
+    elif construction_run:
+        if construction_run.plan.portfolio_id != portfolio.pk or construction_run.status != "COMPLETED":
+            raise ValueError("Construction run is not a completed target set for this portfolio")
+        target_weights = {item.instrument_id: D(item.target_weight) for item in construction_run.targets.all()}
+        attribution = {}
     else:
         target_weights, attribution = aggregate_targets(portfolio)
     instrument_ids = set(target_weights) | set(current_rows)
@@ -135,6 +147,7 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
     run.nav = nav
     run.snapshot = {"nav":str(nav), "cash":str(available_cash), "target_source":run.target_source,
         "optimization_run_id":optimization_run.pk if optimization_run else None,
+        "construction_run_id":construction_run.pk if construction_run else None,
         "positions":{str(key):str(row.quantity) for key,row in current_rows.items()},
         "prices":{str(key):str(reference[key]) for key in instrument_ids}}
     candidates = []
@@ -246,7 +259,8 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
     OutboxEvent.objects.create(topic="portfolio.rebalance.planned.v1", event_type="portfolio.rebalance.planned",
         aggregate_type="portfolio", aggregate_id=str(portfolio.pk), partition_key=str(portfolio.pk),
         payload={"rebalance_run_id":run.pk,"mode":mode,"phase":run.phase,"turnover":str(turnover_used),
-                 "target_source":run.target_source,"optimization_run_id":optimization_run.pk if optimization_run else None},
+                 "target_source":run.target_source,"optimization_run_id":optimization_run.pk if optimization_run else None,
+                 "construction_run_id":construction_run.pk if construction_run else None},
         idempotency_key=f"rebalance:{run.pk}:planned")
     return run
 
