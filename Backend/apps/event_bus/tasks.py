@@ -1,5 +1,6 @@
 from celery import shared_task
 from django.conf import settings
+from datetime import timedelta
 from django.utils import timezone
 from .models import StreamHealthMetric
 from .services import publish_batch
@@ -8,6 +9,31 @@ from .services import publish_batch
 @shared_task
 def publish_outbox_events():
     return publish_batch()
+
+
+@shared_task
+def compact_operational_records():
+    from apps.audit.models import OutboxEvent
+    from apps.broker_gateway.models import BrokerPositionSnapshot
+    from apps.market_streams.models import StrategyEvaluationReadiness
+    from apps.event_bus.models import StreamHealthMetric
+    now=timezone.now();limit=settings.OPERATIONAL_COMPACTION_BATCH_SIZE
+    rules=[
+        ("published_outbox",OutboxEvent.objects.filter(status="PUBLISHED",
+            published_at__lt=now-timedelta(days=settings.OUTBOX_RETENTION_DAYS))),
+        ("completed_broker_snapshots",BrokerPositionSnapshot.objects.filter(status="COMPLETED",
+            completed_at__lt=now-timedelta(days=settings.BROKER_SNAPSHOT_RETENTION_DAYS))),
+        ("strategy_readiness",StrategyEvaluationReadiness.objects.filter(status__in=["COMPLETED","ERROR"],
+            completed_at__lt=now-timedelta(days=settings.READINESS_RETENTION_DAYS))),
+        ("stale_stream_health",StreamHealthMetric.objects.filter(
+            observed_at__lt=now-timedelta(days=settings.STREAM_HEALTH_RETENTION_DAYS))),
+    ]
+    deleted={}
+    for name,query in rules:
+        ids=list(query.order_by("pk").values_list("pk",flat=True)[:limit])
+        count,_=query.model.objects.filter(pk__in=ids).delete()
+        deleted[name]=count
+    return deleted
 
 
 @shared_task

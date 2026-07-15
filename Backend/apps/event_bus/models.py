@@ -20,6 +20,9 @@ class DeadLetterEvent(models.Model):
     replayed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        indexes = [models.Index(fields=["replayed_at","created_at"],name="dead_letter_replay_idx")]
+
 
 class ReplayRequest(models.Model):
     STATUSES = [(x, x) for x in ["REQUESTED", "RUNNING", "COMPLETED", "FAILED"]]

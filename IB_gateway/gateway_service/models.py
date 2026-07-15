@@ -11,16 +11,42 @@ class GatewaySession(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 class GatewayCommand(models.Model):
+    STATUSES = [(value, value) for value in ["PENDING", "PROCESSING", "COMPLETED", "FAILED", "UNKNOWN"]]
     TYPES = [(x,x) for x in ["RECONNECT","SEARCH_CONTRACTS","QUALIFY","SUBSCRIBE_MARKET_DATA","CANCEL_MARKET_DATA","PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER","KILL_SWITCH","REFRESH"]]
     command_type = models.CharField(max_length=32, choices=TYPES)
     idempotency_key = models.CharField(max_length=128, unique=True)
+    request_hash = models.CharField(max_length=64, default="", db_index=True)
     payload = models.JSONField(default=dict)
-    status = models.CharField(max_length=24, default="PENDING")
+    status = models.CharField(max_length=24, choices=STATUSES, default="PENDING")
     result = models.JSONField(default=dict)
-    error = models.CharField(max_length=1000, blank=True)
-    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.CharField(max_length=1000, blank=True)
+    retryable = models.BooleanField(default=False)
+    claimed_by = models.CharField(max_length=128, blank=True)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    attempt_count = models.PositiveIntegerField(default=0)
+    completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["status", "lease_expires_at", "id"], name="gateway_cmd_claim_idx")]
+
+
+class GatewayCommandAttempt(models.Model):
+    command = models.ForeignKey(GatewayCommand, on_delete=models.PROTECT, related_name="attempt_history")
+    attempt_number = models.PositiveIntegerField()
+    claimed_by = models.CharField(max_length=128)
+    submission_state = models.CharField(max_length=24, default="CLAIMED")
+    broker_result = models.JSONField(default=dict)
+    error = models.CharField(max_length=1000, blank=True)
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["command", "attempt_number"], name="unique_gateway_command_attempt")
+        ]
 
 class GatewayEvent(models.Model):
     event_key = models.CharField(max_length=160, unique=True)
@@ -28,6 +54,9 @@ class GatewayEvent(models.Model):
     payload = models.JSONField(default=dict)
     acknowledged = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["acknowledged","created_at"],name="gateway_event_ack_idx")]
 
 class GatewayOrderReference(models.Model):
     internal_id = models.CharField(max_length=64, unique=True)
@@ -42,3 +71,6 @@ class GatewayHealthSnapshot(models.Model):
     broker_time = models.DateTimeField(null=True, blank=True)
     details = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["-created_at"],name="gateway_health_time_idx")]

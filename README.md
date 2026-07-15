@@ -55,4 +55,4 @@ The supported public URLs are:
 
 Each application exposes one configurable `${PORT}`. Base paths, public URLs, and forwarded headers are configurable; see [QFS deployment](docs/QFS_DEPLOYMENT.md).
 
-> Paper trading is the default. Do not enable live trading until every item in the [paper-to-live checklist](docs/PAPER_TO_LIVE_CHECKLIST.md) is verified. This first release does not provide market calendars, tax-lot accounting, HA broker-worker election, or a general research/backtesting system.
+> This application is paper-only and rejects live configuration at startup. This release does not provide market calendars, tax-lot accounting, HA broker-worker election, or a general research/backtesting system.

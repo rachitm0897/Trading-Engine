@@ -25,4 +25,4 @@ The left navigation now has five stable routes: Dashboard, Strategies, Portfolio
 
 Until durable valuation snapshots or TimescaleDB-backed portfolio history are available, historical portfolio series apply current holdings to persisted historical bars and anchor the latest value to broker NAV. The endpoint declares this source as `POSTGRES_MARKET_BARS_WITH_CURRENT_HOLDINGS`; it is useful for operator context but is not a tax-lot or point-in-time performance record.
 
-The production gaps in authentication/authorization, deployment isolation certification, TimescaleDB history, alerting, and real IBKR paper/live certification remain unchanged. Configurable strategy APIs still reject `LIVE`.
+The production gaps in deployment isolation certification, TimescaleDB history, alerting, and real IBKR paper certification remain unchanged. Configurable strategy APIs reject `LIVE`.

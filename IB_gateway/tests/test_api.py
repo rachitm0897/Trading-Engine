@@ -11,18 +11,51 @@ def test_service_authentication(client):
     assert body["ok"] and "connected" in body["data"]
 
 def test_order_command_idempotency(client):
-    payload={"internal_id":"I1","symbol":"AAPL","side":"BUY","quantity":"1"}
+    payload={"internal_id":"I1","account":"DU1","symbol":"AAPL","side":"BUY","quantity":"1"}
     headers={**AUTH,"HTTP_IDEMPOTENCY_KEY":"same","content_type":"application/json"}
     first=client.post("/api/v1/orders/",json.dumps(payload),**headers).json()
     second=client.post("/api/v1/orders/",json.dumps(payload),**headers).json()
     assert first["data"]["command_id"]==second["data"]["command_id"] and GatewayCommand.objects.count()==1
+
+
+def test_same_idempotency_key_with_different_request_conflicts(client):
+    headers={**AUTH,"HTTP_IDEMPOTENCY_KEY":"same","content_type":"application/json"}
+    first=client.post("/api/v1/orders/",json.dumps({"internal_id":"I1","account":"DU1","symbol":"AAPL","side":"BUY","quantity":"1"}),**headers)
+    conflict=client.post("/api/v1/orders/",json.dumps({"internal_id":"I2","account":"DU1","symbol":"MSFT","side":"BUY","quantity":"2"}),**headers)
+    assert first.status_code==202
+    assert conflict.status_code==409 and conflict.json()["error"]["code"]=="IDEMPOTENCY_CONFLICT"
+    assert GatewayCommand.objects.count()==1
+
+
+def test_retryable_failure_requires_explicit_retry_header(client):
+    payload={"internal_id":"I1","account":"DU1","symbol":"AAPL","side":"BUY","quantity":"1"}
+    headers={**AUTH,"HTTP_IDEMPOTENCY_KEY":"retry-me","content_type":"application/json"}
+    first=client.post("/api/v1/orders/",json.dumps(payload),**headers)
+    command=GatewayCommand.objects.get(pk=first.json()["data"]["command_id"])
+    command.status="FAILED";command.retryable=True;command.last_error="temporary";command.save()
+    stored=client.post("/api/v1/orders/",json.dumps(payload),**headers)
+    retried=client.post("/api/v1/orders/",json.dumps(payload),HTTP_IDEMPOTENCY_RETRY="true",**headers)
+    assert stored.json()["data"]["status"]=="FAILED"
+    assert retried.json()["data"]["status"]=="PENDING"
+    command.refresh_from_db()
+    assert command.last_error=="" and command.retryable is False
+
+
+def test_non_retryable_failure_rejects_explicit_retry(client):
+    payload={"internal_id":"I1","account":"DU1","symbol":"AAPL","side":"BUY","quantity":"1"}
+    headers={**AUTH,"HTTP_IDEMPOTENCY_KEY":"do-not-retry","content_type":"application/json"}
+    first=client.post("/api/v1/orders/",json.dumps(payload),**headers)
+    command=GatewayCommand.objects.get(pk=first.json()["data"]["command_id"])
+    command.status="FAILED";command.retryable=False;command.last_error="invalid";command.save()
+    result=client.post("/api/v1/orders/",json.dumps(payload),HTTP_IDEMPOTENCY_RETRY="true",**headers)
+    assert result.status_code==409 and result.json()["error"]["code"]=="RETRY_NOT_ALLOWED"
 
 def test_event_sequence_and_ack(client):
     GatewayEvent.objects.create(event_key="1",event_type="x",payload={})
     second=GatewayEvent.objects.create(event_key="2",event_type="x",payload={})
     body=client.get("/api/v1/events/?after=0",**AUTH).json()
     assert [x["id"] for x in body["data"]]==sorted(x["id"] for x in body["data"])
-    client.post("/api/v1/events/ack/",json.dumps({"sequence":second.pk}),content_type="application/json",**AUTH)
+    client.post("/api/v1/events/ack/",json.dumps({"sequence":second.pk}),content_type="application/json",HTTP_IDEMPOTENCY_KEY="ack:2",**AUTH)
     assert GatewayEvent.objects.filter(acknowledged=True).count()==2
 
 def test_event_sequence_recovers_when_backend_cursor_is_ahead(client):
@@ -37,7 +70,7 @@ def test_completed_orders_snapshot_endpoint(client):
     assert body["data"][0]["broker_order_id"]=="1"
 
 def test_contract_search_and_command_detail(client):
-    response=client.post("/api/v1/contracts/search/",json.dumps({"query":"BHP"}),content_type="application/json",**AUTH)
+    response=client.post("/api/v1/contracts/search/",json.dumps({"query":"BHP"}),content_type="application/json",HTTP_IDEMPOTENCY_KEY="search:BHP",**AUTH)
     assert response.status_code==202
     command=GatewayCommand.objects.get(pk=response.json()["data"]["command_id"])
     command.status="COMPLETED";command.result={"results":[{"symbol":"BHP","conid":123,"primary_exchange":"ASX"}]};command.save()
@@ -48,7 +81,7 @@ def test_market_subscription_requires_exact_contract(client):
     bad=client.post("/api/v1/market-data/subscriptions/",json.dumps({"symbol":"AAPL"}),content_type="application/json",**AUTH)
     assert bad.status_code==400
     payload={"subscription_key":"1:1m","instrument_id":1,"conid":265598,"symbol":"AAPL","timeframe":"1m"}
-    good=client.post("/api/v1/market-data/subscriptions/",json.dumps(payload),content_type="application/json",**AUTH)
+    good=client.post("/api/v1/market-data/subscriptions/",json.dumps(payload),content_type="application/json",HTTP_IDEMPOTENCY_KEY="subscribe:1:1m",**AUTH)
     assert good.status_code==202 and GatewayCommand.objects.get().command_type=="SUBSCRIBE_MARKET_DATA"
 
 def test_market_subscription_cancel_preserves_route_action(client):
@@ -68,3 +101,52 @@ def test_no_credential_leakage(client,settings):
     settings.IB_USERNAME="SECRET_USER"; settings.IB_PASSWORD="SECRET_PASSWORD"
     content=client.get("/api/v1/session/",**AUTH).content.decode()
     assert "SECRET_USER" not in content and "SECRET_PASSWORD" not in content
+
+
+@pytest.mark.parametrize("path", ["/healthz", "/api/v1/health/", "/api/v1/events/"])
+def test_read_endpoints_reject_wrong_method(client, path):
+    kwargs={} if path=="/healthz" else AUTH
+    assert client.post(path, **kwargs).status_code==405
+
+
+def test_commands_require_explicit_idempotency_key(client):
+    payload={"internal_id":"I1","account":"DU1","symbol":"AAPL","side":"BUY","quantity":"1"}
+    result=client.post("/api/v1/orders/",json.dumps(payload),content_type="application/json",**AUTH)
+    assert result.status_code==400
+    assert result.json()["error"]["code"]=="IDEMPOTENCY_KEY_REQUIRED"
+    assert GatewayCommand.objects.count()==0
+
+
+@pytest.mark.parametrize("payload", [
+    {"internal_id":"I1","account":"DU1","symbol":"AAPL","side":"BUY","quantity":"0"},
+    {"internal_id":"I1","account":"DU1","symbol":"AAPL","side":"BUY","quantity":"1.000000001"},
+    {"internal_id":"I1","account":"DU1","symbol":"AAPL","side":"HOLD","quantity":"1"},
+    {"internal_id":"I1","account":"DU1","symbol":"AAPL","side":"BUY","quantity":"1","order_type":"LMT"},
+    {"internal_id":"I1","account":"DU1","symbol":"AAPL","side":"BUY","quantity":"1","order_type":"MKT","limit_price":"10"},
+])
+def test_order_payload_validation(client, payload):
+    result=client.post(
+        "/api/v1/orders/",json.dumps(payload),content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="invalid-order",**AUTH,
+    )
+    assert result.status_code==400
+    assert result.json()["error"]["code"]=="INVALID_REQUEST"
+    assert GatewayCommand.objects.count()==0
+
+
+def test_order_modify_rejects_placement_only_fields(client):
+    result=client.patch(
+        "/api/v1/orders/I1/",json.dumps({"side":"SELL"}),content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="modify:I1",**AUTH,
+    )
+    assert result.status_code==400
+    assert result.json()["error"]["code"]=="INVALID_REQUEST"
+
+
+def test_malformed_json_is_a_structured_client_error(client):
+    result=client.post(
+        "/api/v1/orders/",'{"internal_id":',content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="malformed",**AUTH,
+    )
+    assert result.status_code==400
+    assert result.json()["error"]["code"]=="INVALID_REQUEST"

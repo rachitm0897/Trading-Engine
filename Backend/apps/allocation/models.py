@@ -8,6 +8,10 @@ class PortfolioFlow(models.Model):
     currency = models.CharField(max_length=8, default="USD")
     effective_at = models.DateTimeField()
     idempotency_key = models.CharField(max_length=128, unique=True)
+    request_hash = models.CharField(max_length=64, default="", db_index=True)
+    retryable = models.BooleanField(default=False)
+    last_error = models.CharField(max_length=1000, blank=True)
+    attempt_count = models.PositiveIntegerField(default=1)
     status = models.CharField(max_length=24, default="REQUESTED")
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -31,7 +35,7 @@ class AllocationRun(models.Model):
 
 class StrategyCapitalSnapshot(models.Model):
     allocation_run = models.ForeignKey(AllocationRun, on_delete=models.PROTECT, related_name="capital_snapshots")
-    strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.SET_NULL, null=True, blank=True)
+    strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.SET_NULL, null=True, blank=True)
     strategy_snapshot = models.JSONField(default=dict)
     capital_before = models.DecimalField(max_digits=24, decimal_places=8)
     target_capital = models.DecimalField(max_digits=24, decimal_places=8)
@@ -42,7 +46,7 @@ class StrategyCapitalSnapshot(models.Model):
 
 class AllocationDecision(models.Model):
     run = models.ForeignKey(AllocationRun, on_delete=models.PROTECT, related_name="decisions")
-    strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.SET_NULL, null=True, blank=True)
+    strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.SET_NULL, null=True, blank=True)
     strategy_snapshot = models.JSONField(default=dict)
     source = models.CharField(max_length=40)
     requested_amount = models.DecimalField(max_digits=24, decimal_places=8)
@@ -77,6 +81,10 @@ class RebalanceRun(models.Model):
     target_source = models.CharField(max_length=40, default="STRATEGY_AGGREGATION")
     trigger = models.CharField(max_length=40)
     idempotency_key = models.CharField(max_length=128, unique=True)
+    request_hash = models.CharField(max_length=64, default="", db_index=True)
+    retryable = models.BooleanField(default=False)
+    last_error = models.CharField(max_length=1000, blank=True)
+    attempt_count = models.PositiveIntegerField(default=1)
     status = models.CharField(max_length=24, default="CALCULATING")
     phase = models.CharField(max_length=24, default="PLANNING")
     mode = models.CharField(max_length=16, default="SHADOW")
@@ -87,6 +95,12 @@ class RebalanceRun(models.Model):
     last_recalculated_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["portfolio","status","-created_at"],name="rebalance_port_status_idx"),
+            models.Index(fields=["status","mode","phase"],name="rebalance_recovery_idx"),
+        ]
 
 class TargetPortfolioPosition(models.Model):
     rebalance = models.ForeignKey(RebalanceRun, on_delete=models.PROTECT, related_name="targets")
@@ -110,7 +124,6 @@ class TargetPortfolioPosition(models.Model):
 
 class OrderIntentAttribution(models.Model):
     order_intent = models.ForeignKey("oms.OrderIntent", on_delete=models.PROTECT, related_name="attributions")
-    strategy = models.ForeignKey("strategies.TradingStrategy", on_delete=models.SET_NULL, null=True, blank=True)
     strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.SET_NULL, null=True, blank=True)
     strategy_version = models.ForeignKey("strategies.StrategyVersion", on_delete=models.SET_NULL, null=True, blank=True)
     strategy_snapshot = models.JSONField(default=dict)
@@ -122,4 +135,4 @@ class OrderIntentAttribution(models.Model):
     method = models.CharField(max_length=40, default="PRO_RATA_TARGET_DELTA")
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["order_intent", "strategy"], name="unique_intent_strategy_attribution")]
+        constraints = [models.UniqueConstraint(fields=["order_intent", "strategy_instance"], name="unique_intent_strategy_instance_attribution")]

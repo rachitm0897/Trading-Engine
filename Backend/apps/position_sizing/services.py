@@ -67,14 +67,17 @@ def size_and_record(policy, instrument, side, target_quantity, entry_price, stop
         max_weight=min(D(policy.max_instrument_weight),D(str(strategy_limits.get("max_weight",policy.max_instrument_weight)))),
         participation=policy.max_participation_rate, side=side,
         minimum_stop_fraction=policy.minimum_stop_fraction, **broker_limits)
-    decision = PositionSizingDecision.objects.create(policy=policy, order_intent=order_intent, instrument=instrument,
-        idempotency_key=idempotency_key,
-        side=side, target_quantity=target_quantity, risk_quantity=result["risk"], weight_quantity=result["weight"],
-        liquidity_quantity=result["liquidity"], cash_quantity=result["cash"], broker_quantity=result["broker"],
-        approved_quantity=result["approved"], entry_price=entry_price, stop_price=stop_price,
-        risk_budget=result["risk_budget"], binding_constraint=result["binding"],
-        calculation_version=policy.calculation_version, rejected_reason=result["rejected_reason"],
-        limits={key: str(value) for key, value in result.items() if isinstance(value, Decimal)})
+    defaults={"policy":policy,"order_intent":order_intent,"instrument":instrument,"side":side,
+        "target_quantity":target_quantity,"risk_quantity":result["risk"],"weight_quantity":result["weight"],
+        "liquidity_quantity":result["liquidity"],"cash_quantity":result["cash"],"broker_quantity":result["broker"],
+        "approved_quantity":result["approved"],"entry_price":entry_price,"stop_price":stop_price,
+        "risk_budget":result["risk_budget"],"binding_constraint":result["binding"],
+        "calculation_version":policy.calculation_version,"rejected_reason":result["rejected_reason"],
+        "limits":{key:str(value) for key,value in result.items() if isinstance(value,Decimal)}}
+    if idempotency_key:
+        decision,_=PositionSizingDecision.objects.get_or_create(idempotency_key=idempotency_key,defaults=defaults)
+    else:
+        decision=PositionSizingDecision.objects.create(**defaults)
     return decision
 
 

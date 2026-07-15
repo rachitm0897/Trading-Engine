@@ -268,8 +268,7 @@ path rather than HTTP/process liveness alone.
 - The connected broker session is paper mode.
 - No change may bypass idempotency, sizing, risk, OMS, ledger, reconciliation, or
   paper-first gates.
-- Configurable strategies continue to reject LIVE mode, and
-  `ALLOW_LIVE_TRADING` remains false.
+- Configurable strategies reject LIVE mode, and the backend rejects a live-trading environment request at startup.
 
 ## Post-fix runtime verification
 
@@ -317,7 +316,7 @@ of every Compose image.
 - Final HTTP smoke returned 200 for Backend health, instruments, strategy detail,
   orders, and streaming health; Frontend root and health; and Gateway health.
 - Compose exposes only Gateway HTTP target port 8080 for `ib_gateway`, not raw TWS
-  ports 4001/4002. `ALLOW_LIVE_TRADING=false` and the default execution mode is
+  paper port 4002. The default execution mode is
   `SHADOW`.
 
 ### Final automated results

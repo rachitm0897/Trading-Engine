@@ -17,6 +17,32 @@ ALLOWED = {
  "CANCEL_PENDING": {"CANCELLED", "FILLED", "UNKNOWN"}, "UNKNOWN": {"ACKNOWLEDGED", "PARTIALLY_FILLED", "FILLED", "CANCELLED"},
 }
 
+
+def _apply_weighted_average_fill(position, signed_quantity, price):
+    """Apply average-cost accounting and return gross realized P&L for this fill."""
+    prior_quantity = Decimal(position.quantity)
+    prior_average = Decimal(position.average_cost)
+    new_quantity = prior_quantity + signed_quantity
+    realized_pnl = Decimal(0)
+
+    if prior_quantity == 0 or prior_quantity * signed_quantity > 0:
+        if new_quantity:
+            position.average_cost = (
+                abs(prior_quantity) * prior_average + abs(signed_quantity) * price
+            ) / abs(new_quantity)
+    elif signed_quantity:
+        closed_quantity = min(abs(prior_quantity), abs(signed_quantity))
+        direction = Decimal(1) if prior_quantity > 0 else Decimal(-1)
+        realized_pnl = (price - prior_average) * closed_quantity * direction
+        if new_quantity == 0:
+            position.average_cost = 0
+        elif prior_quantity * new_quantity < 0:
+            position.average_cost = price
+
+    position.quantity = new_quantity
+    position.realized_pnl = Decimal(position.realized_pnl) + realized_pnl
+    return realized_pnl
+
 @transaction.atomic
 def create_order(intent, quantity=None):
     if not intent.eligible:
@@ -55,11 +81,16 @@ def apply_execution(order, execution):
     transition(order, status, "execution", f"execution:{fill.execution_id}")
     signed_qty = fill.quantity if order.intent.side == "BUY" else -fill.quantity
     cash = -(signed_qty * fill.price) - fill.commission
-    PositionLedgerEntry.objects.create(portfolio=order.intent.portfolio, instrument=order.intent.instrument, quantity_delta=signed_qty, price=fill.price, kind="FILL", reference=fill.execution_id, idempotency_key=f"position:{fill.execution_id}")
-    CashLedgerEntry.objects.create(portfolio=order.intent.portfolio, amount=cash, currency=fill.currency, kind="FILL", reference=fill.execution_id, idempotency_key=f"cash:{fill.execution_id}")
     position, _ = PortfolioPosition.objects.select_for_update().get_or_create(portfolio=order.intent.portfolio, instrument=order.intent.instrument)
-    position.quantity += signed_qty; position.market_price = fill.price; position.save(update_fields=["quantity", "market_price", "updated_at"])
-    attributions=list(order.intent.attributions.select_for_update().select_related("strategy_instance"))
+    realized_pnl = _apply_weighted_average_fill(position, signed_qty, fill.price)
+    position.market_price = fill.price
+    position.save(update_fields=["quantity", "average_cost", "realized_pnl", "market_price", "updated_at"])
+    PositionLedgerEntry.objects.create(portfolio=order.intent.portfolio, instrument=order.intent.instrument,
+        quantity_delta=signed_qty, price=fill.price, realized_pnl=realized_pnl, kind="FILL",
+        reference=fill.execution_id, idempotency_key=f"position:{fill.execution_id}")
+    CashLedgerEntry.objects.create(portfolio=order.intent.portfolio, amount=cash, currency=fill.currency,
+        kind="FILL", reference=fill.execution_id, idempotency_key=f"cash:{fill.execution_id}")
+    attributions=list(order.intent.attributions.select_for_update(of=("self",)).select_related("strategy_instance"))
     if attributions and order.quantity:
         from apps.strategies.models import StrategyAttributedPosition
         gross_allocated=sum((abs(Decimal(x.allocated_quantity)) for x in attributions),Decimal(0)) or Decimal(1)
@@ -90,4 +121,7 @@ def apply_execution(order, execution):
     if order.intent.rebalance_id:
         from apps.rebalancing.services import advance_rebalance
         advance_rebalance(order.intent.rebalance)
+    if status == "FILLED":
+        from apps.risk.services import settle_order_reservation
+        settle_order_reservation(order, status)
     return fill

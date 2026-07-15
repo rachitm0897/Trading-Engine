@@ -40,9 +40,9 @@ class GatewayClient:
     def wait_for_command(self, queued, timeout=20):
         command_id=int(queued["command_id"]);deadline=time.monotonic()+timeout
         current=queued
-        while current.get("status") not in {"COMPLETED","FAILED"} and time.monotonic()<deadline:
+        while current.get("status") not in {"COMPLETED","FAILED","UNKNOWN"} and time.monotonic()<deadline:
             time.sleep(0.1);current=self.command(command_id)
-        if current.get("status")=="FAILED":raise GatewayError(current.get("error") or f"Gateway command {command_id} failed")
+        if current.get("status") in {"FAILED","UNKNOWN"}:raise GatewayError(current.get("last_error") or f"Gateway command {command_id} failed")
         if current.get("status")!="COMPLETED":raise GatewayError(f"Gateway command {command_id} timed out")
         return current.get("result") or {}
     def search_contracts(self, query):

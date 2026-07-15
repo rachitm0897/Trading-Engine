@@ -1,14 +1,37 @@
 import pytest
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from broker.base import BrokerAdapter
 from broker.ib_async_adapter import IBAsyncBrokerAdapter
 from broker.mock import MockBrokerAdapter
-from gateway_service.models import GatewayCommand, GatewayEvent
-from gateway_service.services import process_command
+from django.utils import timezone as django_timezone
+from django.test import override_settings
+from gateway_service.models import GatewayCommand, GatewayCommandAttempt, GatewayEvent, GatewayHealthSnapshot
+from gateway_service.services import (
+    claim_command,
+    claim_next_command,
+    compact_gateway_operational_records,
+    enqueue,
+    process_command,
+    recover_expired_commands,
+)
 
 pytestmark=pytest.mark.django_db
+
+
+@override_settings(GATEWAY_EVENT_RETENTION_DAYS=1,GATEWAY_HEALTH_RETENTION_DAYS=1,GATEWAY_COMPACTION_BATCH_SIZE=100)
+def test_gateway_compaction_keeps_unacknowledged_events():
+    old=django_timezone.now()-timedelta(days=2)
+    acknowledged=GatewayEvent.objects.create(event_key="old-ack",event_type="snapshot",acknowledged=True)
+    pending=GatewayEvent.objects.create(event_key="old-pending",event_type="snapshot",acknowledged=False)
+    health=GatewayHealthSnapshot.objects.create(connected=True,reconciled=True)
+    GatewayEvent.objects.filter(pk__in=[acknowledged.pk,pending.pk]).update(created_at=old)
+    GatewayHealthSnapshot.objects.filter(pk=health.pk).update(created_at=old)
+    compact_gateway_operational_records()
+    assert not GatewayEvent.objects.filter(pk=acknowledged.pk).exists()
+    assert GatewayEvent.objects.filter(pk=pending.pk).exists()
+    assert not GatewayHealthSnapshot.objects.filter(pk=health.pk).exists()
 
 def test_mock_implements_adapter_and_order_lifecycle():
     broker=MockBrokerAdapter(); assert isinstance(broker,BrokerAdapter)
@@ -72,3 +95,80 @@ def test_ibkr_async_market_error_retains_exact_permission_reason():
     assert event["event_kind"]=="ERROR" and event["error_code"]=="354"
     assert event["error_message"]=="Requested market data is not subscribed" and event["subscription_key"]=="5:1m"
     assert not adapter.market_request_ids and not adapter.market_subscriptions
+
+
+def _expire(command):
+    GatewayCommand.objects.filter(pk=command.pk).update(
+        lease_expires_at=django_timezone.now()-timedelta(seconds=1)
+    )
+
+
+def test_active_command_lease_cannot_be_claimed_by_another_worker():
+    command=enqueue("PLACE_ORDER",{"internal_id":"I1","side":"BUY","quantity":1},"lease")
+    first=claim_next_command("worker-a",lease_seconds=60)
+    second=claim_next_command("worker-b",lease_seconds=60)
+    assert first.pk==command.pk and first.claimed_by=="worker-a"
+    assert second is None and GatewayCommandAttempt.objects.count()==1
+
+
+@pytest.mark.parametrize("command_type",["PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER"])
+def test_worker_crash_before_broker_submission_is_safely_retried(command_type):
+    broker=MockBrokerAdapter();broker.connect()
+    broker.place_order({"internal_id":"I1","side":"BUY","quantity":1})
+    payload={"internal_id":"I1"}
+    if command_type=="PLACE_ORDER":
+        payload={"internal_id":"I2","side":"BUY","quantity":1}
+    elif command_type=="MODIFY_ORDER":
+        payload={"internal_id":"I1","quantity":2}
+    command=enqueue(command_type,payload,f"before:{command_type}")
+    claimed=claim_command(command,"worker-a",lease_seconds=1)
+    _expire(claimed)
+    assert recover_expired_commands(broker)==1
+    claimed=claim_next_command("worker-b")
+    process_command(claimed,broker)
+    command.refresh_from_db()
+    assert command.status=="COMPLETED" and command.attempt_count==2
+    states=list(command.attempt_history.order_by("attempt_number").values_list("submission_state",flat=True))
+    assert states==["EXPIRED_BEFORE_SUBMISSION","COMPLETED"]
+
+
+@pytest.mark.parametrize("command_type",["PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER"])
+def test_worker_crash_after_broker_submission_recovers_without_resubmission(command_type):
+    broker=MockBrokerAdapter();broker.connect()
+    broker.place_order({"internal_id":"I1","side":"BUY","quantity":1})
+    if command_type=="PLACE_ORDER":
+        payload={"internal_id":"I2","side":"BUY","quantity":1}
+    elif command_type=="MODIFY_ORDER":
+        payload={"internal_id":"I1","quantity":2}
+    else:
+        payload={"internal_id":"I1"}
+    command=enqueue(command_type,payload,f"after:{command_type}")
+    claimed=claim_command(command,"worker-a",lease_seconds=1)
+    attempt=claimed.attempt_history.get(attempt_number=1)
+    attempt.submission_state="SUBMITTING";attempt.save(update_fields=["submission_state"])
+    if command_type=="PLACE_ORDER":
+        broker.place_order(payload)
+    elif command_type=="MODIFY_ORDER":
+        broker.modify_order(payload)
+    else:
+        broker.cancel_order(payload)
+    order_count=len(broker.orders);next_order_id=broker.next_order_id
+    _expire(claimed)
+    assert recover_expired_commands(broker)==1
+    command.refresh_from_db()
+    assert command.status=="COMPLETED" and command.attempt_count==1
+    assert len(broker.orders)==order_count and broker.next_order_id==next_order_id
+    assert command.attempt_history.get().submission_state=="RECOVERED"
+
+
+def test_uncertain_placement_without_broker_reference_is_not_resubmitted():
+    broker=MockBrokerAdapter();broker.connect()
+    command=enqueue("PLACE_ORDER",{"internal_id":"I1","side":"BUY","quantity":1},"uncertain")
+    claimed=claim_command(command,"worker-a",lease_seconds=1)
+    attempt=claimed.attempt_history.get()
+    attempt.submission_state="SUBMITTING";attempt.save(update_fields=["submission_state"])
+    _expire(claimed)
+    recover_expired_commands(broker)
+    command.refresh_from_db()
+    assert command.status=="UNKNOWN" and not broker.orders
+    assert "not resubmitted" in command.last_error

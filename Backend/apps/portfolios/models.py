@@ -15,10 +15,12 @@ class PortfolioPosition(models.Model):
     instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT)
     quantity = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     average_cost = models.DecimalField(max_digits=24, decimal_places=8, default=0)
+    realized_pnl = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     market_price = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     updated_at = models.DateTimeField(auto_now=True)
     class Meta:
         constraints = [models.UniqueConstraint(fields=["portfolio", "instrument"], name="unique_portfolio_position")]
+        indexes = [models.Index(fields=["portfolio","updated_at"],name="portfolio_position_time_idx")]
 
 class CashLedgerEntry(models.Model):
     portfolio = models.ForeignKey(TradingPortfolio, on_delete=models.PROTECT)
@@ -34,8 +36,8 @@ class PositionLedgerEntry(models.Model):
     instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT)
     quantity_delta = models.DecimalField(max_digits=24, decimal_places=8)
     price = models.DecimalField(max_digits=24, decimal_places=8)
+    realized_pnl = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     kind = models.CharField(max_length=32)
     reference = models.CharField(max_length=128)
     idempotency_key = models.CharField(max_length=128, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
-

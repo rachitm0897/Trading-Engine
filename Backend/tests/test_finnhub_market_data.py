@@ -6,7 +6,7 @@ import responses
 from django.test import Client, override_settings
 
 from apps.instruments.models import Instrument
-from apps.market_data.models import MarketDataFetchRun, MarketDataProviderConfiguration
+from apps.market_data.models import InstrumentPriceHistory, MarketDataFetchRun, MarketDataProviderConfiguration
 from apps.market_data.services import (
     FinnhubClient,
     FinnhubError,
@@ -72,6 +72,7 @@ def test_finnhub_configuration_endpoint_encrypts_masks_and_never_returns_secret(
         "/api/v1/data-providers/finnhub/configure/",
         data=json.dumps({"api_key": "browser-submitted-secret", "enabled": True}),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="configure-finnhub",
     )
     assert saved.status_code == 200
     body = saved.json()
@@ -92,6 +93,7 @@ def test_csrf_is_required_without_an_administrator_session():
         "/api/v1/data-providers/finnhub/configure/",
         data=json.dumps({"api_key": "csrf-protected-secret"}),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="csrf-blocked",
     )
     assert blocked.status_code == 403
     saved = browser.post(
@@ -99,6 +101,7 @@ def test_csrf_is_required_without_an_administrator_session():
         data=json.dumps({"api_key": "csrf-protected-secret"}),
         content_type="application/json",
         HTTP_X_CSRFTOKEN=token,
+        HTTP_IDEMPOTENCY_KEY="csrf-configure",
     )
     assert saved.status_code == 200
 
@@ -146,3 +149,18 @@ def test_failed_history_fetch_run_is_committed_with_metadata():
     assert run.error == "rate limited"
     assert run.completed_at is not None
     assert run.response_metadata["status_code"] == 429
+
+
+def test_history_bulk_upsert_preserves_corrections_without_duplicate_rows():
+    instrument=Instrument.objects.create(symbol="BULK")
+    class Client:
+        last_response_metadata={}
+        def __init__(self,close):self.close=close
+        def daily_candles(self,symbol,start_date,end_date):
+            return [{"trading_date":date(2026,1,2),"open":"10","high":"12","low":"9",
+                "close":self.close,"adjusted_close":self.close,"volume":"100"}]
+    first=fetch_daily_history(instrument,date(2026,1,1),date(2026,1,3),client=Client("10"))
+    corrected=fetch_daily_history(instrument,date(2026,1,1),date(2026,1,3),client=Client("11"))
+    row=InstrumentPriceHistory.objects.get(instrument=instrument,trading_date=date(2026,1,2))
+    assert first.records_written==1 and corrected.records_written==0
+    assert row.close==11 and InstrumentPriceHistory.objects.count()==1

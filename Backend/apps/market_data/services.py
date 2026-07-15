@@ -223,20 +223,20 @@ def fetch_daily_history(instrument, start_date, end_date, *, purpose="HISTORY", 
     try:
         active_client = client or FinnhubClient()
         rows = active_client.daily_candles(instrument.symbol, start_date, end_date)
-        written = 0
         now = timezone.now()
+        rows_by_date={row["trading_date"]:row for row in rows}
+        dates=list(rows_by_date)
+        existing_dates=set(InstrumentPriceHistory.objects.filter(instrument=instrument,provider="FINNHUB",
+            trading_date__in=dates).values_list("trading_date",flat=True))
+        records=[InstrumentPriceHistory(instrument=instrument,provider="FINNHUB",quality_status="COMPLETE",
+            fetched_at=now,**row) for row in rows_by_date.values()]
         with transaction.atomic():
-            for row in rows:
-                _, created = InstrumentPriceHistory.objects.update_or_create(
-                    instrument=instrument,
-                    trading_date=row["trading_date"],
-                    provider="FINNHUB",
-                    defaults={**row, "quality_status": "COMPLETE", "fetched_at": now},
-                )
-                written += int(created)
+            InstrumentPriceHistory.objects.bulk_create(records,update_conflicts=True,
+                update_fields=["open","high","low","close","adjusted_close","volume","quality_status","fetched_at"],
+                unique_fields=["instrument","trading_date","provider"])
         run.status = "COMPLETED"
         run.records_received = len(rows)
-        run.records_written = written
+        run.records_written = len(set(dates)-existing_dates)
         run.response_metadata = getattr(active_client, "last_response_metadata", {})
         run.completed_at = timezone.now()
         run.save(update_fields=["status", "records_received", "records_written", "response_metadata", "completed_at"])

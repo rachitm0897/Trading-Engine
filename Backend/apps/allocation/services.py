@@ -1,7 +1,9 @@
 from decimal import Decimal, ROUND_DOWN
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
-from apps.audit.models import OutboxEvent
+from apps.audit.models import OperationAttempt, OutboxEvent
+from apps.core.idempotency import canonical_request_hash, require_matching_request
 from apps.strategies.models import StrategyAllocation
 from .models import AllocationDecision, AllocationRun, PortfolioFlow, StrategyCapitalSnapshot
 
@@ -119,9 +121,10 @@ def allocate_withdrawal(amount, nav, portfolio_cash, strategies, liquidation_pol
 
 def _strategy_rows(portfolio):
     rows = []
-    for allocation in StrategyAllocation.objects.filter(portfolio=portfolio).select_related("strategy"):
-        rows.append({"id": allocation.strategy_id, "enabled": allocation.strategy.enabled and not allocation.strategy.kill_switch,
-            "target_share": allocation.weight, "current": allocation.strategy.allocated_capital,
+    for allocation in StrategyAllocation.objects.filter(portfolio=portfolio).select_related("strategy_instance"):
+        instance = allocation.strategy_instance
+        rows.append({"id": instance.pk, "enabled": instance.enabled and not instance.kill_switch,
+            "target_share": allocation.weight, "current": instance.allocated_capital,
             "minimum_share": allocation.minimum_share, "maximum_share": allocation.maximum_share,
             "capacity": allocation.capacity if allocation.capacity is not None else Decimal("Infinity"),
             "minimum_allocation": allocation.minimum_allocation, "priority": allocation.priority,
@@ -148,11 +151,19 @@ def resolve_allocation_mode(portfolio, allocation_mode):
 
 @transaction.atomic
 def _create_flow_run(portfolio, flow_type, amount, idempotency_key, effective_at, liquidation_policy,
-                     allocation_mode, nav, cash):
+                     allocation_mode, nav, cash, request_hash):
+    from apps.accounts.models import BrokerAccount
+    from apps.risk.models import CapitalReservation
+    account=BrokerAccount.objects.select_for_update().get(pk=portfolio.account_id)
     flow = PortfolioFlow.objects.select_for_update().filter(idempotency_key=idempotency_key).first()
     if flow:
-        if flow.portfolio_id != portfolio.pk or flow.flow_type != flow_type or D(flow.amount) != amount:
-            raise ValueError("Idempotency-Key was already used for a different portfolio flow")
+        stored_hash=flow.request_hash or canonical_request_hash("portfolio_flow",{
+            "portfolio_id":flow.portfolio_id,"flow_type":flow.flow_type,"amount":flow.amount,
+            "effective_at":None,"liquidation_policy":flow.allocation_run.liquidation_policy,
+            "allocation_mode":flow.allocation_run.allocation_mode,"nav":None})
+        require_matching_request(stored_hash,request_hash)
+        if not flow.request_hash:
+            flow.request_hash=stored_hash;flow.save(update_fields=["request_hash"])
         return flow.allocation_run, False
     flow = PortfolioFlow.objects.create(
         portfolio=portfolio,
@@ -161,6 +172,7 @@ def _create_flow_run(portfolio, flow_type, amount, idempotency_key, effective_at
         currency=portfolio.account.base_currency,
         effective_at=effective_at or timezone.now(),
         idempotency_key=idempotency_key,
+        request_hash=request_hash,
     )
     run = AllocationRun.objects.create(
         flow=flow,
@@ -176,6 +188,16 @@ def _create_flow_run(portfolio, flow_type, amount, idempotency_key, effective_at
             "resolved_allocation_mode": allocation_mode,
         },
     )
+    if flow_type in {"WITHDRAWAL","INTERNAL_TRANSFER_OUT"}:
+        reserved=CapitalReservation.objects.filter(account=account,status__in=["ACTIVE","CONSUMED"]).aggregate(
+            total=Sum("amount"))["total"] or D(0)
+        cash_reservation=min(amount,max(D(account.available_cash)-D(reserved),D(0)))
+        if cash_reservation:
+            CapitalReservation.objects.create(account=account,portfolio=portfolio,reference_type="PORTFOLIO_FLOW",
+                reference_id=str(flow.pk),amount=cash_reservation,estimated_fees=0,
+                idempotency_key=f"capital:portfolio-flow:{flow.pk}")
+    OperationAttempt.objects.create(operation_type="PORTFOLIO_FLOW",operation_id=str(flow.pk),
+        attempt_number=flow.attempt_count,request_hash=flow.request_hash)
     return run, True
 
 
@@ -192,7 +214,7 @@ def create_strategy_flow_allocation(run):
     for row in rows:
         target = D(str(row["target_share"]))*post_nav
         current = D(str(row["current"]))
-        StrategyCapitalSnapshot.objects.create(allocation_run=run, strategy_id=row["id"], capital_before=current,
+        StrategyCapitalSnapshot.objects.create(allocation_run=run, strategy_instance_id=row["id"], capital_before=current,
             target_capital=target, deficit=max(target-current, 0), surplus=max(current-target, 0), idle_cash=row["idle_cash"])
     if flow.flow_type in {"DEPOSIT", "INTERNAL_TRANSFER_IN"}:
         required_reserve = max(D(portfolio.cash_buffer_pct)*(nav+amount)-cash, D(0))
@@ -203,7 +225,7 @@ def create_strategy_flow_allocation(run):
         for row in sorted(computed, key=lambda x: (x.get("priority",100), str(x["id"]))):
             approved = values.get(str(row["id"]), D(0))
             if approved:
-                AllocationDecision.objects.create(run=run, strategy_id=row["id"], source="CAPITAL_DEFICIT",
+                AllocationDecision.objects.create(run=run, strategy_instance_id=row["id"], source="CAPITAL_DEFICIT",
                     requested_amount=amount, approved_amount=approved, rank=rank,
                     binding_constraint="CAPACITY_OR_MAXIMUM" if approved >= row["cap"] else "DEFICIT_WEIGHT",
                     details={"deficit": str(row["deficit"]), "cap": str(row["cap"])})
@@ -214,18 +236,18 @@ def create_strategy_flow_allocation(run):
         for rank, item in enumerate(decisions):
             approved=D(0) if item["source"]=="UNFUNDED" else item["amount"]
             if item["source"]=="UNFUNDED":run.unallocated_amount+=item["amount"]
-            AllocationDecision.objects.create(run=run, strategy_id=item.get("strategy_id"), source=item["source"],
+            AllocationDecision.objects.create(run=run, strategy_instance_id=item.get("strategy_id"), source=item["source"],
                 requested_amount=item["amount"] if item["source"]=="UNFUNDED" else amount, approved_amount=approved, rank=rank,
                 binding_constraint="LIQUIDATION_POLICY" if item.get("liquidation_required") else "AVAILABLE_CAPITAL",
                 liquidation_required=item.get("liquidation_required", False))
     strategy_changes={}
     direction=D(1) if flow.flow_type in {"DEPOSIT","INTERNAL_TRANSFER_IN"} else D(-1)
-    for decision in run.decisions.exclude(strategy__isnull=True):
-        strategy_changes[decision.strategy_id]=strategy_changes.get(decision.strategy_id,D(0))+direction*D(decision.approved_amount)
-    from apps.strategies.models import TradingStrategy
-    for strategy in TradingStrategy.objects.select_for_update().filter(pk__in=strategy_changes):
-        strategy.allocated_capital=max(D(strategy.allocated_capital)+strategy_changes[strategy.pk],D(0))
-        strategy.save(update_fields=["allocated_capital"])
+    for decision in run.decisions.exclude(strategy_instance__isnull=True):
+        strategy_changes[decision.strategy_instance_id]=strategy_changes.get(decision.strategy_instance_id,D(0))+direction*D(decision.approved_amount)
+    from apps.strategies.models import StrategyInstance
+    for instance in StrategyInstance.objects.select_for_update().filter(pk__in=strategy_changes):
+        instance.allocated_capital=max(D(instance.allocated_capital)+strategy_changes[instance.pk],D(0))
+        instance.save(update_fields=["allocated_capital"])
     run.approved_amount=amount-run.unallocated_amount
     run.snapshot.update({"post_flow_nav": str(post_nav)})
     run.save(update_fields=["approved_amount", "unallocated_amount", "snapshot"])
@@ -294,6 +316,7 @@ def create_optimized_flow_allocation(run):
         available_cash=post_cash,
         refresh_history=True,
         flow_reference=f"flow:{flow.pk}",
+        retry_failed=run.flow.attempt_count>1,
     )
     rebalance = plan_optimized_rebalance(
         optimization,
@@ -335,8 +358,40 @@ def _complete_flow(run):
     return run
 
 
+def execute_flow_allocation(run):
+    run=AllocationRun.objects.select_related("flow__portfolio__account","optimization_run").get(pk=run.pk)
+    if run.status not in {"QUEUED","CALCULATING"}:return run
+    if run.status=="QUEUED":
+        AllocationRun.objects.filter(pk=run.pk,status="QUEUED").update(status="CALCULATING")
+        OperationAttempt.objects.filter(operation_type="PORTFOLIO_FLOW",operation_id=str(run.flow_id),
+            attempt_number=run.flow.attempt_count,status="QUEUED").update(status="PROCESSING")
+        run.status="CALCULATING"
+    try:
+        if run.allocation_mode == "PORTFOLIO_OPTIMIZATION":
+            run = create_optimized_flow_allocation(run)
+            run = _complete_flow(run)
+        else:
+            with transaction.atomic():
+                run = create_strategy_flow_allocation(run)
+                run = _complete_flow(run)
+        OperationAttempt.objects.filter(operation_type="PORTFOLIO_FLOW",operation_id=str(run.flow_id),
+            attempt_number=run.flow.attempt_count).update(status="COMPLETED",result={"allocation_run_id":run.pk},
+            completed_at=timezone.now())
+        return run
+    except Exception as exc:
+        retryable=not isinstance(exc,ValueError)
+        if run.optimization_run_id:
+            retryable=retryable or bool(run.optimization_run.retryable)
+        AllocationRun.objects.filter(pk=run.pk).update(status="FAILED", completed_at=timezone.now())
+        PortfolioFlow.objects.filter(pk=run.flow_id).update(status="FAILED",retryable=retryable,last_error=str(exc)[:1000])
+        OperationAttempt.objects.filter(operation_type="PORTFOLIO_FLOW",operation_id=str(run.flow_id),
+            attempt_number=run.flow.attempt_count).update(status="FAILED",retryable=retryable,
+            error=str(exc)[:1000],completed_at=timezone.now())
+        raise
+
+
 def create_flow(portfolio, flow_type, amount, idempotency_key, *, nav=None, effective_at=None,
-                liquidation_policy="PROPORTIONAL", allocation_mode="AUTO"):
+                liquidation_policy="PROPORTIONAL", allocation_mode="AUTO", retry_failed=False,defer_optimized=False):
     if flow_type not in {value for value, _ in PortfolioFlow.TYPES}:
         raise ValueError("Unsupported flow type")
     amount = _money(amount)
@@ -345,6 +400,10 @@ def create_flow(portfolio, flow_type, amount, idempotency_key, *, nav=None, effe
     resolved_mode = resolve_allocation_mode(portfolio, allocation_mode)
     nav = D(str(nav if nav is not None else portfolio.account.net_liquidation))
     cash = D(portfolio.account.available_cash)
+    request_hash=canonical_request_hash("portfolio_flow",{
+        "portfolio_id":portfolio.pk,"flow_type":flow_type,"amount":amount,
+        "effective_at":effective_at.isoformat() if hasattr(effective_at,"isoformat") else effective_at,
+        "liquidation_policy":liquidation_policy,"allocation_mode":allocation_mode,"nav":nav})
     run, created = _create_flow_run(
         portfolio,
         flow_type,
@@ -355,19 +414,30 @@ def create_flow(portfolio, flow_type, amount, idempotency_key, *, nav=None, effe
         resolved_mode,
         nav,
         cash,
+        request_hash,
     )
     if not created:
-        return run
-    try:
-        if resolved_mode == "PORTFOLIO_OPTIMIZATION":
-            run = create_optimized_flow_allocation(run)
-        else:
-            run = create_strategy_flow_allocation(run)
-        return _complete_flow(run)
-    except Exception:
-        AllocationRun.objects.filter(pk=run.pk).update(status="FAILED", completed_at=timezone.now())
-        PortfolioFlow.objects.filter(pk=run.flow_id).update(status="FAILED")
-        raise
+        if run.status!="FAILED":
+            return run
+        flow=run.flow
+        if not retry_failed or not flow.retryable:
+            return run
+        with transaction.atomic():
+            flow=PortfolioFlow.objects.select_for_update().get(pk=flow.pk)
+            run=AllocationRun.objects.select_for_update().get(pk=run.pk)
+            run.decisions.all().delete();run.capital_snapshots.all().delete()
+            flow.status="REQUESTED";flow.retryable=False;flow.last_error="";flow.attempt_count+=1
+            flow.save(update_fields=["status","retryable","last_error","attempt_count"])
+            run.status="CALCULATING";run.completed_at=None;run.unallocated_amount=0;run.optimization_run=None
+            run.save(update_fields=["status","completed_at","unallocated_amount","optimization_run"])
+            OperationAttempt.objects.create(operation_type="PORTFOLIO_FLOW",operation_id=str(flow.pk),
+                attempt_number=flow.attempt_count,request_hash=flow.request_hash)
+    if resolved_mode=="PORTFOLIO_OPTIMIZATION" and defer_optimized:
+        AllocationRun.objects.filter(pk=run.pk).update(status="QUEUED")
+        OperationAttempt.objects.filter(operation_type="PORTFOLIO_FLOW",operation_id=str(run.flow_id),
+            attempt_number=run.flow.attempt_count).update(status="QUEUED")
+        run.status="QUEUED";return run
+    return execute_flow_allocation(run)
 
 
 def aggregate_targets(portfolio):

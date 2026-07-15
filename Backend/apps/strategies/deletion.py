@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import uuid
 
 from django.conf import settings
@@ -20,6 +21,7 @@ from apps.risk.models import KillSwitch
 
 from .models import (
     StrategyAllocation,
+    StrategyAction,
     StrategyAttributedPosition,
     StrategyInputBinding,
     StrategyInputRequirement,
@@ -30,6 +32,9 @@ from .models import (
     StrategyVersion,
 )
 from .plugins import get_plugin
+
+
+logger = logging.getLogger(__name__)
 
 
 ACTIVE_ORDER_STATES = {
@@ -116,8 +121,8 @@ def _existing_attempt(instance_id, attempt_key):
 
 def _identity_snapshot(instance, version=None):
     snapshot = {
-        "strategy_id": instance.legacy_strategy_id,
-        "strategy_name": instance.legacy_strategy.name,
+        "strategy_id": instance.pk,
+        "strategy_name": instance.name,
         "strategy_instance_id": instance.pk,
         "strategy_instance_name": instance.name,
         "definition_key": instance.definition.key,
@@ -132,10 +137,8 @@ def _identity_snapshot(instance, version=None):
 
 def _matches_instance(instance, version_ids):
     return (
-        Q(strategy_id=instance.legacy_strategy_id)
-        | Q(strategy_instance_id=instance.pk)
+        Q(strategy_instance_id=instance.pk)
         | Q(strategy_version_id__in=version_ids)
-        | Q(attributions__strategy_id=instance.legacy_strategy_id)
         | Q(attributions__strategy_instance_id=instance.pk)
         | Q(attributions__strategy_version_id__in=version_ids)
     )
@@ -234,19 +237,17 @@ def _detach_financial_history(instance, version_ids):
     for intent in intents:
         version = versions.get(intent.strategy_version_id)
         intent.strategy_snapshot = _merge_snapshot(intent.strategy_snapshot, _identity_snapshot(instance, version))
-        intent.strategy = None
         intent.strategy_instance = None
         intent.strategy_version = None
     if intents:
         OrderIntent.objects.bulk_update(
             intents,
-            ["strategy_snapshot", "strategy", "strategy_instance", "strategy_version"],
+            ["strategy_snapshot", "strategy_instance", "strategy_version"],
         )
 
     attributions = list(
         OrderIntentAttribution.objects.filter(
-            Q(strategy_id=instance.legacy_strategy_id)
-            | Q(strategy_instance_id=instance.pk)
+            Q(strategy_instance_id=instance.pk)
             | Q(strategy_version_id__in=version_ids)
         ).select_related("strategy_version")
     )
@@ -256,35 +257,34 @@ def _detach_financial_history(instance, version_ids):
             attribution.strategy_snapshot,
             _identity_snapshot(instance, version),
         )
-        attribution.strategy = None
         attribution.strategy_instance = None
         attribution.strategy_version = None
     if attributions:
         OrderIntentAttribution.objects.bulk_update(
             attributions,
-            ["strategy_snapshot", "strategy", "strategy_instance", "strategy_version"],
+            ["strategy_snapshot", "strategy_instance", "strategy_version"],
         )
 
     capital_snapshots = list(
-        StrategyCapitalSnapshot.objects.filter(strategy_id=instance.legacy_strategy_id)
+        StrategyCapitalSnapshot.objects.filter(strategy_instance=instance)
     )
     for item in capital_snapshots:
         item.strategy_snapshot = _merge_snapshot(item.strategy_snapshot, base)
-        item.strategy = None
+        item.strategy_instance = None
     if capital_snapshots:
         StrategyCapitalSnapshot.objects.bulk_update(
-            capital_snapshots, ["strategy_snapshot", "strategy"]
+            capital_snapshots, ["strategy_snapshot", "strategy_instance"]
         )
 
     decisions = list(
-        AllocationDecision.objects.filter(strategy_id=instance.legacy_strategy_id)
+        AllocationDecision.objects.filter(strategy_instance=instance)
     )
     for item in decisions:
         item.strategy_snapshot = _merge_snapshot(item.strategy_snapshot, base)
-        item.strategy = None
+        item.strategy_instance = None
     if decisions:
         AllocationDecision.objects.bulk_update(
-            decisions, ["strategy_snapshot", "strategy"]
+            decisions, ["strategy_snapshot", "strategy_instance"]
         )
 
     return {
@@ -331,8 +331,8 @@ def _refresh_subscription(instrument_id, timeframe):
                 instrument = Instrument.objects.select_related("broker_contract").get(pk=instrument_id)
                 reconcile_market_subscription(instrument, timeframe)
             except Exception:
-                # Subscription recovery will retry from the persisted consumer count.
-                return
+                # The persisted consumer count remains the recovery source of truth.
+                logger.exception("Failed to reconcile market-data subscription after deleting strategy %s", instance_id)
 
         transaction.on_commit(reconcile_after_commit)
 
@@ -351,14 +351,13 @@ def _delete_mutable_records(instance, version_ids):
             Q(strategy_instance=instance)
             | Q(strategy_version_id__in=version_ids)
             | Q(run__strategy_instance=instance)
-            | Q(run__strategy_id=instance.legacy_strategy_id)
         ).count(),
         "runs": StrategyRun.objects.filter(
-            Q(strategy_instance=instance) | Q(strategy_id=instance.legacy_strategy_id)
+            Q(strategy_instance=instance)
         ).count(),
         "versions": len(version_ids),
         "allocations": StrategyAllocation.objects.filter(
-            strategy_id=instance.legacy_strategy_id
+            strategy_instance=instance
         ).count(),
         "positions": StrategyAttributedPosition.objects.filter(
             strategy_instance=instance
@@ -366,6 +365,7 @@ def _delete_mutable_records(instance, version_ids):
         "input_bindings": StrategyInputBinding.objects.filter(
             strategy_instance=instance
         ).count(),
+        "actions": StrategyAction.objects.filter(strategy_instance=instance).count(),
     }
 
     StrategySignal.objects.filter(
@@ -375,31 +375,27 @@ def _delete_mutable_records(instance, version_ids):
         Q(strategy_instance=instance)
         | Q(strategy_version_id__in=version_ids)
         | Q(run__strategy_instance=instance)
-        | Q(run__strategy_id=instance.legacy_strategy_id)
     ).delete()
     StrategyRun.objects.filter(
         Q(strategy_instance=instance)
-        | Q(strategy_id=instance.legacy_strategy_id)
         | Q(strategy_version_id__in=version_ids)
     ).delete()
     StrategyInputBinding.objects.filter(strategy_instance=instance).delete()
     StrategyAttributedPosition.objects.filter(strategy_instance=instance).delete()
-    StrategyAllocation.objects.filter(strategy_id=instance.legacy_strategy_id).delete()
+    StrategyAllocation.objects.filter(strategy_instance=instance).delete()
+    StrategyAction.objects.filter(strategy_instance=instance).delete()
     StrategyVersion.objects.filter(strategy_instance=instance).delete()
     OutboxEvent.objects.select_for_update().filter(
         Q(aggregate_type="strategy_instance", aggregate_id=str(instance.pk))
-        | Q(aggregate_type="strategy", aggregate_id=str(instance.legacy_strategy_id))
     ).delete()
     KillSwitch.objects.filter(
         Q(scope__iexact="STRATEGY_INSTANCE", scope_id=str(instance.pk))
-        | Q(scope__iexact="STRATEGY", scope_id=str(instance.legacy_strategy_id))
+        | Q(scope__iexact="STRATEGY", scope_id=str(instance.pk))
     ).delete()
 
     instrument_id = instance.instrument_id
     timeframe = instance.timeframe
-    legacy = instance.legacy_strategy
     instance.delete()
-    legacy.delete()
     _refresh_input_requirements(requirement_ids)
     _refresh_subscription(instrument_id, timeframe)
     return counts
@@ -417,7 +413,7 @@ def delete_strategy_instance(instance_id, expected_name, *, attempt_key=None, ac
             try:
                 instance = (
                     StrategyInstance.objects.select_for_update()
-                    .select_related("legacy_strategy", "definition")
+                    .select_related("definition")
                     .get(pk=instance_id)
                 )
             except StrategyInstance.DoesNotExist:

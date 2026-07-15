@@ -1,6 +1,4 @@
 import json
-import uuid
-
 from django.conf import settings
 
 from apps.audit.models import AuditEvent
@@ -25,6 +23,9 @@ def status(request):
 def configure(request):
     if request.method != "POST":
         return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "POST required", "details": {}})
+    key=request.headers.get("Idempotency-Key")
+    if not key:
+        return response(status=400,error={"code":"IDEMPOTENCY_KEY_REQUIRED","message":"Idempotency-Key header is required","details":{}})
     throttled = throttle_response(
         request,
         "finnhub",
@@ -45,7 +46,7 @@ def configure(request):
         config.updated_by = _actor(request)
         config.save(update_fields=["encrypted_api_key", "api_key_last_four", "enabled", "updated_by", "updated_at"])
         AuditEvent.objects.get_or_create(
-            idempotency_key=f"finnhub-config:{request.headers.get('Idempotency-Key') or uuid.uuid4()}",
+            idempotency_key=f"finnhub-config:{key}",
             defaults={
                 "event_type": "market_data.credential.updated",
                 "actor": _actor(request),
@@ -62,6 +63,9 @@ def configure(request):
 def test(request):
     if request.method != "POST":
         return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "POST required", "details": {}})
+    key=request.headers.get("Idempotency-Key")
+    if not key:
+        return response(status=400,error={"code":"IDEMPOTENCY_KEY_REQUIRED","message":"Idempotency-Key header is required","details":{}})
     throttled = throttle_response(
         request,
         "finnhub",
@@ -75,7 +79,7 @@ def test(request):
         api_key = str(payload.get("api_key") or "").strip()
         result = FinnhubClient(api_key=api_key or None).test_connection(str(payload.get("symbol") or "AAPL").upper())
         AuditEvent.objects.get_or_create(
-            idempotency_key=f"finnhub-test:{request.headers.get('Idempotency-Key') or uuid.uuid4()}",
+            idempotency_key=f"finnhub-test:{key}",
             defaults={
                 "event_type": "market_data.connection.tested",
                 "actor": _actor(request),
@@ -88,7 +92,7 @@ def test(request):
     except (FinnhubError, ValueError, json.JSONDecodeError) as exc:
         status_code = exc.status_code if isinstance(exc, FinnhubError) else 400
         AuditEvent.objects.get_or_create(
-            idempotency_key=f"finnhub-test:{request.headers.get('Idempotency-Key') or uuid.uuid4()}",
+            idempotency_key=f"finnhub-test:{key}",
             defaults={
                 "event_type": "market_data.connection.tested",
                 "actor": _actor(request),

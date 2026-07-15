@@ -16,8 +16,14 @@ DATABASES = {"default":{"ENGINE":"django.db.backends.sqlite3", "NAME":os.getenv(
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
 GATEWAY_SERVICE_TOKEN = os.getenv("GATEWAY_SERVICE_TOKEN", "test-token")
-IBC_TRADING_MODE = os.getenv("IBC_TRADING_MODE", "paper").lower()
+if os.getenv("IBC_TRADING_MODE", "paper").lower() != "paper":
+    raise RuntimeError("Live trading is disabled; the Gateway supports paper trading only")
+IBC_TRADING_MODE = "paper"
 IBKR_CLIENT_ID = int(os.getenv("IBKR_CLIENT_ID", "17"))
 BROKER_ADAPTER = os.getenv("BROKER_ADAPTER", "mock")
-TWS_PORT = 4001 if IBC_TRADING_MODE == "live" else 4002
+TWS_PORT = 4002
 BROKER_REFRESH_SECONDS = max(2, int(os.getenv("BROKER_REFRESH_SECONDS", "5")))
+GATEWAY_EVENT_RETENTION_DAYS = int(os.getenv("GATEWAY_EVENT_RETENTION_DAYS", "7"))
+GATEWAY_HEALTH_RETENTION_DAYS = int(os.getenv("GATEWAY_HEALTH_RETENTION_DAYS", "7"))
+GATEWAY_COMPACTION_SECONDS = max(300, int(os.getenv("GATEWAY_COMPACTION_SECONDS", "3600")))
+GATEWAY_COMPACTION_BATCH_SIZE = int(os.getenv("GATEWAY_COMPACTION_BATCH_SIZE", "1000"))

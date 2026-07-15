@@ -1,39 +1,166 @@
 from collections import defaultdict
 from decimal import Decimal
+
 from django.db import transaction
 from django.utils import timezone
+
 from apps.accounts.models import BrokerAccount
+from apps.audit.models import OutboxEvent
 from apps.broker_gateway.client import GatewayClient
 from apps.execution.models import Fill
 from apps.instruments.models import BrokerContract
 from apps.portfolios.models import PortfolioPosition
-from .models import ReconciliationBreak, ReconciliationRun
-from apps.audit.models import OutboxEvent
 
-@transaction.atomic
-def reconcile(trigger="manual", client=None):
-    client=client or GatewayClient(); run=ReconciliationRun.objects.create(trigger=trigger)
-    health=client.health()
-    if not health.get("connected") or not health.get("reconciled"):
-        ReconciliationBreak.objects.create(run=run,category="GATEWAY",severity="CRITICAL",internal_value={"expected":"CONNECTED_RECONCILED"},broker_value=health,material=True)
-    broker_positions=defaultdict(Decimal)
-    for row in client.positions() or []: broker_positions[str(row.get("conid"))] += Decimal(str(row.get("quantity",0)))
-    internal_positions=defaultdict(Decimal)
-    contracts={x.instrument_id:str(x.conid) for x in BrokerContract.objects.all()}
-    for row in PortfolioPosition.objects.all():
-        if row.instrument_id in contracts: internal_positions[contracts[row.instrument_id]] += row.quantity
-    for conid in sorted(set(broker_positions)|set(internal_positions)):
-        if broker_positions[conid] != internal_positions[conid]: ReconciliationBreak.objects.create(run=run,category="POSITION",severity="CRITICAL",internal_value={"conid":conid,"quantity":str(internal_positions[conid])},broker_value={"conid":conid,"quantity":str(broker_positions[conid])},material=True)
-    broker_execs={str(x.get("execution_id")) for x in (client.executions() or []) if x.get("execution_id")}
-    internal_execs=set(Fill.objects.values_list("execution_id",flat=True))
-    for execution_id in sorted(broker_execs-internal_execs): ReconciliationBreak.objects.create(run=run,category="EXECUTION",severity="CRITICAL",internal_value={"execution_id":None},broker_value={"execution_id":execution_id},material=True)
-    for execution_id in sorted(internal_execs-broker_execs): ReconciliationBreak.objects.create(run=run,category="EXECUTION",severity="WARNING",internal_value={"execution_id":execution_id},broker_value={"execution_id":None},material=False)
-    for category in ("GATEWAY","POSITION","EXECUTION","ORDER","CASH","ACCOUNT"):
-        if not run.breaks.filter(category=category,material=True).exists():
-            ReconciliationBreak.objects.filter(category=category,material=True,resolved=False).exclude(run=run).update(resolved=True,resolution=f"Automatically resolved by clean reconciliation run {run.pk}")
-    material=ReconciliationBreak.objects.filter(material=True,resolved=False).exists(); run.status="BLOCKED" if material else "COMPLETED"; run.completed_at=timezone.now(); run.save(update_fields=["status","completed_at"])
-    BrokerAccount.objects.update(is_reconciled=not material)
-    OutboxEvent.objects.create(topic="reconciliation.events.v1",event_type="reconciliation.completed",aggregate_type="system",
-        aggregate_id=str(run.pk),partition_key="reconciliation",payload={"reconciliation_run_id":run.pk,"status":run.status,
-        "material_breaks":run.breaks.filter(material=True).count()},idempotency_key=f"reconciliation:{run.pk}:completed")
-    return run
+from .models import ReconciliationBreak, ReconciliationRun
+
+
+def _account_id(row):
+    return str(row.get("account") or row.get("account_id") or "")
+
+
+def _resolve_account(broker_account, broker_account_id, broker_positions, broker_executions):
+    if broker_account is not None:
+        return broker_account
+    if broker_account_id:
+        return BrokerAccount.objects.get(account_id=str(broker_account_id))
+    snapshot_accounts = {
+        _account_id(row)
+        for row in [*broker_positions, *broker_executions]
+        if _account_id(row)
+    }
+    if len(snapshot_accounts) == 1:
+        return BrokerAccount.objects.get(account_id=snapshot_accounts.pop())
+    stored_accounts = list(BrokerAccount.objects.all()[:2])
+    if len(stored_accounts) == 1:
+        return stored_accounts[0]
+    raise ValueError("Reconciliation requires exactly one broker account")
+
+
+def reconcile(trigger="manual", client=None, *, broker_account=None, broker_account_id=None):
+    client = client or GatewayClient()
+    # Broker I/O is deliberately completed before the database transaction.
+    health = client.health() or {}
+    all_broker_positions = client.positions() or []
+    all_broker_executions = client.executions() or []
+    account = _resolve_account(
+        broker_account,
+        broker_account_id,
+        all_broker_positions,
+        all_broker_executions,
+    )
+    broker_positions_rows = [
+        row for row in all_broker_positions if _account_id(row) == account.account_id
+    ]
+    broker_execution_rows = [
+        row for row in all_broker_executions if _account_id(row) == account.account_id
+    ]
+
+    with transaction.atomic():
+        account = BrokerAccount.objects.select_for_update().get(pk=account.pk)
+        run = ReconciliationRun.objects.create(trigger=trigger, broker_account=account)
+        if not health.get("connected") or not health.get("reconciled"):
+            ReconciliationBreak.objects.create(
+                run=run,
+                category="GATEWAY",
+                severity="CRITICAL",
+                internal_value={"account": account.account_id, "expected": "CONNECTED_RECONCILED"},
+                broker_value=health,
+                material=True,
+            )
+
+        broker_positions = defaultdict(Decimal)
+        for row in broker_positions_rows:
+            broker_positions[str(row.get("conid"))] += Decimal(str(row.get("quantity", 0)))
+        internal_positions = defaultdict(Decimal)
+        contracts = {
+            item.instrument_id: str(item.conid)
+            for item in BrokerContract.objects.filter(
+                instrument_id__in=PortfolioPosition.objects.filter(
+                    portfolio__account=account
+                ).values("instrument_id")
+            )
+        }
+        for row in PortfolioPosition.objects.filter(portfolio__account=account):
+            if row.instrument_id in contracts:
+                internal_positions[contracts[row.instrument_id]] += row.quantity
+        for conid in sorted(set(broker_positions) | set(internal_positions)):
+            if broker_positions[conid] != internal_positions[conid]:
+                ReconciliationBreak.objects.create(
+                    run=run,
+                    category="POSITION",
+                    severity="CRITICAL",
+                    internal_value={
+                        "account": account.account_id,
+                        "conid": conid,
+                        "quantity": str(internal_positions[conid]),
+                    },
+                    broker_value={
+                        "account": account.account_id,
+                        "conid": conid,
+                        "quantity": str(broker_positions[conid]),
+                    },
+                    material=True,
+                )
+
+        broker_execs = {
+            str(row.get("execution_id"))
+            for row in broker_execution_rows
+            if row.get("execution_id")
+        }
+        internal_execs = set(
+            Fill.objects.filter(order__intent__portfolio__account=account).values_list(
+                "execution_id", flat=True
+            )
+        )
+        for execution_id in sorted(broker_execs - internal_execs):
+            ReconciliationBreak.objects.create(
+                run=run,
+                category="EXECUTION",
+                severity="CRITICAL",
+                internal_value={"account": account.account_id, "execution_id": None},
+                broker_value={"account": account.account_id, "execution_id": execution_id},
+                material=True,
+            )
+        for execution_id in sorted(internal_execs - broker_execs):
+            ReconciliationBreak.objects.create(
+                run=run,
+                category="EXECUTION",
+                severity="WARNING",
+                internal_value={"account": account.account_id, "execution_id": execution_id},
+                broker_value={"account": account.account_id, "execution_id": None},
+                material=False,
+            )
+
+        for category in ("GATEWAY", "POSITION", "EXECUTION", "ORDER", "CASH", "ACCOUNT"):
+            if not run.breaks.filter(category=category, material=True).exists():
+                ReconciliationBreak.objects.filter(
+                    run__broker_account=account,
+                    category=category,
+                    material=True,
+                    resolved=False,
+                ).exclude(run=run).update(
+                    resolved=True,
+                    resolution=f"Automatically resolved by clean account reconciliation run {run.pk}",
+                )
+
+        material = run.breaks.filter(material=True, resolved=False).exists()
+        run.status = "BLOCKED" if material else "COMPLETED"
+        run.completed_at = timezone.now()
+        run.save(update_fields=["status", "completed_at"])
+        account.is_reconciled = not material
+        account.save(update_fields=["is_reconciled", "updated_at"])
+        OutboxEvent.objects.create(
+            topic="reconciliation.events.v1",
+            event_type="reconciliation.completed",
+            aggregate_type="account",
+            aggregate_id=account.account_id,
+            partition_key=account.account_id,
+            payload={
+                "reconciliation_run_id": run.pk,
+                "account": account.account_id,
+                "status": run.status,
+                "material_breaks": run.breaks.filter(material=True).count(),
+            },
+            idempotency_key=f"reconciliation:{run.pk}:completed",
+        )
+        return run

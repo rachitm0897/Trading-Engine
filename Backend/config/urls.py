@@ -13,7 +13,7 @@ from apps.portfolio_optimization import views as optimization_views
 api_patterns = [
     path("system/", views.system), path("auth/session/",views.auth_session), path("gateway/", views.gateway), path("accounts/", views.accounts),
     path("instruments/", views.instruments), path("portfolios/", views.portfolios), path("positions/", views.positions),
-    path("strategies/", views.strategies), path("strategy-runs/", views.strategy_runs), path("rebalances/", views.rebalances),
+    path("rebalances/", views.rebalances),
     path("orders/", views.orders), path("orders/<str:internal_id>/detail/", views.orders, {"action":"detail"}), path("orders/<str:internal_id>/", views.orders), path("orders/<str:internal_id>/cancel/", views.orders, {"action":"cancel"}), path("executions/", views.executions), path("reconciliation/", views.reconciliation),
     path("risk/", views.risk), path("audit/", views.audit),
 ]
@@ -35,7 +35,7 @@ new_api = [
     path("strategy-policies/",strategy_views.policies),path("instruments/search/",strategy_views.search_instruments),path("instruments/resolve/",strategy_views.resolve),
     path("streaming/health/",streaming_views.health),path("streaming/topics/",streaming_views.topics),
     path("streaming/consumer-lag/",streaming_views.consumer_lag),path("streaming/dead-letter/",streaming_views.dead_letter),
-    path("streaming/replay/",streaming_views.replay),
+    path("streaming/replay/",streaming_views.replay),path("streaming/replay/<int:replay_id>/",streaming_views.replay_status),
     path("allocations/policies/",allocation_views.policies),path("allocations/flows/",allocation_views.flows),
     path("allocations/runs/",allocation_views.runs),path("allocations/runs/<int:run_id>/",allocation_views.runs),
     path("rebalancing/policies/",rebalancing_views.policies),path("rebalancing/preview/",rebalancing_views.execute,{"preview":True}),
