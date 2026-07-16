@@ -52,7 +52,7 @@ export function DashboardPage() {
       <TerminalMetric label="Attention items" value={formatNumber(attention.length)} icon={<AlertTriangle />} trend={attention.some((item) => item.severity === 'CRITICAL') ? 'negative' : 'neutral'} />
     </section>
     <div className="dashboard-grid">
-      <TerminalPanel id="nav-pnl" title="NAV & portfolio P&L" description={`Persisted portfolio observations · ${series.data?.source || 'waiting for data'}`} className="dashboard-chart" fullscreenable>
+      <TerminalPanel id="nav-pnl" title="NAV & portfolio P&L" description={`Persisted portfolio observations · ${series.data?.source || 'waiting for data'}`} className="dashboard-chart">
         {series.isError ? <ErrorState error={series.error} onRetry={() => void series.refetch()} compact /> : series.isLoading ? <Skeleton height={270} /> : <TerminalChart id="dashboard-nav" height={330} ariaLabel="Portfolio NAV and P&L chart" defaultChartType="area" lines={[
           {name: 'NAV', data: series.data?.nav || [], type: 'area', kind: 'primary'},
           {name: 'P&L', data: series.data?.pnl || [], kind: 'primary'},
