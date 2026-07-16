@@ -738,6 +738,8 @@ export interface PortfolioGoalAllocation {
   risk_level: number
   enabled: boolean
   display_order: number
+  construction_source: 'MANUAL_OPTIMIZER' | 'ACCEPTED_RECOMMENDATION'
+  accepted_recommendation_run_id: number | null
   resolved_rules: GoalResolvedRules
   instrument_count: number
   created_at: string
@@ -857,6 +859,8 @@ export interface GoalConstructionResult {
   timeframe_bucket: GoalTimeframe
   risk_level: number
   optimizer_method: string | null
+  construction_source: 'MANUAL_OPTIMIZER' | 'ACCEPTED_RECOMMENDATION'
+  accepted_recommendation_run_id: number | null
   cash_weight: DecimalValue
   maximum_stock_weight: DecimalValue
   stocks: GoalConstructionStock[]
@@ -864,6 +868,117 @@ export interface GoalConstructionResult {
   warnings: {code: string; message?: string}[]
   intentionally_cash_only: boolean
   apply_blocked: boolean
+}
+
+export interface ResearchDatasetVersion {
+  id: number
+  bundle_name: string
+  version: string
+  snapshot_date: string
+  status: string
+  manifest_hash: string
+  validation_report: {counts?: Record<string, number>; current_snapshot_only?: boolean; warnings?: string[]}
+  imported_at: string | null
+  activated_at: string | null
+}
+
+export interface ResearchUniverse {
+  id: number
+  key: string
+  name: string
+  description: string
+  dataset_version_id: number
+  dataset_version: string
+  membership_type: 'CURRENT_SNAPSHOT' | 'POINT_IN_TIME'
+  active: boolean
+  member_count: number
+}
+
+export interface ResearchStrategy {
+  id: number
+  research_id: string
+  name: string
+  family: string
+  scope: string
+  role: string
+  production_status: string
+  supported_directions: string[]
+  supported_frequencies: string[]
+  active: boolean
+  dataset_version_id: number
+  implementation_statuses: string[]
+}
+
+export interface ResearchReadiness {
+  id: number
+  research_id: string
+  as_of_date: string
+  data_ready: boolean
+  features_ready: boolean
+  implementation_ready: boolean
+  backtest_ready: boolean
+  approved: boolean
+  builder_ready: boolean
+  blocking_reasons: string[]
+}
+
+export interface ResearchCandidateScore {
+  id: number
+  research_id: string
+  instrument_id: number | null
+  symbol: string | null
+  goal_timeframe: GoalTimeframe
+  risk_level: number
+  as_of_date: string
+  score: DecimalValue
+  eligible: boolean
+  hard_rejection_reasons: string[]
+  expires_at: string
+}
+
+export interface GoalRecommendationSleeve {
+  id: number
+  instrument_id: number
+  symbol: string
+  gics: {
+    sector?: {code: string; name: string}
+    industry_group?: {code: string; name: string}
+    industry?: {code: string; name: string}
+    sub_industry?: {code: string; name: string}
+  }
+  research_id: string
+  strategy_name: string
+  strategy_family: string
+  execution_strategy_definition_id: number
+  execution_timeframe: string
+  parameters: JsonRecord
+  sleeve_weight: DecimalValue
+  stock_weight: DecimalValue
+  strategy_share: DecimalValue
+  candidate_score: DecimalValue
+  expected_return: DecimalValue
+  expected_volatility: DecimalValue
+  expected_drawdown: DecimalValue
+  cost_metrics: JsonRecord
+  rationale: string
+  rank: number
+}
+
+export interface GoalRecommendationRun {
+  id: number
+  goal_id: number
+  requested_plan_version: number
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  as_of_date: string
+  metrics: {cash_weight?: DecimalValue; expected_return?: DecimalValue; expected_volatility?: DecimalValue; sleeve_count?: number}
+  warnings: {code: string; message?: string}[]
+  error: string
+  expires_at: string
+  accepted_at: string | null
+  dataset_version_id: number
+  protocol_version_id: number
+  created_at: string
+  sleeves?: GoalRecommendationSleeve[]
 }
 
 export interface PortfolioConstructionTarget {

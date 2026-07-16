@@ -8,6 +8,7 @@ import {queries} from '../../api/queries'
 import type {
   ConstructionStrategyOption,
   GoalInstrumentSelection,
+  GoalRecommendationRun,
   GoalStrategyAssignment,
   GoalTimeframe,
   Instrument,
@@ -37,6 +38,7 @@ import {
   toNumber,
 } from '../../components/ui'
 import {useSelection} from '../../stores/useSelection'
+import {goalAllowsManualEdits, recommendationCanBeAccepted} from '../research/recommendationState'
 
 
 const MAXIMUM_RISK: Record<GoalTimeframe, number> = {
@@ -72,6 +74,17 @@ async function pollConstruction(initial: PortfolioConstructionRun, applying = fa
       throw new Error('Portfolio construction preview did not complete before polling timed out')
     }
   }
+  return value
+}
+
+async function pollRecommendation(initial: GoalRecommendationRun) {
+  let value = initial
+  for (let attempt = 0; attempt < 120 && ['QUEUED', 'RUNNING'].includes(value.status); attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 500))
+    value = await request<GoalRecommendationRun>(`portfolio-construction/recommendations/${value.id}/`)
+  }
+  if (value.status === 'FAILED') throw new Error(value.error || 'Recommendation generation failed')
+  if (value.status !== 'COMPLETED') throw new Error('Recommendation did not complete before polling timed out')
   return value
 }
 
@@ -298,12 +311,35 @@ function GoalSelections({goal, instruments}: {goal: PortfolioGoalAllocation; ins
   const stocks = useQuery(queries.constructionInstruments(goal.id))
   const [ticker, setTicker] = useState('')
   const [resolution, setResolution] = useState<InstrumentResolution | null>(null)
+  const [generatedRecommendation, setGeneratedRecommendation] = useState<GoalRecommendationRun | null>(null)
+  const recommendationId = generatedRecommendation?.id || goal.accepted_recommendation_run_id
+  const recommendationQuery = useQuery(queries.recommendation(recommendationId))
+  const recommendation = recommendationQuery.data || generatedRecommendation
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({queryKey: ['construction-instruments', goal.id]}),
       queryClient.invalidateQueries({queryKey: ['construction-plans']}),
+      queryClient.invalidateQueries({queryKey: ['goal-recommendation']}),
     ])
   }
+  const generateRecommendation = useMutation({
+    mutationFn: async () => pollRecommendation(await request<GoalRecommendationRun>(
+      `portfolio-construction/goals/${goal.id}/recommendations/`, mutationOptions('POST', {}, true),
+    )),
+    onSuccess: (run) => setGeneratedRecommendation(run),
+  })
+  const acceptRecommendation = useMutation({
+    mutationFn: () => request<{created: boolean; acceptance_id: number; recommendation: GoalRecommendationRun}>(
+      `portfolio-construction/recommendations/${recommendation?.id}/accept/`, mutationOptions('POST', {}),
+    ),
+    onSuccess: async (result) => {setGeneratedRecommendation(result.recommendation); await refresh()},
+  })
+  const detachRecommendation = useMutation({
+    mutationFn: () => request<{goal_id: number}>(
+      `portfolio-construction/goals/${goal.id}/detach-recommendation/`, mutationOptions('POST', {}),
+    ),
+    onSuccess: async () => {setGeneratedRecommendation(null); await refresh()},
+  })
   const add = useMutation({
     mutationFn: () => {
       if (!resolution?.instrument_id) throw new Error('Qualify an exact IBKR stock contract first')
@@ -318,15 +354,28 @@ function GoalSelections({goal, instruments}: {goal: PortfolioGoalAllocation; ins
     onSuccess: refresh,
   })
   if (goal.timeframe_bucket === 'NOW') return <section className="goal-selection-card"><header><div><h3>{goal.name}</h3><p>{formatPercent(goal.allocation_weight)} · {goal.resolved_rules.timeframe_label} · {goal.resolved_rules.risk_label}</p></div><StatusBadge status="CASH ONLY" /></header><p className="inline-note">NOW goals are intentionally 100% cash and do not accept stocks or strategy assignments.</p></section>
+  const manual = goalAllowsManualEdits(goal)
   return <section className="goal-selection-card">
-    <header><div><h3>{goal.name}</h3><p>{formatPercent(goal.allocation_weight)} · {goal.resolved_rules.timeframe_label} · {goal.resolved_rules.risk_label}</p></div><StatusBadge status={`${stocks.data?.length || 0} STOCKS`} /></header>
-    {eligibility.isLoading || policies.isLoading || stocks.isLoading ? <Skeleton lines={3} /> : eligibility.isError || policies.isError || stocks.isError ? <ErrorState error={eligibility.error || policies.error || stocks.error} compact /> : <>
+    <header><div><h3>{goal.name}</h3><p>{formatPercent(goal.allocation_weight)} · {goal.resolved_rules.timeframe_label} · {goal.resolved_rules.risk_label}</p></div><StatusBadge status={manual ? `${stocks.data?.length || 0} STOCKS` : 'RECOMMENDATION LOCKED'} /></header>
+    <div className="recommendation-panel">
+      <div className="apply-summary"><StatusBadge status={recommendation?.status || (manual ? 'MANUAL MODE' : 'ACCEPTED')} /><div><strong>{manual ? 'Research recommendation' : `Accepted recommendation ${goal.accepted_recommendation_run_id}`}</strong><span>{recommendation ? `Dataset ${recommendation.dataset_version_id} · Protocol ${recommendation.protocol_version_id} · expires ${new Date(recommendation.expires_at).toLocaleString()}` : 'Approved candidates and exact broker-qualified stocks only.'}</span></div></div>
+      {recommendation?.sleeves?.length ? <div className="goal-stock-list">{recommendation.sleeves.map((sleeve) => <div className="goal-stock-card" key={sleeve.id}><strong>{sleeve.symbol} · {formatPercent(sleeve.stock_weight)}</strong><span>{sleeve.gics.sector?.name} / {sleeve.gics.industry?.name}</span><p>{sleeve.strategy_name} · {formatPercent(sleeve.strategy_share)} share · score {formatNumber(sleeve.candidate_score)}</p><p className="field-help">Expected return {formatPercent(sleeve.expected_return)} · volatility {formatPercent(sleeve.expected_volatility)} · drawdown {formatPercent(sleeve.expected_drawdown)}. {sleeve.rationale}</p></div>)}</div> : null}
+      {recommendation?.warnings?.length ? <p className="inline-note">{recommendation.warnings.map((item) => item.message || item.code).join(' · ')}</p> : null}
+      <div className="system-actions">
+        {manual && <button className="button-secondary" disabled={generateRecommendation.isPending} onClick={() => generateRecommendation.mutate()}>{generateRecommendation.isPending ? 'Generating…' : recommendation ? 'Regenerate' : 'Generate recommendation'}</button>}
+        {recommendation && recommendationCanBeAccepted(recommendation) && <button className="button-primary" disabled={acceptRecommendation.isPending} onClick={() => acceptRecommendation.mutate()}>{acceptRecommendation.isPending ? 'Accepting…' : 'Accept recommendation'}</button>}
+        {!manual && <button className="button-secondary" disabled={detachRecommendation.isPending} onClick={() => detachRecommendation.mutate()}>{detachRecommendation.isPending ? 'Detaching…' : 'Detach recommendation'}</button>}
+      </div>
+      {(generateRecommendation.isError || acceptRecommendation.isError || detachRecommendation.isError || recommendationQuery.isError) && <ErrorState title="Recommendation action was blocked" error={generateRecommendation.error || acceptRecommendation.error || detachRecommendation.error || recommendationQuery.error} compact />}
+      {!manual && <p className="inline-note">Accepted weights and strategy shares are immutable. Detach before manual edits; preview and apply remain mandatory separate steps.</p>}
+    </div>
+    {manual && (eligibility.isLoading || policies.isLoading || stocks.isLoading ? <Skeleton lines={3} /> : eligibility.isError || policies.isError || stocks.isError ? <ErrorState error={eligibility.error || policies.error || stocks.error} compact /> : <>
       <div className="add-goal-stock"><BrokerInstrumentSearch value={ticker} suggestions={instruments} searchLabel={`${goal.name} IBKR stock search`} onValueChange={setTicker} onResolved={setResolution} /><button className="button-secondary" disabled={add.isPending || !resolution?.instrument_id} onClick={() => add.mutate()}><Plus />Add stock</button></div>
       {add.isError && <ErrorState error={add.error} compact />}
       <div className="goal-stock-list">{(stocks.data || []).map((stock) => <section className="goal-stock-card" key={stock.id}><header><div><strong>{stock.symbol}</strong><span>{stock.exchange} · {stock.currency}</span></div><button className="icon-button" aria-label={`Remove ${stock.symbol} from ${goal.name}`} disabled={remove.isPending} onClick={() => remove.mutate(stock.id)}><Trash2 /></button></header><StockAssignments stock={stock} strategies={eligibility.data?.eligible || []} policies={policies.data} /></section>)}</div>
       {!stocks.data?.length && <p className="inline-note">Add a qualified stock to define this goal's optimizer universe.</p>}
       <details className="rejected-strategies"><summary>{eligibility.data?.rejected.length || 0} strategies not eligible</summary><ul>{eligibility.data?.rejected.map((item) => <li key={item.strategy_definition_id}><strong>{item.name}</strong><span>{item.reason}</span></li>)}</ul></details>
-    </>}
+    </>)}
   </section>
 }
 
@@ -440,7 +489,7 @@ function PreviewStep({run, onBack, onContinue}: {run: PortfolioConstructionRun |
       <TerminalMetric label="Net turnover" value={formatPercent(run.rebalance?.planned_turnover)} />
       <TerminalMetric label="Planner" value={<StatusBadge status={run.rebalance?.mode || 'SHADOW'} />} />
     </section>
-    <div className="goal-preview-grid">{(run.goals || []).map((goal) => <section key={goal.goal_id} className="goal-preview-card"><header><div><h3>{goal.name}</h3><p>{formatPercent(goal.allocation_weight)} · {goal.timeframe_bucket} · Risk {goal.risk_level}</p></div><StatusBadge status={goal.optimizer_method || 'CASH ONLY'} /></header><div className="goal-preview-cash"><span>Cash inside goal</span><strong>{formatPercent(goal.cash_weight)}</strong></div><ul>{goal.stocks.map((stock) => <li key={stock.instrument_id}><strong>{stock.symbol}</strong><span>{formatPercent(stock.local_weight)} local stock weight · {formatPercent(stock.portfolio_contribution)} complete-portfolio stock contribution</span><ul>{stock.strategies.map((strategy) => <li key={strategy.assignment_id}><span>{strategy.strategy_name} · {formatPercent(strategy.strategy_share)} share · {formatPercent(strategy.portfolio_weight)} strategy-controlled portfolio weight</span></li>)}</ul>{!stock.strategy_share_valid && <span className="field-error">Strategy shares total {formatPercent(stock.strategy_share_total)}; 100% is required.</span>}</li>)}</ul>{!goal.stocks.length && <p className="inline-note">Cash-only target</p>}{goal.warnings.length > 0 && <p className="field-help">{goal.warnings.map((item) => item.message || item.code).join(' · ')}</p>}</section>)}</div>
+    <div className="goal-preview-grid">{(run.goals || []).map((goal) => <section key={goal.goal_id} className="goal-preview-card"><header><div><h3>{goal.name}</h3><p>{formatPercent(goal.allocation_weight)} · {goal.timeframe_bucket} · Risk {goal.risk_level}{goal.accepted_recommendation_run_id ? ` · Recommendation ${goal.accepted_recommendation_run_id}` : ''}</p></div><StatusBadge status={goal.construction_source === 'ACCEPTED_RECOMMENDATION' ? 'FIXED RECOMMENDATION' : goal.optimizer_method || 'CASH ONLY'} /></header><div className="goal-preview-cash"><span>Cash inside goal</span><strong>{formatPercent(goal.cash_weight)}</strong></div><ul>{goal.stocks.map((stock) => <li key={stock.instrument_id}><strong>{stock.symbol}</strong><span>{formatPercent(stock.local_weight)} {goal.construction_source === 'ACCEPTED_RECOMMENDATION' ? 'fixed ' : ''}local stock weight · {formatPercent(stock.portfolio_contribution)} complete-portfolio stock contribution</span><ul>{stock.strategies.map((strategy) => <li key={strategy.assignment_id}><span>{strategy.strategy_name} · {formatPercent(strategy.strategy_share)} share · {formatPercent(strategy.portfolio_weight)} strategy-controlled portfolio weight</span></li>)}</ul>{!stock.strategy_share_valid && <span className="field-error">Strategy shares total {formatPercent(stock.strategy_share_total)}; 100% is required.</span>}</li>)}</ul>{!goal.stocks.length && <p className="inline-note">Cash-only target</p>}{goal.warnings.length > 0 && <p className="field-help">{goal.warnings.map((item) => item.message || item.code).join(' · ')}</p>}</section>)}</div>
     <div><h3>Aggregated strategy instance targets</h3><DataTable rows={run.metrics.strategy_targets || []} columns={[
       {id: 'strategy', header: 'Strategy', cell: (item) => <div className="primary-cell"><strong>{item.strategy_name}</strong><span>{item.symbol} · {item.execution_timeframe}</span></div>},
       {id: 'assignments', header: 'Assignments', align: 'right' as const, cell: (item) => formatNumber(item.assignment_ids.length)},

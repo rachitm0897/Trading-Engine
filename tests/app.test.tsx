@@ -203,7 +203,7 @@ test('renders six bookmarkable primary routes and paper status', async () => {
   expect(await screen.findByRole('heading', {name: 'Good overview, Primary paper'})).toBeInTheDocument()
   const nav = screen.getByRole('navigation', {name: 'Primary navigation'})
   const links = within(nav).getAllByRole('link')
-  expect(links.map((link) => link.textContent)).toEqual(['Dashboard', 'Strategies', 'Portfolio Builder', 'Portfolio', 'Orders & Activity', 'System'])
+  expect(links.map((link) => link.textContent)).toEqual(['Dashboard', 'Strategies', 'Research', 'Portfolio Builder', 'Portfolio', 'Orders & Activity', 'System'])
   expect(within(nav).getByRole('link', {name: 'Strategies'})).toHaveAttribute('href', '/strategies')
   expect(screen.getAllByText('PAPER').length).toBeGreaterThan(0)
 })
