@@ -4,7 +4,7 @@ import {Banknote, Layers3, PieChart, Scale, WalletCards} from 'lucide-react'
 import {mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
 import type {AllocationPolicy, Instrument, PortfolioOptimizationPolicy, PortfolioOptimizationRun, PortfolioUniverse, Position, PositionSizingDecision, RebalanceRun, RebalanceTarget} from '../../api/types'
-import {TimeSeriesChart} from '../../components/charts/TimeSeriesChart'
+import {TerminalChart} from '../../components/charts/TerminalChart'
 import {DataTable, ErrorState, Freshness, PageHeader, Skeleton, StatusBadge, TerminalMetric, TerminalPanel, formatCompact, formatMoney, formatNumber, formatPercent, toNumber} from '../../components/ui'
 import {useSelection} from '../../stores/useSelection'
 
@@ -89,7 +89,7 @@ export function PortfolioPage() {
       <TerminalMetric label="Largest concentration" value={formatPercent(concentration)} icon={<PieChart />} />
     </section>
     <div className="portfolio-grid">
-      <TerminalPanel id="nav-pnl-history" title="NAV & P&L history" description={`Source: ${series.data?.source || 'loading persisted observations'}`} className="portfolio-history" fullscreenable>{series.isLoading ? <Skeleton height={280} /> : series.isError ? <ErrorState error={series.error} onRetry={() => void series.refetch()} compact /> : <TimeSeriesChart height={280} lines={[{name: 'NAV', data: series.data?.nav || [], color: '#4676f2', type: 'area'}, {name: 'P&L', data: series.data?.pnl || [], color: '#0d9488'}]} />}</TerminalPanel>
+      <TerminalPanel id="nav-pnl-history" title="NAV & P&L history" description={`Source: ${series.data?.source || 'loading persisted observations'}`} className="portfolio-history">{series.isLoading ? <Skeleton height={280} /> : series.isError ? <ErrorState error={series.error} onRetry={() => void series.refetch()} compact /> : <TerminalChart id="portfolio-nav" height={320} defaultChartType="area" lines={[{name: 'NAV', data: series.data?.nav || [], type: 'area', kind: 'primary'}, {name: 'P&L', data: series.data?.pnl || [], kind: 'primary'}]} />}</TerminalPanel>
       <TerminalPanel id="instrument-allocation" title="Allocation by instrument" description="Current marked market value as a share of gross exposure"><AllocationBars rows={(series.data?.allocation_by_instrument || []).map((item) => ({id: item.instrument_id, name: item.symbol, weight: item.weight, value: item.value}))} currency={account?.base_currency} /></TerminalPanel>
       <TerminalPanel id="strategy-allocation" title="Allocation by strategy" description="Configured capital shares; actual attribution remains ledger-backed"><AllocationBars rows={policyRows.map((item) => ({id: item.id, name: item.strategy, weight: toNumber(item.target_share), value: null}))} currency={account?.base_currency} /></TerminalPanel>
     </div>

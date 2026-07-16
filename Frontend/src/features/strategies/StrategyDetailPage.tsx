@@ -6,7 +6,7 @@ import {mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
 import type {StrategyChartData, StrategyInstance, StrategyTimelineItem} from '../../api/types'
 import {ActivityTimeline} from '../../components/ActivityTimeline'
-import {TimeSeriesChart, type ChartLine, type ChartMarker} from '../../components/charts/TimeSeriesChart'
+import {TerminalChart, type ChartLine, type ChartMarker} from '../../components/charts/TerminalChart'
 import {ConfirmActionDialog, DataTable, DeleteStrategyDialog, EmptyState, ErrorState, Freshness, PageHeader, Skeleton, StatusBadge, TerminalMetric, TerminalPanel, formatCompact, formatDateTime, formatNumber, formatPercent} from '../../components/ui'
 import {canEnable, canFlatten, canPause, refreshAfterStrategyDeletion} from './strategyActions'
 
@@ -91,12 +91,12 @@ function ChartTab({query}: {query: UseQueryResult<StrategyChartData, Error>}) {
   if (query.isError || !query.data) return <ErrorState title="Strategy chart is unavailable" error={query.error} onRetry={() => void query.refetch()} />
   const grouped = new Map<string, ChartLine>()
   query.data.indicators.forEach((indicator) => {
-    const existing = grouped.get(indicator.name) || {name: indicator.name, data: []}
+    const existing = grouped.get(indicator.name) || {name: indicator.name, data: [], kind: 'indicator' as const}
     existing.data.push({time: indicator.time, value: Number(indicator.value)})
     grouped.set(indicator.name, existing)
   })
   const markers: ChartMarker[] = query.data.markers.map((marker) => ({time: marker.time, label: marker.label, kind: marker.type.toLowerCase() as ChartMarker['kind']}))
-  return <TerminalPanel id="strategy-chart" title="Market, indicators & execution markers" description={`Source: ${query.data.source}. No production series is hardcoded.`} fullscreenable><div className="chart-legend"><span><i className="marker signal" />Signal</span><span><i className="marker target" />Target</span><span><i className="marker order" />Order</span><span><i className="marker fill" />Fill</span></div><TimeSeriesChart height={420} candles={query.data.bars.map((bar) => ({time: bar.time, open: Number(bar.open), high: Number(bar.high), low: Number(bar.low), close: Number(bar.close)}))} lines={[...grouped.values()]} markers={markers} ariaLabel="Strategy price, indicator, signal, target, order, and fill chart" /></TerminalPanel>
+  return <TerminalPanel id="strategy-chart" title="Market, indicators & execution markers" description={`Source: ${query.data.source}. No production series is hardcoded.`}><div className="chart-legend"><span><i className="marker signal" />Signal</span><span><i className="marker target" />Target</span><span><i className="marker order" />Order</span><span><i className="marker fill" />Fill</span></div><TerminalChart id="strategy-price" height={460} defaultChartType="candlestick" candles={query.data.bars.map((bar) => ({time: bar.time, open: Number(bar.open), high: Number(bar.high), low: Number(bar.low), close: Number(bar.close), volume: Number(bar.volume)}))} lines={[...grouped.values()]} markers={markers} ariaLabel="Strategy price, indicator, signal, target, order, and fill chart" /></TerminalPanel>
 }
 
 function ActivityTab({query}: {query: UseQueryResult<StrategyTimelineItem[], Error>}) {
