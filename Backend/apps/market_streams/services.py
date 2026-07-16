@@ -202,11 +202,18 @@ def evaluate_ready_strategies(bar):
 
 
 def persist_quality(envelope):
+    import uuid
     payload = envelope["payload"]
+    source_value=payload.get("source_event_id")
+    try:source_uuid=uuid.UUID(str(source_value)) if source_value else None
+    except (ValueError,TypeError,AttributeError):source_uuid=uuid.uuid5(uuid.NAMESPACE_URL,str(source_value))
     state, _ = InstrumentMarketState.objects.update_or_create(instrument_id=payload["instrument_id"], defaults={
         "status": payload["status"], "reference_price": payload.get("reference_price"),
         "latest_event_at": _dt(payload.get("latest_event_at")), "watermark_at": _dt(payload.get("watermark_at")),
-        "stale_after_seconds": payload.get("stale_after_seconds", 300), "source_event_id": payload.get("source_event_id")})
+        "stale_after_seconds": payload.get("stale_after_seconds", 300), "source_event_id":source_uuid,
+        "reference_price_provider":payload.get("provider", ""),
+        "reference_price_source":payload.get("source", ""),
+        "provider_generation":payload.get("provider_generation") or None})
     return {"market_state_id": state.pk}
 
 

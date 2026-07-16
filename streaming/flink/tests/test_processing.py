@@ -37,3 +37,32 @@ def test_indicators_and_stale_transitions():
     assert all(values[key] is not None for key in ["sma_fast","sma_slow","rsi","donchian_upper","momentum","realized_volatility","average_volume","reference_price"])
     now=datetime.now(timezone.utc);assert quality_state(None,now,30)=="UNAVAILABLE"
     assert quality_state(now,now,30)=="FRESH" and quality_state(now-timedelta(seconds=31),now,30)=="STALE"
+
+
+def test_finnhub_provenance_survives_canonical_normalization():
+    generation="12345678-1234-5678-1234-567812345678"
+    raw={"source_event_id":"finnhub-window","subscription_key":"7:1m","instrument_id":7,
+        "conid":265598,"symbol":"AAPL","event_kind":"BAR","timeframe":"5s",
+        "event_time":"2026-07-15T00:00:00+00:00","window_start":"2026-07-15T00:00:00+00:00",
+        "window_end":"2026-07-15T00:00:05+00:00","open":"100","high":"102","low":"99",
+        "close":"101","volume":"12","source":"finnhub_live","provider":"FINNHUB",
+        "provider_symbol":"AAPL","provider_generation":generation,"fallback_reason":"IBKR_TIMEOUT"}
+    normalized=normalize_market_event(raw,{})
+    assert normalized["instrument_id"]=="7" and normalized["conid"]==265598
+    assert normalized["provider"]=="FINNHUB" and normalized["provider_generation"]==generation
+    assert normalized["source"]=="finnhub_live" and normalized["fallback_reason"]=="IBKR_TIMEOUT"
+
+
+def test_equivalent_ibkr_and_finnhub_inputs_produce_the_same_canonical_ohlcv():
+    base={"subscription_key":"7:1m","instrument_id":7,"conid":265598,"symbol":"AAPL",
+        "event_kind":"BAR","timeframe":"5s","event_time":"2026-07-15T00:00:00+00:00",
+        "window_start":"2026-07-15T00:00:00+00:00","window_end":"2026-07-15T00:00:05+00:00",
+        "open":"100","high":"102","low":"99","close":"101","volume":"12",
+        "provider_generation":"12345678-1234-5678-1234-567812345678"}
+    ibkr=normalize_market_event({**base,"source_event_id":"ibkr","source":"ibkr_live","provider":"IBKR"},{})
+    finnhub=normalize_market_event({**base,"source_event_id":"finnhub","source":"finnhub_live","provider":"FINNHUB",
+        "provider_symbol":"AAPL"},{})
+    ibkr_bar=aggregate_bars([ibkr],"1m",60)[0]
+    finnhub_bar=aggregate_bars([finnhub],"1m",60)[0]
+    for field in ("bar_id","instrument_id","interval","window_start","window_end","open","high","low","close","volume"):
+        assert ibkr_bar[field]==finnhub_bar[field]

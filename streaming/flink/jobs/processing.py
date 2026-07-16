@@ -17,7 +17,7 @@ def utc(value):
 
 def normalize_market_event(raw, symbol_map):
     kind=raw.get("event_kind","TICK").upper()
-    required = ["source_event_id", "symbol", "event_time"] + (["open","high","low","close"] if kind=="BAR" else ["price"])
+    required = ["source_event_id", "symbol", "event_time"] + (["open","high","low","close","timeframe","window_start","window_end"] if kind=="BAR" else ["price"])
     missing = [key for key in required if raw.get(key) in (None, "")]
     if missing:
         raise ValueError(f"missing fields: {','.join(missing)}")
@@ -30,7 +30,10 @@ def normalize_market_event(raw, symbol_map):
     result={"source_event_id": str(raw["source_event_id"]), "instrument_id": str(instrument_id),"conid":raw.get("conid"),
         "symbol": raw["symbol"], "event_time": utc(raw["event_time"]).isoformat(),
         "exchange": raw.get("exchange", "SMART"), "currency": raw.get("currency", "USD"),
-        "price": str(price), "volume": str(volume), "source": raw.get("source", "ibkr"),"event_kind":kind}
+        "price": str(price), "volume": str(volume), "source": raw.get("source", "ibkr"),"event_kind":kind,
+        "provider":raw.get("provider","IBKR"),"provider_symbol":raw.get("provider_symbol"),
+        "provider_generation":raw.get("provider_generation"),"subscription_key":raw.get("subscription_key"),
+        "fallback_reason":raw.get("fallback_reason","")}
     if kind=="BAR":
         values={key:Decimal(str(raw[key])) for key in ("open","high","low","close")}
         if min(values.values())<=0 or values["low"]>values["high"]:raise ValueError("invalid OHLC values")

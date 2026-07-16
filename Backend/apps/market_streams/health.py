@@ -24,6 +24,10 @@ def annotate_stream_health(queryset):
         _stream_subscription_conid=Subquery(subscription.values("conid")[:1]),
         _stream_last_raw_event=Subquery(subscription.values("last_event_at")[:1]),
         _stream_subscription_error=Subquery(subscription.values("last_error")[:1]),
+        _stream_active_provider=Subquery(subscription.values("active_provider")[:1]),
+        _stream_fallback_state=Subquery(subscription.values("fallback_state")[:1]),
+        _stream_fallback_reason=Subquery(subscription.values("fallback_reason")[:1]),
+        _stream_provider_generation=Subquery(subscription.values("provider_generation")[:1]),
         _stream_last_canonical_event=Subquery(canonical.values("produced_at")[:1]),
         _stream_last_final_bar=Subquery(final_bar.values("window_end")[:1]),
         _stream_last_indicator=Subquery(indicator.values("event_time")[:1]),
@@ -40,6 +44,10 @@ def strategy_stream_status(instance):
         subscription_conid=instance._stream_subscription_conid
         last_raw_event=instance._stream_last_raw_event
         last_error=(instance._stream_subscription_error or "") or instance.block_reason
+        active_provider=instance._stream_active_provider
+        fallback_state=instance._stream_fallback_state
+        fallback_reason=instance._stream_fallback_reason
+        provider_generation=instance._stream_provider_generation
         canonical_at=instance._stream_last_canonical_event
         final_bar_at=instance._stream_last_final_bar
         indicator_at=instance._stream_last_indicator
@@ -57,6 +65,10 @@ def strategy_stream_status(instance):
         subscription_conid=subscription.conid if subscription else None
         last_raw_event=subscription.last_event_at if subscription else None
         last_error=(subscription.last_error if subscription else "") or instance.block_reason
+        active_provider=subscription.active_provider if subscription else None
+        fallback_state=subscription.fallback_state if subscription else None
+        fallback_reason=subscription.fallback_reason if subscription else ""
+        provider_generation=subscription.provider_generation if subscription else None
         canonical_at=canonical.produced_at if canonical else None
         final_bar_at=final_bar.window_end if final_bar else None
         indicator_at=indicator.event_time if indicator else None
@@ -77,6 +89,8 @@ def strategy_stream_status(instance):
     status="DEGRADED" if stale or last_error or subscription_state in {"ERROR","DEGRADED"} else ("WARMING_UP" if missing else "HEALTHY")
     return {"strategy_id":instance.pk,"strategy":instance.name,"symbol":instance.instrument.symbol,
         "timeframe":instance.timeframe,"status":status,"subscription_state":subscription_state or "MISSING",
+        "active_provider":active_provider or "NONE","fallback_state":fallback_state or "FAILED",
+        "fallback_reason":fallback_reason,"provider_generation":provider_generation,
         "conid":subscription_conid or getattr(getattr(instance.instrument,"broker_contract",None),"conid",None),
         "last_raw_event":last_raw_event,
         "last_canonical_event":canonical_at,

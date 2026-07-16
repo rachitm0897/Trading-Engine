@@ -126,11 +126,13 @@ def positions(request):
     if invalid:return invalid
     from apps.portfolios.models import PortfolioPosition
     rows=[]
-    query=PortfolioPosition.objects.select_related("instrument","portfolio__account")
+    query=PortfolioPosition.objects.select_related("instrument__market_state","portfolio__account")
     if request.GET.get("portfolio"):query=query.filter(portfolio_id=request.GET["portfolio"])
     if request.GET.get("symbol"):query=query.filter(instrument__symbol__iexact=request.GET["symbol"])
     for item in query:
-        rows.append({"id":item.pk,"portfolio_id":item.portfolio_id,"portfolio":item.portfolio.name,"account_id":item.portfolio.account.account_id,"instrument_id":item.instrument_id,"symbol":item.instrument.symbol,"asset_class":item.instrument.asset_class,"currency":item.instrument.currency,"quantity":item.quantity,"average_cost":item.average_cost,"market_price":item.market_price,"market_value":item.quantity*item.market_price,"updated_at":item.updated_at})
+        from apps.market_data.pricing import effective_position_price
+        price,provider,source=effective_position_price(item)
+        rows.append({"id":item.pk,"portfolio_id":item.portfolio_id,"portfolio":item.portfolio.name,"account_id":item.portfolio.account.account_id,"instrument_id":item.instrument_id,"symbol":item.instrument.symbol,"asset_class":item.instrument.asset_class,"currency":item.instrument.currency,"quantity":item.quantity,"average_cost":item.average_cost,"market_price":price,"broker_market_price":item.market_price,"market_price_provider":provider,"market_price_source":source,"market_value":item.quantity*price,"updated_at":item.updated_at})
     return response(rows)
 
 def rebalances(request):

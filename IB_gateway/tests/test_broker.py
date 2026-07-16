@@ -67,6 +67,29 @@ def test_market_subscription_commands_are_idempotent():
     process_command(cancel,broker)
     assert cancel.result["state"]=="INACTIVE" and not broker.subscriptions
 
+
+def test_market_subscription_preserves_provider_epoch_and_probe_runtime_key():
+    broker=MockBrokerAdapter();broker.connect();generation="12345678-1234-5678-1234-567812345678"
+    payload={"subscription_key":"1:1m","gateway_subscription_key":f"1:1m:probe:{generation}",
+        "instrument_id":1,"conid":123,"symbol":"AAPL","timeframe":"1m","historical_bars":0,
+        "provider":"IBKR","provider_generation":generation,"probe":True}
+    result=broker.subscribe_market_data(payload)
+    assert result["subscription_key"]=="1:1m" and result["provider_generation"]==generation
+    assert result["probe"] is True and list(broker.subscriptions)==[payload["gateway_subscription_key"]]
+    cancelled=broker.cancel_market_data({"subscription_key":"1:1m"})
+    assert cancelled["cancelled"]==1 and not broker.subscriptions
+
+
+def test_ibkr_market_payload_carries_canonical_identity_and_provider_epoch():
+    adapter=IBAsyncBrokerAdapter.__new__(IBAsyncBrokerAdapter)
+    generation="12345678-1234-5678-1234-567812345678"
+    bar=SimpleNamespace(date=datetime(2026,7,15,0,0,tzinfo=timezone.utc),open=100,high=102,low=99,close=101,volume=7)
+    payload={"subscription_key":"7:1m","instrument_id":7,"conid":265598,"symbol":"AAPL",
+        "exchange":"SMART","currency":"USD","provider_generation":generation}
+    event=adapter._market_payload(bar,payload,"ibkr_live","5s",5)
+    assert event["instrument_id"]==7 and event["conid"]==265598 and event["provider"]=="IBKR"
+    assert event["provider_generation"]==generation and event["window_end"]=="2026-07-15T00:00:05+00:00"
+
 def test_kill_switch_blocks_submission():
     broker=MockBrokerAdapter(); broker.connect(); broker.killed=True
     with pytest.raises(RuntimeError): broker.place_order({"internal_id":"I1"})

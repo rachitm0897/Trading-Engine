@@ -66,30 +66,36 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
     def _market_payload(self,bar,payload,source,timeframe,seconds):
         start=self._bar_time(bar);end=start+timedelta(seconds=seconds)
         def field(primary,fallback=None):return getattr(bar,primary,getattr(bar,fallback,0) if fallback else 0)
-        stable=f"{payload['conid']}:{timeframe}:{start.isoformat()}"
+        stable=f"{payload['conid']}:{payload['subscription_key']}:{timeframe}:{start.isoformat()}:{payload.get('provider_generation','')}"
         return {"source_event_id":stable,"subscription_key":payload["subscription_key"],
             "instrument_id":int(payload["instrument_id"]),"conid":int(payload["conid"]),"symbol":payload["symbol"],
             "exchange":payload.get("exchange","SMART"),"currency":payload.get("currency","USD"),
             "event_kind":"BAR","timeframe":timeframe,"event_time":start.isoformat(),"window_start":start.isoformat(),
             "window_end":end.isoformat(),"open":str(field("open","open_")),"high":str(field("high","high")),
             "low":str(field("low","low")),"close":str(field("close","close")),
-            "volume":str(max(0,field("volume","volume"))),"is_final":True,"source":source}
+            "volume":str(max(0,field("volume","volume"))),"is_final":True,"source":source,
+            "provider":"IBKR","provider_generation":str(payload.get("provider_generation") or "")}
     def subscribe_market_data(self,payload):
-        key=payload["subscription_key"]
-        if key in self.market_subscriptions:return {"subscription_key":key,"state":"ACTIVE","historical_bar_count":0,"reused":True}
+        key=payload["subscription_key"];runtime_key=payload.get("gateway_subscription_key") or key
+        if runtime_key in self.market_subscriptions:return {"subscription_key":key,"gateway_subscription_key":runtime_key,
+            "state":"ACTIVE","historical_bar_count":0,"reused":True,"probe":bool(payload.get("probe")),
+            "provider_generation":str(payload.get("provider_generation") or "")}
+        payload={**payload,"_gateway_subscription_key":runtime_key}
         qualified=self.ib.qualifyContracts(self._contract(payload))
         if not qualified:raise RuntimeError("Selected IBKR contract could not be qualified for market data")
         contract=qualified[0];self.contracts[str(contract.conId)]=contract
-        bar_size,seconds=self._timeframe(payload["timeframe"]);count=max(1,int(payload.get("historical_bars",1)))
-        trading_days=max(1,(count*seconds+23399)//23400)
-        days=max(4,(trading_days*8+4)//5+2)
-        historical=self.ib.reqHistoricalData(contract,endDateTime="",durationStr=f"{days} D",barSizeSetting=bar_size,
-            whatToShow=payload.get("what_to_show","TRADES"),useRTH=bool(payload.get("use_rth",False)),formatDate=2,keepUpToDate=False)
-        if not historical:
-            recent=next((item for item in reversed(self.recent_errors) if item.get("conid") in (None,contract.conId)),None)
-            detail=f"IBKR error {recent['error_code']}: {recent['error_message']}" if recent else "IBKR historical request returned no bars"
-            raise RuntimeError(detail)
-        for bar in list(historical)[-count:]:self.market_events.append(self._market_payload(bar,payload,"ibkr_historical",payload["timeframe"],seconds))
+        bar_size,seconds=self._timeframe(payload["timeframe"]);count=max(0,int(payload.get("historical_bars",0)))
+        historical=[]
+        if not payload.get("probe"):
+            request_count=max(1,count);trading_days=max(1,(request_count*seconds+23399)//23400)
+            days=max(4,(trading_days*8+4)//5+2)
+            historical=self.ib.reqHistoricalData(contract,endDateTime="",durationStr=f"{days} D",barSizeSetting=bar_size,
+                whatToShow=payload.get("what_to_show","TRADES"),useRTH=bool(payload.get("use_rth",False)),formatDate=2,keepUpToDate=False)
+            if not historical:
+                recent=next((item for item in reversed(self.recent_errors) if item.get("conid") in (None,contract.conId)),None)
+                detail=f"IBKR error {recent['error_code']}: {recent['error_message']}" if recent else "IBKR historical request returned no bars"
+                raise RuntimeError(detail)
+            for bar in list(historical)[-request_count:]:self.market_events.append(self._market_payload(bar,payload,"ibkr_historical",payload["timeframe"],seconds))
         live=self.ib.reqRealTimeBars(contract,5,payload.get("what_to_show","TRADES"),bool(payload.get("use_rth",False)))
         request_id=getattr(live,"reqId",None)
         if request_id is not None:self.market_request_ids[int(request_id)]=dict(payload)
@@ -100,14 +106,19 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         def on_update(bars,*_args):
             if bars:self.market_events.append(self._market_payload(bars[-1],payload,"ibkr_live","5s",5))
         live.updateEvent += on_update
-        self.market_subscriptions[key]={"live":live,"handler":on_update,"payload":dict(payload),"request_id":request_id}
-        return {"subscription_key":key,"state":"ACTIVE","historical_bar_count":min(len(historical),count),"conid":contract.conId}
+        self.market_subscriptions[runtime_key]={"live":live,"handler":on_update,"payload":dict(payload),"request_id":request_id}
+        return {"subscription_key":key,"gateway_subscription_key":runtime_key,"state":"ACTIVE",
+            "historical_bar_count":min(len(historical),count),"conid":contract.conId,"probe":bool(payload.get("probe")),
+            "provider_generation":str(payload.get("provider_generation") or "")}
     def cancel_market_data(self,payload):
-        key=payload["subscription_key"];current=self.market_subscriptions.pop(key,None)
-        if current:
+        key=payload["subscription_key"]
+        runtime_keys=[name for name,item in self.market_subscriptions.items()
+            if name==payload.get("gateway_subscription_key") or item["payload"].get("subscription_key")==key]
+        for runtime_key in runtime_keys:
+            current=self.market_subscriptions.pop(runtime_key)
             self.ib.cancelRealTimeBars(current["live"])
             if current.get("request_id") is not None:self.market_request_ids.pop(int(current["request_id"]),None)
-        return {"subscription_key":key,"state":"INACTIVE"}
+        return {"subscription_key":key,"state":"INACTIVE","cancelled":len(runtime_keys)}
     def drain_market_events(self):
         events=[]
         while self.market_events:events.append(self.market_events.popleft())
@@ -183,7 +194,7 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
             "conid":conid,"occurred_at":now})
         payload=self.market_request_ids.get(int(req_id)) if isinstance(req_id,int) and req_id>=0 else None
         if payload:
-            self.market_request_ids.pop(int(req_id),None);self.market_subscriptions.pop(payload["subscription_key"],None)
+            self.market_request_ids.pop(int(req_id),None);self.market_subscriptions.pop(payload.get("_gateway_subscription_key") or payload["subscription_key"],None)
             identity=json.dumps([req_id,error_code,error_string,now],separators=(",",":"))
             self.market_events.append({**payload,"source_event_id":hashlib.sha256(identity.encode()).hexdigest(),
                 "event_kind":"ERROR","error_code":str(error_code),"error_message":str(error_string),

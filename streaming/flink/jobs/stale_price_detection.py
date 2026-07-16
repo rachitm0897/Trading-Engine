@@ -19,13 +19,17 @@ class StaleTimer(KeyedProcessFunction):
         self.latest.update(json.dumps({"source":source_event,"tick":tick},separators=(",",":")));self.timer.update(timer)
         ctx.timer_service().register_processing_time_timer(timer)
         payload={"instrument_id":tick["instrument_id"],"status":"FRESH","reference_price":tick["price"],
-            "latest_event_at":tick["event_time"],"source_event_id":tick["source_event_id"],"stale_after_seconds":self.delay//1000}
+            "latest_event_at":tick["event_time"],"source_event_id":tick["source_event_id"],"stale_after_seconds":self.delay//1000,
+            "provider":tick.get("provider","IBKR"),"source":tick.get("source","ibkr"),
+            "provider_generation":tick.get("provider_generation")}
         yield json.dumps(envelope("market.quality","instrument",tick["instrument_id"],payload,
             f"{tick['source_event_id']}:FRESH",source_event,tick["event_time"]),separators=(",",":"))
     def on_timer(self,timestamp,ctx):
         stored=json.loads(self.latest.value());tick=stored["tick"]
         payload={"instrument_id":tick["instrument_id"],"status":"STALE","reference_price":tick["price"],
             "latest_event_at":tick["event_time"],"source_event_id":tick["source_event_id"],"stale_after_seconds":self.delay//1000,
+            "provider":tick.get("provider","IBKR"),"source":tick.get("source","ibkr"),
+            "provider_generation":tick.get("provider_generation"),
             "detected_at":datetime.now(timezone.utc).isoformat()}
         yield json.dumps(envelope("market.quality","instrument",tick["instrument_id"],payload,
             f"{tick['source_event_id']}:STALE",stored["source"],tick["event_time"]),separators=(",",":"))

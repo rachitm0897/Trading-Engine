@@ -25,3 +25,32 @@ class BrokerContract(models.Model):
     local_symbol = models.CharField(max_length=64, blank=True)
     description = models.CharField(max_length=255, blank=True)
     qualified_at = models.DateTimeField(null=True, blank=True)
+
+
+class InstrumentProviderMapping(models.Model):
+    STATUSES = [(value, value) for value in ["PENDING", "VERIFIED", "AMBIGUOUS", "UNSUPPORTED", "ERROR"]]
+    VERIFICATION_METHODS = [(value, value) for value in ["AUTOMATIC", "MANUAL"]]
+
+    instrument = models.ForeignKey(Instrument, on_delete=models.PROTECT, related_name="provider_mappings")
+    provider = models.CharField(max_length=32, default="FINNHUB")
+    provider_symbol = models.CharField(max_length=96, blank=True)
+    exchange_mic = models.CharField(max_length=16, blank=True)
+    provider_exchange = models.CharField(max_length=128, blank=True)
+    currency = models.CharField(max_length=8, blank=True)
+    isin = models.CharField(max_length=32, blank=True)
+    figi = models.CharField(max_length=32, blank=True)
+    status = models.CharField(max_length=16, choices=STATUSES, default="PENDING")
+    verification_method = models.CharField(max_length=16, choices=VERIFICATION_METHODS, blank=True)
+    metadata = models.JSONField(default=dict)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.CharField(max_length=1000, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["instrument", "provider"], name="unique_instrument_provider_mapping"),
+            models.UniqueConstraint(fields=["provider", "provider_symbol"], condition=models.Q(status="VERIFIED"),
+                                    name="unique_verified_provider_symbol"),
+        ]
+        indexes = [models.Index(fields=["provider", "status", "updated_at"], name="provider_mapping_status_idx")]

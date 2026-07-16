@@ -1,19 +1,18 @@
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+from django.conf import settings
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from apps.accounts.models import BrokerAccount
-from apps.audit.models import OutboxEvent
 from apps.execution.models import Fill
 from apps.instruments.models import BrokerContract, Instrument
 from apps.oms.models import Order, OrderIntent, OrderStatusHistory
 from apps.oms.services import ALLOWED, apply_execution
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
 from apps.market_streams.models import MarketDataSubscription
-from apps.strategies.models import StrategyInstance
 from apps.core.idempotency import canonical_request_hash
 from .client import GatewayClient
 from .models import BrokerPositionSnapshot, BrokerSyncCursor
@@ -304,33 +303,63 @@ def process_snapshot(event):
         key=str(payload.get("subscription_key") or "");reason=f"IBKR error {payload.get('error_code')}: {payload.get('error_message')}"[:2000]
         if ":" in key:
             instrument_id,timeframe=key.split(":",1)
-            MarketDataSubscription.objects.filter(instrument_id=instrument_id,timeframe=timeframe).update(state="ERROR",last_error=reason)
-            StrategyInstance.objects.filter(enabled=True,instrument_id=instrument_id,timeframe=timeframe).update(
-                state="BLOCKED",block_reason=reason[:255])
+            subscription=MarketDataSubscription.objects.select_related("instrument__broker_contract").filter(
+                instrument_id=instrument_id,timeframe=timeframe).first()
+            if subscription:
+                event_generation=str(payload.get("provider_generation") or "")
+                if subscription.active_provider in {"FINNHUB","NONE"}:
+                    if payload.get("probe") and event_generation==str(subscription.primary_probe_generation or ""):
+                        MarketDataSubscription.objects.filter(pk=subscription.pk).update(
+                            primary_probe_generation=None,primary_probe_started_at=None,primary_probe_event_count=0,
+                            fallback_state="FALLBACK" if subscription.active_provider=="FINNHUB" else "FAILED",
+                            last_error=f"IBKR probe failed: {reason}"[:2000])
+                    return
+                if event_generation and event_generation!=str(subscription.provider_generation):return
+                if not event_generation and settings.MARKET_DATA_FALLBACK_ENABLED:return
+                from apps.market_data.fallback import handle_ibkr_failure
+                handle_ibkr_failure(subscription,payload.get("error_code"),payload.get("error_message") or "",historical=False)
         return
     if event_type=="market.raw":
         source_key=str(payload.get("source_event_id") or "")
         if not source_key:return
-        OutboxEvent.objects.get_or_create(idempotency_key=f"gateway-market:{source_key}",defaults={"topic":"market.raw.v1",
-            "event_type":"market.raw","aggregate_type":"instrument","aggregate_id":str(payload["instrument_id"]),
-            "partition_key":str(payload["instrument_id"]),"payload":payload})
-        MarketDataSubscription.objects.filter(instrument_id=payload.get("instrument_id"),timeframe=payload.get("timeframe")).update(
-            state="ACTIVE",last_event_at=parse_datetime(str(event.get("created_at") or "")) or timezone.now(),last_error="")
+        from apps.market_data.fallback import publish_provider_event
+        publish_provider_event(payload,received_at=parse_datetime(str(event.get("created_at") or "")) or timezone.now())
         return
     if event_type in {"command.subscribe_market_data.completed","command.cancel_market_data.completed"}:
         key=str(payload.get("subscription_key") or "")
         if ":" in key:
             instrument_id,timeframe=key.split(":",1)
-            updates={"state":"ACTIVE" if event_type=="command.subscribe_market_data.completed" else "INACTIVE"}
-            if event_type=="command.cancel_market_data.completed":updates["last_error"]=""
-            MarketDataSubscription.objects.filter(instrument_id=instrument_id,timeframe=timeframe).update(**updates)
+            subscription=MarketDataSubscription.objects.filter(instrument_id=instrument_id,timeframe=timeframe).first()
+            if not subscription:return
+            if event_type=="command.cancel_market_data.completed":
+                if subscription.state=="CANCELLING" or subscription.consumer_count==0:
+                    subscription.state="INACTIVE";subscription.active_provider="NONE";subscription.last_error=""
+                    subscription.save(update_fields=["state","active_provider","last_error","updated_at"])
+            elif payload.get("probe"):
+                if str(subscription.primary_probe_generation or "")==str(payload.get("provider_generation") or ""):
+                    subscription.fallback_state="RECOVERING";subscription.last_error=""
+                    subscription.save(update_fields=["fallback_state","last_error","updated_at"])
+            elif not payload.get("provider_generation") or str(subscription.provider_generation)==str(payload.get("provider_generation")):
+                subscription.state="ACTIVE"
+                subscription.save(update_fields=["state","updated_at"])
         return
     if event_type=="command.failed" and payload.get("command_type") in {"SUBSCRIBE_MARKET_DATA","CANCEL_MARKET_DATA"}:
         command_payload=payload.get("payload") or {};key=str(command_payload.get("subscription_key") or "")
         if ":" in key:
             instrument_id,timeframe=key.split(":",1);reason=str(payload.get("error") or "Gateway market-data command failed")[:2000]
-            MarketDataSubscription.objects.filter(instrument_id=instrument_id,timeframe=timeframe).update(state="ERROR",last_error=reason)
-            StrategyInstance.objects.filter(enabled=True,instrument_id=instrument_id,timeframe=timeframe).update(state="BLOCKED",block_reason=reason[:255])
+            subscription=MarketDataSubscription.objects.select_related("instrument__broker_contract").filter(
+                instrument_id=instrument_id,timeframe=timeframe).first()
+            if subscription and command_payload.get("probe"):
+                MarketDataSubscription.objects.filter(pk=subscription.pk).update(
+                    primary_probe_generation=None,primary_probe_started_at=None,primary_probe_event_count=0,
+                    fallback_state="FALLBACK",last_error=f"IBKR probe failed: {reason}"[:2000])
+            elif subscription:
+                command_generation=str(command_payload.get("provider_generation") or "")
+                if subscription.active_provider!="IBKR":return
+                if command_generation and command_generation!=str(subscription.provider_generation):return
+                if not command_generation and settings.MARKET_DATA_FALLBACK_ENABLED:return
+                from apps.market_data.fallback import handle_ibkr_failure
+                handle_ibkr_failure(subscription,message=reason,historical=True)
         return
     if event_type=="command.failed" and payload.get("command_type") in {"PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER"}:
         record_gateway_command_failure(payload);return
@@ -340,6 +369,10 @@ def process_snapshot(event):
         for order in Order.objects.filter(status__in=["SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED","CANCEL_PENDING"]):
             _record_broker_status(order,{"broker_status":"Unknown","error_code":"CONNECTION_LOST",
                 "error_message":reason,"occurred_at":occurred},f"broker-disconnect:{event.get('id')}:{order.internal_id}")
+        from apps.market_data.fallback import handle_ibkr_failure
+        for subscription in MarketDataSubscription.objects.filter(consumer_count__gt=0,active_provider="IBKR").select_related(
+                "instrument__broker_contract"):
+            handle_ibkr_failure(subscription,"1100",reason,historical=False)
         return
     rows=payload.get("value",[])
     if event_type=="snapshot.accounts": sync_accounts(rows)

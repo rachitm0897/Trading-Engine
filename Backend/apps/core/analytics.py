@@ -63,9 +63,12 @@ def dashboard_summary(request):
 
     portfolio = _portfolio(request)
     account = portfolio.account if portfolio else None
-    positions = PortfolioPosition.objects.filter(portfolio=portfolio) if portfolio else PortfolioPosition.objects.none()
-    gross_exposure = sum((abs(Decimal(item.quantity) * Decimal(item.market_price)) for item in positions), Decimal(0))
-    net_exposure = sum((Decimal(item.quantity) * Decimal(item.market_price) for item in positions), Decimal(0))
+    positions = (PortfolioPosition.objects.filter(portfolio=portfolio).select_related("instrument__market_state")
+                 if portfolio else PortfolioPosition.objects.none())
+    from apps.market_data.pricing import effective_position_price
+    position_values=[Decimal(item.quantity)*effective_position_price(item)[0] for item in positions]
+    gross_exposure = sum((abs(value) for value in position_values), Decimal(0))
+    net_exposure = sum(position_values, Decimal(0))
     order_query = Order.objects.all()
     strategy_query = StrategyInstance.objects.all()
     if portfolio:
@@ -139,14 +142,17 @@ def portfolio_series(request):
     portfolio = _portfolio(request)
     if not portfolio:
         return response(status=404, error={"code": "NOT_FOUND", "message": "Portfolio not found", "details": {}})
-    positions = list(PortfolioPosition.objects.filter(portfolio=portfolio).select_related("instrument"))
+    positions = list(PortfolioPosition.objects.filter(portfolio=portfolio).select_related("instrument__market_state"))
+    from apps.market_data.pricing import effective_position_price
     quantities = {item.instrument_id: Decimal(item.quantity) for item in positions}
-    current_values = {item.instrument_id: Decimal(item.quantity) * Decimal(item.market_price) for item in positions}
+    current_prices = {item.instrument_id: effective_position_price(item) for item in positions}
+    current_values = {item.instrument_id: Decimal(item.quantity) * current_prices[item.instrument_id][0] for item in positions}
     gross_current = sum((abs(value) for value in current_values.values()), Decimal(0))
     allocation = [{
         "instrument_id": item.instrument_id,
         "symbol": item.instrument.symbol,
         "value": float(current_values[item.instrument_id]),
+        "price_provider":current_prices[item.instrument_id][1],"price_source":current_prices[item.instrument_id][2],
         "weight": float(abs(current_values[item.instrument_id]) / gross_current) if gross_current else 0,
     } for item in positions]
 

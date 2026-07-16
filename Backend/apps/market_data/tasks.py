@@ -51,3 +51,25 @@ def check_finnhub_history_staleness(max_age_days=3):
             stale.append(instrument_id)
     return stale
 
+
+@shared_task
+def verify_finnhub_mapping(instrument_id):
+    from .mapping import verify_finnhub_mapping as verify
+    mapping = verify(Instrument.objects.select_related("broker_contract").get(pk=instrument_id))
+    return {"instrument_id": instrument_id, "status": mapping.status, "mapping_id": mapping.pk}
+
+
+@shared_task
+def verify_pending_finnhub_mappings(limit=100):
+    from django.conf import settings
+    from django.db.models import Q
+    from apps.instruments.models import InstrumentProviderMapping
+    if not settings.MARKET_DATA_FALLBACK_ENABLED:
+        return 0
+    cutoff=timezone.now()-timedelta(seconds=settings.FINNHUB_MAPPING_REVALIDATE_SECONDS)
+    ids = list(InstrumentProviderMapping.objects.filter(provider="FINNHUB",instrument__active=True).filter(
+        Q(status__in=["PENDING","ERROR"])|Q(status="VERIFIED",verified_at__lt=cutoff)
+    ).order_by("updated_at").values_list("instrument_id", flat=True)[:int(limit)])
+    for instrument_id in ids:
+        verify_finnhub_mapping.delay(instrument_id)
+    return len(ids)

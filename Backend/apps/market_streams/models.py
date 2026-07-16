@@ -16,12 +16,41 @@ class MarketDataSubscription(models.Model):
     requested_at=models.DateTimeField(null=True,blank=True)
     last_event_at=models.DateTimeField(null=True,blank=True)
     last_error=models.TextField(blank=True)
+    primary_provider=models.CharField(max_length=16,default="IBKR")
+    active_provider=models.CharField(max_length=16,default="IBKR")
+    fallback_state=models.CharField(max_length=24,default="PRIMARY")
+    fallback_reason=models.CharField(max_length=64,blank=True)
+    provider_generation=models.UUIDField(default=uuid.uuid4)
+    last_primary_event_at=models.DateTimeField(null=True,blank=True)
+    last_fallback_event_at=models.DateTimeField(null=True,blank=True)
+    failed_over_at=models.DateTimeField(null=True,blank=True)
+    recovered_at=models.DateTimeField(null=True,blank=True)
+    primary_probe_generation=models.UUIDField(null=True,blank=True)
+    primary_probe_started_at=models.DateTimeField(null=True,blank=True)
+    primary_probe_event_count=models.PositiveIntegerField(default=0)
+    last_published_window_end=models.DateTimeField(null=True,blank=True)
     created_at=models.DateTimeField(auto_now_add=True)
     updated_at=models.DateTimeField(auto_now=True)
 
     class Meta:
         constraints=[models.UniqueConstraint(fields=["instrument","timeframe"],name="unique_market_data_subscription")]
         indexes=[models.Index(fields=["state","updated_at"],name="market_sub_state_idx")]
+
+
+class MarketDataProviderTransition(models.Model):
+    subscription = models.ForeignKey(MarketDataSubscription, on_delete=models.PROTECT, related_name="provider_transitions")
+    instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT)
+    timeframe = models.CharField(max_length=16)
+    previous_provider = models.CharField(max_length=16)
+    new_provider = models.CharField(max_length=16)
+    reason = models.CharField(max_length=64)
+    previous_generation = models.UUIDField(null=True, blank=True)
+    generation = models.UUIDField()
+    metadata = models.JSONField(default=dict)
+    occurred_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["instrument", "-occurred_at"], name="provider_transition_time_idx")]
 
 
 class MarketBar(models.Model):
@@ -102,6 +131,9 @@ class InstrumentMarketState(models.Model):
     watermark_at = models.DateTimeField(null=True, blank=True)
     stale_after_seconds = models.PositiveIntegerField(default=300)
     source_event_id = models.UUIDField(null=True, blank=True)
+    reference_price_provider = models.CharField(max_length=16, blank=True)
+    reference_price_source = models.CharField(max_length=64, blank=True)
+    provider_generation = models.UUIDField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def is_usable(self, at=None):

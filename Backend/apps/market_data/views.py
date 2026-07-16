@@ -17,7 +17,54 @@ def _actor(request):
 def status(request):
     if request.method != "GET":
         return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "GET required", "details": {}})
-    return response(provider_status())
+    from apps.instruments.models import InstrumentProviderMapping
+    from apps.market_streams.models import MarketDataProviderTransition, MarketDataSubscription
+    data=provider_status()
+    data["fallback"]={"enabled":settings.MARKET_DATA_FALLBACK_ENABLED,
+        "historical_enabled":settings.FINNHUB_HISTORICAL_FALLBACK_ENABLED,
+        "live_enabled":settings.FINNHUB_LIVE_FALLBACK_ENABLED,
+        "auto_failback_enabled":settings.FINNHUB_AUTO_FAILBACK_ENABLED,
+        "active_subscriptions":MarketDataSubscription.objects.filter(active_provider="FINNHUB",consumer_count__gt=0).count(),
+        "verified_mappings":InstrumentProviderMapping.objects.filter(provider="FINNHUB",status="VERIFIED").count(),
+        "transition_count":MarketDataProviderTransition.objects.count()}
+    return response(data)
+
+
+def _mapping_row(item):
+    return {"id":item.pk,"instrument_id":item.instrument_id,"symbol":item.instrument.symbol,
+        "conid":getattr(getattr(item.instrument,"broker_contract",None),"conid",None),"provider":item.provider,
+        "provider_symbol":item.provider_symbol,"exchange_mic":item.exchange_mic,
+        "provider_exchange":item.provider_exchange,"currency":item.currency,"isin":item.isin,"figi":item.figi,
+        "status":item.status,"verification_method":item.verification_method,"verified_at":item.verified_at,
+        "last_error":item.last_error,"updated_at":item.updated_at}
+
+
+def mappings(request, instrument_id=None):
+    from apps.instruments.models import Instrument, InstrumentProviderMapping
+    if request.method=="GET":
+        query=InstrumentProviderMapping.objects.filter(provider="FINNHUB").select_related("instrument__broker_contract")
+        if instrument_id:query=query.filter(instrument_id=instrument_id)
+        return response([_mapping_row(item) for item in query.order_by("instrument__symbol","instrument_id")])
+    if request.method!="POST":
+        return response(status=405,error={"code":"METHOD_NOT_ALLOWED","message":"GET or POST required","details":{}})
+    key=request.headers.get("Idempotency-Key")
+    if not key:
+        return response(status=400,error={"code":"IDEMPOTENCY_KEY_REQUIRED","message":"Idempotency-Key header is required","details":{}})
+    try:
+        payload=json.loads(request.body or b"{}")
+        instrument=Instrument.objects.select_related("broker_contract").get(pk=instrument_id)
+        from .mapping import manually_verify_finnhub_mapping
+        mapping=manually_verify_finnhub_mapping(instrument,payload.get("provider_symbol"))
+        AuditEvent.objects.get_or_create(idempotency_key=f"finnhub-mapping:{key}",defaults={
+            "event_type":"market_data.mapping.verified","actor":_actor(request),"aggregate_type":"instrument",
+            "aggregate_id":str(instrument.pk),"data":{"provider":"FINNHUB","provider_symbol":mapping.provider_symbol,
+                "status":mapping.status,"verification_method":mapping.verification_method}})
+        return response(_mapping_row(mapping),status=200 if mapping.status=="VERIFIED" else 422)
+    except Instrument.DoesNotExist:
+        return response(status=404,error={"code":"NOT_FOUND","message":"Instrument not found","details":{}})
+    except (ValueError,json.JSONDecodeError,FinnhubError) as exc:
+        return response(status=getattr(exc,"status_code",400),error={"code":getattr(exc,"code","INVALID_MAPPING"),
+            "message":str(exc),"details":{}})
 
 
 def configure(request):

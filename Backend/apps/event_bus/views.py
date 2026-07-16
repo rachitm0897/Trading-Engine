@@ -10,7 +10,7 @@ def health(request):
     invalid=method_guard(request,"GET")
     if invalid:return invalid
     from apps.audit.models import OutboxEvent
-    from apps.market_streams.models import InstrumentMarketState
+    from apps.market_streams.models import InstrumentMarketState, MarketDataProviderTransition, MarketDataSubscription
     metric_objects=list(StreamHealthMetric.objects.all())
     metrics = _serialize(metric_objects, ["component","metric","status","value","observed_at"])
     heartbeat=next((item for item in metric_objects if item.component=="backend-market-consumer" and item.metric=="heartbeat"),None)
@@ -52,11 +52,19 @@ def health(request):
     outbox_failed=OutboxEvent.objects.filter(status="FAILED").count()
     if outbox_failed:reasons.append(f"{outbox_failed} outbox event(s) failed publication")
     data_path_status="DISABLED" if not settings.KAFKA_ENABLED else ("HEALTHY" if not reasons else "DEGRADED")
+    provider_subscriptions=[{"instrument_id":item.instrument_id,"symbol":item.instrument.symbol,
+        "timeframe":item.timeframe,"state":item.state,"active_provider":item.active_provider,
+        "fallback_state":item.fallback_state,"fallback_reason":item.fallback_reason,
+        "provider_generation":item.provider_generation,"last_primary_event_at":item.last_primary_event_at,
+        "last_fallback_event_at":item.last_fallback_event_at} for item in
+        MarketDataSubscription.objects.filter(consumer_count__gt=0).select_related("instrument").order_by("instrument__symbol","timeframe")]
     return response({"kafka_enabled":settings.KAFKA_ENABLED,"data_path_status":data_path_status,
         "data_path_reasons":reasons,"gateway":gateway,"consumer":consumer,"metrics":metrics,"flink":flink,
         "strategies":strategies,"outbox_pending":outbox_pending,"outbox_failed":outbox_failed,
         "dead_letter_count":DeadLetterEvent.objects.count(),
-        "stale_instrument_count":InstrumentMarketState.objects.exclude(status="FRESH").count()})
+        "stale_instrument_count":InstrumentMarketState.objects.exclude(status="FRESH").count(),
+        "market_data_providers":provider_subscriptions,
+        "provider_transition_count":MarketDataProviderTransition.objects.count()})
 
 
 def prometheus_metrics(request):
@@ -64,11 +72,26 @@ def prometheus_metrics(request):
     if invalid:return invalid
     from prometheus_client import CollectorRegistry, Gauge, generate_latest, CONTENT_TYPE_LATEST
     from apps.audit.models import OutboxEvent
-    from apps.market_streams.models import InstrumentMarketState
+    from apps.market_streams.models import InstrumentMarketState, MarketDataProviderTransition, MarketDataSubscription
     registry=CollectorRegistry()
     Gauge("finflock_outbox_pending","Outbox events awaiting Kafka",registry=registry).set(OutboxEvent.objects.exclude(status="PUBLISHED").count())
     Gauge("finflock_dead_letter_total","Persisted dead-letter events",registry=registry).set(DeadLetterEvent.objects.count())
     Gauge("finflock_stale_instruments","Stale or unavailable instruments",registry=registry).set(InstrumentMarketState.objects.exclude(status="FRESH").count())
+    provider_gauge=Gauge("finflock_market_data_active_subscriptions","Active subscriptions by provider",["provider"],registry=registry)
+    for provider in ("IBKR","FINNHUB","NONE"):
+        provider_gauge.labels(provider=provider).set(MarketDataSubscription.objects.filter(consumer_count__gt=0,active_provider=provider).count())
+    Gauge("finflock_market_data_provider_transitions_total","Persisted provider transitions",registry=registry).set(MarketDataProviderTransition.objects.count())
+    event_gauge=Gauge("finflock_market_data_events_total","Persisted provider event counters",["outcome","provider"],registry=registry)
+    for metric in StreamHealthMetric.objects.filter(component="market-data-provider"):
+        for provider,total in (metric.value.get("providers") or {}).items():
+            event_gauge.labels(outcome=metric.metric,provider=provider).set(total)
+    websocket_metric=StreamHealthMetric.objects.filter(component="finnhub-websocket",metric="connection").first()
+    reconnects=Gauge("finflock_finnhub_websocket_reconnects","Finnhub WebSocket reconnect count",registry=registry)
+    trade_drops=Gauge("finflock_finnhub_trade_aggregation_total","Finnhub trade aggregation counters",["outcome"],registry=registry)
+    if websocket_metric:
+        reconnects.set((websocket_metric.value or {}).get("reconnect_count",0))
+        for outcome,total in ((websocket_metric.value or {}).get("trade_aggregation") or {}).items():
+            trade_drops.labels(outcome=outcome).set(total)
     return HttpResponse(generate_latest(registry),content_type=CONTENT_TYPE_LATEST)
 
 

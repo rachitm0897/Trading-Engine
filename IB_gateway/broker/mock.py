@@ -23,11 +23,15 @@ class MockBrokerAdapter(BrokerAdapter):
             "primary_exchange":payload.get("primary_exchange") or "NASDAQ",
             "description":payload.get("description") or f"{symbol} mock corporation","qualified":True}
     def subscribe_market_data(self,payload):
-        key=payload["subscription_key"];self.subscriptions[key]=dict(payload)
-        return {"subscription_key":key,"state":"ACTIVE","historical_bar_count":0}
+        key=payload["subscription_key"];runtime_key=payload.get("gateway_subscription_key") or key
+        self.subscriptions[runtime_key]=dict(payload)
+        return {"subscription_key":key,"gateway_subscription_key":runtime_key,"state":"ACTIVE","historical_bar_count":0,
+            "provider_generation":str(payload.get("provider_generation") or ""),"probe":bool(payload.get("probe"))}
     def cancel_market_data(self,payload):
-        key=payload["subscription_key"];self.subscriptions.pop(key,None)
-        return {"subscription_key":key,"state":"INACTIVE"}
+        key=payload["subscription_key"]
+        matches=[name for name,item in self.subscriptions.items() if item.get("subscription_key")==key]
+        for name in matches:self.subscriptions.pop(name,None)
+        return {"subscription_key":key,"state":"INACTIVE","cancelled":len(matches)}
     def drain_market_events(self):
         events,self.market_events=self.market_events,[];return events
     def drain_order_events(self):
