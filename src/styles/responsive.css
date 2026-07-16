@@ -5,17 +5,29 @@
   .context-selectors label > span { display: none; }
   .row-actions { flex-direction: column; align-items: flex-end; }
   .goal-editor-row { grid-template-columns: auto repeat(3, minmax(0, 1fr)); }
+  .dashboard-grid { grid-template-columns: minmax(0, 1.6fr) minmax(260px, .8fr); }
+  .dashboard-chart { grid-column: 1; grid-row: span 2; }
+  .dashboard-attention, .dashboard-activity, .dashboard-holdings, .dashboard-orders { grid-column: 2; grid-row: auto; }
+  .dashboard-exposure { grid-column: 1 / -1; }
+  .topbar-freshness { display: none; }
 }
 
 @media (max-width: 1024px) {
-  .app-shell { display: block; }
+  .app-shell, .app-shell.sidebar-compact { display: block; }
   .sidebar { position: fixed; left: 0; transform: translateX(-102%); width: min(280px, 88vw); box-shadow: var(--shadow-lg); transition: transform .2s ease; }
+  .sidebar-compact .brand { justify-content: flex-start; padding: 0 .68rem; }
+  .sidebar-compact .brand-copy, .sidebar-compact .nav-group-label, .sidebar-compact .sidebar nav a > span, .sidebar-compact .safety-note p { display: block; }
+  .sidebar-compact .sidebar-mode-toggle { display: none; }
+  .sidebar-compact .sidebar nav { padding: .72rem .48rem; }
+  .sidebar-compact .sidebar nav a { grid-template-columns: 20px 1fr 14px; justify-items: initial; padding: 0 .58rem; }
   .sidebar.sidebar-open { transform: translateX(0); }
   .sidebar-close, .mobile-menu { display: inline-flex; }
-  .nav-scrim { position: fixed; z-index: 25; inset: 0; display: block; width: 100%; border: 0; background: rgb(15 23 42 / 38%); }
+  .nav-scrim { position: fixed; z-index: 25; inset: 0; display: block; width: 100%; border: 0; background: var(--overlay); }
   .metric-grid, .metric-grid.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .context-selectors .status-badge { display: none; }
   .review-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .order-terminal-grid { grid-template-columns: 1fr; }
+  .order-inspector { position: static; max-height: none; }
 }
 
 @media (max-width: 780px) {
@@ -26,8 +38,8 @@
   .page-content { padding: 1rem; }
   .page-header { flex-direction: column; gap: .8rem; }
   .page-actions { width: 100%; justify-content: flex-start; }
-  .dashboard-grid, .portfolio-grid, .detail-grid, .activity-grid { grid-template-columns: 1fr; }
-  .dashboard-chart, .portfolio-history, .detail-wide { grid-column: auto; }
+  .dashboard-grid, .portfolio-grid, .detail-grid, .activity-grid, .system-sections { grid-template-columns: 1fr; }
+  .dashboard-chart, .dashboard-attention, .dashboard-activity, .dashboard-holdings, .dashboard-orders, .dashboard-exposure, .portfolio-history, .detail-wide, .system-wide { grid-column: auto; grid-row: auto; }
   .form-grid.three-columns, .form-grid.four-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .wizard-steps strong { display: none; }
   .wizard-steps li:not(:last-child)::after { left: 30px; }
@@ -43,6 +55,7 @@
   .goal-editor-row { grid-template-columns: auto 1fr; }
   .goal-editor-row label { grid-column: 1 / -1; }
   .add-goal-stock { grid-template-columns: 1fr; }
+  .market-ticker .ticker-freshness { margin-left: 0; }
 }
 
 @media (max-width: 560px) {

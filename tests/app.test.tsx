@@ -4,6 +4,7 @@ import App, {appBasename, normalizeBasename} from '../src/App'
 import {queryClient} from '../src/app/queryClient'
 import {refreshAfterStrategyDeletion} from '../src/features/strategies/strategyActions'
 import {usePreferencesStore} from '../src/stores/preferences'
+import {useWorkspacePreferences} from '../src/stores/workspacePreferences'
 
 const definition = {
   id: 44, key: 'CUSTOM_BREAKOUT', name: 'Backend Breakout', description: 'A backend-provided portable definition.', plugin_path: 'plugins.Custom',
@@ -148,7 +149,8 @@ function apiPath(input: string) {
 beforeEach(() => {
   window.history.replaceState({}, '', '/')
   queryClient.clear()
-  usePreferencesStore.setState({selectedAccountId: null, selectedPortfolioId: null, navigationOpen: false})
+  usePreferencesStore.setState({selectedAccountId: null, selectedPortfolioId: null})
+  useWorkspacePreferences.getState().resetWorkspace()
   failDashboard = false
   failStrategyDelete = false
   failConstructionPreview = false
@@ -520,4 +522,18 @@ test('uses the API and application base path contracts', async () => {
 test('responsive navigation has an accessible mobile toggle', async () => {
   render(<App />)
   expect(await screen.findByRole('button', {name: 'Open navigation'})).toBeInTheDocument()
+})
+
+test('desktop sidebar mode persists without opening mobile navigation', async () => {
+  const user = userEvent.setup()
+  render(<App />)
+  const shell = (await screen.findByRole('navigation', {name: 'Primary navigation'})).closest('.app-shell')
+  expect(shell).toHaveClass('sidebar-expanded')
+  await user.click(screen.getByRole('button', {name: 'Use compact sidebar'}))
+  expect(shell).toHaveClass('sidebar-compact')
+  expect(shell?.querySelector('.sidebar')).not.toHaveClass('sidebar-open')
+  expect(localStorage.getItem('finflock-workspace-v1')).toContain('compact')
+  await user.click(screen.getByRole('button', {name: 'Open navigation'}))
+  expect(shell?.querySelector('.sidebar')).toHaveClass('sidebar-open')
+  expect(useWorkspacePreferences.getState().sidebarMode).toBe('compact')
 })
