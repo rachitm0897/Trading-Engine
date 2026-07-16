@@ -34,6 +34,12 @@ import type {
   ConstructionEligibility,
   GoalInstrumentSelection,
   GoalStrategyAssignment,
+  GoalRecommendationRun,
+  ResearchCandidateScore,
+  ResearchDatasetVersion,
+  ResearchReadiness,
+  ResearchStrategy,
+  ResearchUniverse,
 } from './types'
 
 const POLL_INTERVAL = 15_000
@@ -236,5 +242,36 @@ export const queries = {
     queryFn: () => request<GoalStrategyAssignment[]>(`portfolio-construction/instruments/${goalInstrumentId}/assignments/`),
     enabled: Boolean(goalInstrumentId),
     staleTime: 15_000,
+  }),
+  researchDatasetVersions: () => queryOptions({
+    queryKey: ['research-dataset-versions'],
+    queryFn: () => request<ResearchDatasetVersion[]>('research/dataset-versions/'),
+    staleTime: 60_000,
+  }),
+  researchUniverses: () => queryOptions({
+    queryKey: ['research-universes'],
+    queryFn: () => request<ResearchUniverse[]>('research/universes/'),
+    staleTime: 60_000,
+  }),
+  researchStrategies: () => queryOptions({
+    queryKey: ['research-strategies'],
+    queryFn: () => request<ResearchStrategy[]>('research/strategies/?page_size=100'),
+    staleTime: 60_000,
+  }),
+  researchReadiness: () => queryOptions({
+    queryKey: ['research-readiness'],
+    queryFn: () => request<ResearchReadiness[]>('research/readiness/?page_size=100'),
+    staleTime: 30_000,
+  }),
+  researchCandidateScores: () => queryOptions({
+    queryKey: ['research-candidate-scores'],
+    queryFn: () => request<ResearchCandidateScore[]>('research/candidate-scores/?eligible=true&page_size=100'),
+    staleTime: 30_000,
+  }),
+  recommendation: (runId?: number | null) => queryOptions({
+    queryKey: ['goal-recommendation', runId ?? 'none'],
+    queryFn: () => request<GoalRecommendationRun>(`portfolio-construction/recommendations/${runId}/`),
+    enabled: Boolean(runId),
+    refetchInterval: (query) => ['QUEUED', 'RUNNING'].includes(query.state.data?.status || '') ? 1_000 : false,
   }),
 }

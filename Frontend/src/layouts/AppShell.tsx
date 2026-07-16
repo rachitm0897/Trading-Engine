@@ -1,5 +1,5 @@
 import {useIsFetching, useQuery, useQueryClient} from '@tanstack/react-query'
-import {Activity, BookOpen, Bot, ChevronRight, Gauge, LayoutDashboard, Menu, PanelLeftClose, PanelLeftOpen, RefreshCw, ServerCog, Target, X} from 'lucide-react'
+import {Activity, BookOpen, Bot, ChevronRight, FlaskConical, Gauge, LayoutDashboard, Menu, PanelLeftClose, PanelLeftOpen, RefreshCw, ServerCog, Target, X} from 'lucide-react'
 import {NavLink, Outlet, useLocation} from 'react-router-dom'
 import {queries} from '../api/queries'
 import {ErrorState, StatusBadge} from '../components/ui'
@@ -11,6 +11,7 @@ const navigation = [
   {label: 'Trading', items: [
     {to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard},
     {to: '/strategies', label: 'Strategies', icon: Bot},
+    {to: '/research', label: 'Research', icon: FlaskConical},
     {to: '/portfolio-builder', label: 'Portfolio Builder', icon: Target},
     {to: '/portfolio', label: 'Portfolio', icon: BookOpen},
   ]},

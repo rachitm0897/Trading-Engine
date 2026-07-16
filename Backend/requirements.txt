@@ -16,3 +16,5 @@ cryptography==44.0.2
 websocket-client==1.8.0
 numpy==2.2.3
 scipy==1.15.2
+pandas==2.2.3
+pyarrow==19.0.1

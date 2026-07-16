@@ -1,6 +1,24 @@
 from django.db import models
 
+
+class Issuer(models.Model):
+    """Stable company identity; ticker symbols remain instrument identities."""
+
+    cik = models.CharField(max_length=16, unique=True, null=True, blank=True)
+    legal_name = models.CharField(max_length=255)
+    display_name = models.CharField(max_length=255)
+    headquarters = models.CharField(max_length=255, blank=True)
+    # The research bundle preserves provenance such as
+    # "2020 (1853, United Technologies spinoff)", not just a four-digit year.
+    founded = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
 class Instrument(models.Model):
+    issuer = models.ForeignKey(
+        Issuer, on_delete=models.PROTECT, null=True, blank=True, related_name="instruments"
+    )
     symbol = models.CharField(max_length=32)
     asset_class = models.CharField(max_length=24, default="STK")
     exchange = models.CharField(max_length=32, default="SMART")

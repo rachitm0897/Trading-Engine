@@ -2,6 +2,8 @@
 
 The portfolio-construction feature produces immutable target weights and passes them to the existing rebalance planner. It does not submit broker orders directly.
 
+The manual Markowitz path documented here is unchanged. Research recommendations use a separate sleeve optimizer with stock, GICS sector/industry/sub-industry, strategy-family, cash, capacity, turnover, and long-only constraints; it does not call this path and claim those wider constraints were applied.
+
 ```text
 Portfolio universe -> Finnhub daily history -> Markowitz optimizer
   -> immutable optimized targets -> rebalance planner

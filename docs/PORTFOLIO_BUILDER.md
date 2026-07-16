@@ -13,6 +13,10 @@ The frontend route is `/portfolio-builder` and has four steps:
 
 The existing single-universe optimizer remains available on the Portfolio page as **Advanced target optimizer**.
 
+For any non-`NOW` goal, the operator may instead generate a cached research recommendation. Generation is asynchronous and has no execution side effect. Review shows GICS, stock and sleeve weights, strategy shares, score, expected risk/return/drawdown, costs, versions, warnings, and expiry. Acceptance rechecks plan version, expiry, data eligibility, exact broker qualification, current strategy approval, live cash/stock limits, GICS caps, and exact 100% strategy shares. It then updates the existing stock and assignment rows and labels the goal `ACCEPTED_RECOMMENDATION`.
+
+Accepted rows are immutable through normal edit APIs. The operator must explicitly detach or regenerate. In recommendation mode preview loads fixed local stock weights rather than calling manual Markowitz, while retaining normal aggregation, targets, trade preview, one combined rebalance, and disabled-SHADOW instance creation. Acceptance itself creates no instance, rebalance, order, or enabled strategy.
+
 ## Fixed goal rules
 
 Timeframes are `NOW`, `HURRY`, `FAST`, `BUILD`, `GROW`, and `COMPOUND`. Risk levels are 1 through 5 (`PRESERVATION` through `AGGRESSIVE`). The backend repeats the frontend timeframe-risk validation.
@@ -68,6 +72,10 @@ POST      /api/v1/portfolio-construction/preview/
 GET       /api/v1/portfolio-construction/runs/
 GET       /api/v1/portfolio-construction/runs/{run_id}/
 POST      /api/v1/portfolio-construction/runs/{run_id}/apply/
+POST      /api/v1/portfolio-construction/goals/{goal_id}/recommendations/
+GET       /api/v1/portfolio-construction/recommendations/{run_id}/
+POST      /api/v1/portfolio-construction/recommendations/{run_id}/accept/
+POST      /api/v1/portfolio-construction/goals/{goal_id}/detach-recommendation/
 ```
 
 Preview and apply return `202 Accepted` while queued. Poll the construction run until `status` is `COMPLETED` or `FAILED`, then poll `application_status` until `APPLIED` or `FAILED`. Retryable failures require the original key and `Idempotency-Retry: true`.

@@ -14,6 +14,8 @@ Kafka carries versioned immutable events through a transactional PostgreSQL outb
 
 The deterministic [Portfolio Builder](docs/PORTFOLIO_BUILDER.md) divides one real portfolio into virtual goal allocations, constructs each goal from a qualified stock universe with fixed timeframe/risk rules, and separately divides each stock weight among schema-configured strategies. Strategies own constructed stock weight but do not influence Markowitz weighting. Duplicate stocks and compatible strategy identities aggregate across goals, one combined stock target enters the existing rebalancer, and every created or updated strategy instance remains disabled in `SHADOW` mode with an explicit target weight. Goals do not create separate broker portfolios or financial ledgers.
 
+The versioned [Research Universe](docs/RESEARCH_UNIVERSE.md) imports the repository's 500-stock/97-strategy JSON bundle only after schema, hash, count, taxonomy, and enum validation. Strategy JSON is catalog metadata, never evaluated runtime code. Point-in-time data, cost-aware walk-forward experiments, hard rejection and scoring, explicit human promotion, and SHADOW evidence gate executable mappings. Cached approved sleeves can produce a GICS-aware goal recommendation; acceptance only fills the existing Builder selections and assignments, and exact accepted weights still require the normal preview and one combined SHADOW/PAPER apply.
+
 ## Local start
 
 ```bash
@@ -45,7 +47,7 @@ docker compose ps
 powershell -NoProfile -File docs/streaming_recovery_smoke.ps1
 ```
 
-See [local development](docs/LOCAL_DEVELOPMENT.md), the [frontend redesign guide](docs/FRONTEND_REDESIGN.md), the [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), the [advanced target optimizer](docs/PORTFOLIO_OPTIMIZATION.md), and each application README for isolated commands.
+See [local development](docs/LOCAL_DEVELOPMENT.md), the [frontend redesign guide](docs/FRONTEND_REDESIGN.md), the [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), the [advanced target optimizer](docs/PORTFOLIO_OPTIMIZATION.md), the [research universe](docs/RESEARCH_UNIVERSE.md), the [backtesting protocol](docs/BACKTESTING_PROTOCOL.md), the [strategy promotion workflow](docs/STRATEGY_PROMOTION.md), and the [recommendation engine](docs/RECOMMENDATION_ENGINE.md).
 
 ## QFS
 
@@ -57,4 +59,4 @@ The supported public URLs are:
 
 Each application exposes one configurable `${PORT}`. Base paths, public URLs, and forwarded headers are configurable; see [QFS deployment](docs/QFS_DEPLOYMENT.md).
 
-> This application is paper-only and rejects live configuration at startup. This release does not provide market calendars, tax-lot accounting, HA broker-worker election, or a general research/backtesting system.
+> This application is paper-only and rejects live configuration at startup. Research support is daily and long-only for actionable recommendations; intraday, short, pair/basket, fundamental, and event strategies remain blocked until their required point-in-time data and runtime architecture exist.

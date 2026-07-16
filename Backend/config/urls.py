@@ -10,6 +10,7 @@ from apps.core import analytics as analytics_views
 from apps.market_data import views as market_data_views
 from apps.portfolio_optimization import views as optimization_views
 from apps.portfolio_construction import views as construction_views
+from apps.research import views as research_views
 
 api_patterns = [
     path("system/", views.system), path("auth/session/",views.auth_session), path("gateway/", views.gateway), path("accounts/", views.accounts),
@@ -67,6 +68,18 @@ new_api = [
     path("portfolio-construction/runs/",construction_views.runs),
     path("portfolio-construction/runs/<int:run_id>/",construction_views.runs),
     path("portfolio-construction/runs/<int:run_id>/apply/",construction_views.apply),
+    path("research/dataset-versions/",research_views.dataset_versions),
+    path("research/universes/",research_views.universes),
+    path("research/universes/<int:universe_id>/members/",research_views.universes,{"members":True}),
+    path("research/strategies/",research_views.strategies),
+    path("research/strategies/<str:research_id>/",research_views.strategies),
+    path("research/readiness/",research_views.readiness),
+    path("research/candidate-scores/",research_views.candidate_scores),
+    path("research/experiments/<int:experiment_id>/",research_views.experiments),
+    path("portfolio-construction/goals/<int:goal_id>/recommendations/",research_views.goal_recommendations),
+    path("portfolio-construction/recommendations/<int:run_id>/",research_views.recommendation_detail),
+    path("portfolio-construction/recommendations/<int:run_id>/accept/",research_views.recommendation_detail,{"action":"accept"}),
+    path("portfolio-construction/goals/<int:goal_id>/detach-recommendation/",research_views.detach_goal_recommendation),
 ]
 urlpatterns += [path("api/v1/" + str(p.pattern),p.callback,p.default_args) for p in new_api]
 if settings.APP_BASE_PATH:

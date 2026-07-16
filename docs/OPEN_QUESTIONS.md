@@ -47,3 +47,9 @@ Before live use, operators must decide:
 - authoritative warm-up backfill source and readiness SLA for newly enabled intraday versus daily strategies;
 - whether a future multi-instrument plugin needs an atomic universe-level target contract in addition to the current one-instance-per-instrument model;
 - retention and compaction policy for `strategy.inputs.v1`, immutable strategy versions, run context snapshots, and inactive input bindings.
+- licensed providers for point-in-time index membership, delistings, corporate actions, filings/fundamentals, and exact event timestamps;
+- production exchange-calendar coverage and an S3-compatible Parquet research-artifact backend;
+- borrow availability/cost and atomic multi-instrument execution before enabling shorts or pair/basket strategies;
+- authenticated operator roles before exposing research activation, experiment scheduling, provider overrides, or promotion as mutation APIs.
+
+Until these research-data questions are resolved, affected strategies remain catalog-only and cannot become Portfolio Builder eligible.
