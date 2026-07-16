@@ -506,6 +506,43 @@ test('order drawer displays the exact broker rejection reason and explicit empty
   expect(screen.getByText(/No broker reason received · ibkr · IBKR Inactive/)).toBeInTheDocument()
 })
 
+test('order filtering, modification, and cancellation preserve the guarded OMS workflow', async () => {
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/activity')
+  render(<App />)
+  const search = await screen.findByLabelText('Search orders')
+  await user.type(search, 'filled-order')
+  expect(screen.queryByRole('button', {name: 'active-order'})).not.toBeInTheDocument()
+  expect(screen.getByRole('button', {name: 'filled-order'})).toBeInTheDocument()
+  await user.clear(search)
+  await user.click(await screen.findByRole('button', {name: 'active-order'}))
+  await user.click(await screen.findByRole('button', {name: 'Submit modification'}))
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/orders/active-order-123/'), expect.objectContaining({method: 'PATCH'})))
+  await user.click(screen.getByRole('button', {name: 'Cancel order'}))
+  const dialog = screen.getByRole('dialog', {name: 'Cancel NVDA order?'})
+  await user.type(within(dialog).getByLabelText('Reason'), 'Operator cancelled stale intent')
+  await user.click(within(dialog).getByRole('button', {name: 'Request cancellation'}))
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/orders/active-order-123/cancel/'), expect.objectContaining({method: 'POST'})))
+})
+
+test('desktop order blotter supports keyboard row inspection without changing mobile navigation state', async () => {
+  vi.stubGlobal('matchMedia', vi.fn().mockImplementation((query: string) => ({
+    matches: query === '(min-width: 1200px)', media: query, onchange: null,
+    addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
+  })))
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/activity')
+  render(<App />)
+  const orderButton = await screen.findByRole('button', {name: 'active-order'})
+  const row = orderButton.closest('tr') as HTMLTableRowElement
+  row.focus()
+  await user.keyboard('{Enter}')
+  expect(await screen.findByRole('button', {name: 'Close selected order'})).toBeInTheDocument()
+  expect(row).toHaveAttribute('aria-selected', 'true')
+  expect(screen.queryByRole('dialog', {name: /NVDA BUY/})).not.toBeInTheDocument()
+  expect(useWorkspacePreferences.getState().mobileNavigationOpen).toBe(false)
+})
+
 test('keeps the shell usable during a route-level partial failure', async () => {
   failDashboard = true
   render(<App />)
