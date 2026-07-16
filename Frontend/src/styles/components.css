@@ -58,8 +58,18 @@
 .panel-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; min-height: 43px; padding: .58rem .72rem; border-bottom: 1px solid var(--border); background: var(--surface-subtle); }
 .panel-header h2 { margin: 0; }
 .panel-header p { margin: .12rem 0 0; color: var(--text-muted); font-size: .63rem; }
-.panel-actions { display: flex; gap: .4rem; }
+.panel-heading { min-width: 0; flex: 1; display: flex; align-items: center; gap: .55rem; }
+.panel-heading-toggle { min-width: 0; flex: 1; display: flex; align-items: center; justify-content: space-between; gap: .7rem; padding: 0; border: 0; color: inherit; background: transparent; text-align: left; }
+.panel-heading-toggle > span { min-width: 0; }
+.panel-heading-toggle > svg { width: 15px; flex: 0 0 auto; color: var(--text-muted); transition: transform .15s ease; }
+.panel-heading-toggle > svg.expanded { transform: rotate(180deg); }
+.panel-badge { flex: 0 0 auto; }
+.panel-actions { display: flex; align-items: center; gap: .3rem; }
+.panel-actions .icon-button { width: 28px; height: 28px; min-height: 28px; }
 .panel-content { padding: .78rem; min-width: 0; }
+.panel-content[hidden] { display: none; }
+.terminal-panel-fullscreen { position: fixed !important; z-index: 120; inset: .65rem; display: flex; flex-direction: column; background: var(--surface-strong); box-shadow: var(--shadow-lg); }
+.terminal-panel-fullscreen .panel-content { flex: 1; overflow: auto; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .8rem; }
 .metric-grid.compact { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .metric-card { min-width: 0; padding: .7rem .78rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); }
@@ -112,16 +122,6 @@
 .skeleton { display: flex; flex-direction: column; justify-content: center; gap: .72rem; min-height: 130px; padding: 1rem; }
 .skeleton span { height: 13px; border-radius: 5px; background: linear-gradient(90deg, var(--surface-hover), var(--surface-raised), var(--surface-hover)); background-size: 220% 100%; animation: shimmer 1.25s infinite; }
 @keyframes shimmer { to { background-position: -220% 0; } }
-.collapsible { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden; }
-.collapsible > summary { min-height: 66px; display: flex; align-items: center; gap: .7rem; padding: .85rem 1rem; cursor: pointer; list-style: none; }
-.collapsible > summary::-webkit-details-marker { display: none; }
-.collapsible > summary > div { flex: 1; }
-.collapsible > summary strong, .collapsible > summary span { display: block; }
-.collapsible > summary strong { color: var(--text); font-size: .82rem; }
-.collapsible > summary span { margin-top: .22rem; color: var(--text-muted); font-size: .69rem; font-weight: 450; }
-.collapsible > summary > svg { width: 17px; color: var(--text-muted); transition: transform .15s; }
-.collapsible[open] > summary > svg { transform: rotate(180deg); }
-.collapsible-content { padding: 1rem; border-top: 1px solid var(--border); }
 .detail-list { margin: 0; }
 .detail-list.columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 1.5rem; }
 .detail-list > div { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .45rem 0; border-bottom: 1px solid var(--border); }

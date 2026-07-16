@@ -228,7 +228,7 @@ test('supports deep links, arbitrary tickers, dynamic schema fields, and shadow-
   const mode = screen.getByLabelText('Execution mode')
   expect(mode).toHaveValue('SHADOW')
   expect(screen.queryByRole('option', {name: 'LIVE'})).not.toBeInTheDocument()
-  expect(screen.getByText('Advanced policy settings').closest('details')).not.toHaveAttribute('open')
+  expect(screen.getByRole('button', {name: /Advanced policy settings/})).toHaveAttribute('aria-expanded', 'false')
 })
 
 test('selected account updates the available portfolio context', async () => {
@@ -399,6 +399,7 @@ test('advanced target optimizer previews metrics and planned SHADOW trades', asy
   window.history.replaceState({}, '', '/portfolio')
   render(<App />)
   expect(await screen.findByRole('heading', {name: 'Advanced target optimizer'})).toBeInTheDocument()
+  await user.click(screen.getByRole('button', {name: /Advanced target optimizer/}))
   await waitFor(() => {
     expect(queryClient.getQueryData(['portfolio-universe', 10])).toEqual(data['portfolio-universe'])
     expect(queryClient.getQueryData(['optimization-policies', 10])).toEqual(data['portfolio-optimization/policies'])
@@ -416,6 +417,7 @@ test('applied optimization disables Apply and shows the applied rebalance', asyn
   const user = userEvent.setup()
   window.history.replaceState({}, '', '/portfolio')
   render(<App />)
+  await user.click(await screen.findByRole('button', {name: /Advanced target optimizer/}))
   await waitFor(() => expect(queryClient.getQueryData(['portfolio-universe', 10])).toEqual(data['portfolio-universe']))
   const previewButton = await screen.findByRole('button', {name: 'Preview optimization'})
   await waitFor(() => expect(previewButton).toBeEnabled())
@@ -430,6 +432,7 @@ test('universe selection shows the count and disables Save above the maximum', a
   const user = userEvent.setup()
   window.history.replaceState({}, '', '/portfolio')
   render(<App />)
+  await user.click(await screen.findByRole('button', {name: /Advanced target optimizer/}))
   await screen.findByText('Selected 2 of 50 maximum')
   const maximum = await screen.findByLabelText('Maximum instruments')
   await user.clear(maximum)
