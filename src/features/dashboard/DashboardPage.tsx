@@ -3,7 +3,7 @@ import {Activity, AlertTriangle, Banknote, Bot, CircleDollarSign, Landmark, Scal
 import {queries} from '../../api/queries'
 import type {Order, Position} from '../../api/types'
 import {ActivityTimeline} from '../../components/ActivityTimeline'
-import {TimeSeriesChart} from '../../components/charts/TimeSeriesChart'
+import {TerminalChart} from '../../components/charts/TerminalChart'
 import {DataTable, ErrorState, Freshness, PageHeader, Skeleton, StatusBadge, TerminalMetric, TerminalPanel, formatMoney, formatNumber} from '../../components/ui'
 import {useSelection} from '../../stores/useSelection'
 
@@ -53,9 +53,9 @@ export function DashboardPage() {
     </section>
     <div className="dashboard-grid">
       <TerminalPanel id="nav-pnl" title="NAV & portfolio P&L" description={`Persisted portfolio observations · ${series.data?.source || 'waiting for data'}`} className="dashboard-chart" fullscreenable>
-        {series.isError ? <ErrorState error={series.error} onRetry={() => void series.refetch()} compact /> : series.isLoading ? <Skeleton height={270} /> : <TimeSeriesChart height={270} ariaLabel="Portfolio NAV and P&L chart" lines={[
-          {name: 'NAV', data: series.data?.nav || [], color: '#4676f2', type: 'area'},
-          {name: 'P&L', data: series.data?.pnl || [], color: '#0d9488'},
+        {series.isError ? <ErrorState error={series.error} onRetry={() => void series.refetch()} compact /> : series.isLoading ? <Skeleton height={270} /> : <TerminalChart id="dashboard-nav" height={330} ariaLabel="Portfolio NAV and P&L chart" defaultChartType="area" lines={[
+          {name: 'NAV', data: series.data?.nav || [], type: 'area', kind: 'primary'},
+          {name: 'P&L', data: series.data?.pnl || [], kind: 'primary'},
         ]} />}
       </TerminalPanel>
       <TerminalPanel id="attention" title="Needs attention" description="Conditions that may affect readiness" className="dashboard-attention">
@@ -65,9 +65,9 @@ export function DashboardPage() {
       <TerminalPanel id="holdings" title="Holdings" description={`${positions.data?.length || 0} marked positions`} className="dashboard-holdings">{positions.isError ? <ErrorState error={positions.error} compact /> : <DataTable rows={positions.data || []} columns={positionColumns} getRowKey={(item) => item.id} emptyTitle="No holdings" />}</TerminalPanel>
       <TerminalPanel id="open-orders" title="Open orders" description="Current OMS state" className="dashboard-orders">{orders.isError ? <ErrorState error={orders.error} compact /> : <DataTable rows={(orders.data || []).filter((item) => !['FILLED', 'CANCELLED', 'REJECTED', 'EXPIRED'].includes(item.status))} columns={orderColumns} getRowKey={(item) => item.internal_id} emptyTitle="No open orders" />}</TerminalPanel>
       <TerminalPanel id="exposure" title="Exposure" description="Gross and net marked exposure from real portfolio and market records" className="dashboard-exposure" defaultOpen={false}>
-        {series.isError ? <ErrorState error={series.error} compact /> : <TimeSeriesChart height={270} ariaLabel="Portfolio exposure chart" lines={[
-          {name: 'Gross', data: exposure.map((point) => ({time: point.time, value: point.gross})), color: '#8b5cf6'},
-          {name: 'Net', data: exposure.map((point) => ({time: point.time, value: point.net})), color: '#4676f2'},
+        {series.isError ? <ErrorState error={series.error} compact /> : <TerminalChart id="dashboard-exposure" height={270} ariaLabel="Portfolio exposure chart" lines={[
+          {name: 'Gross', data: exposure.map((point) => ({time: point.time, value: point.gross})), kind: 'primary'},
+          {name: 'Net', data: exposure.map((point) => ({time: point.time, value: point.net})), kind: 'primary'},
         ]} />}
       </TerminalPanel>
     </div>
