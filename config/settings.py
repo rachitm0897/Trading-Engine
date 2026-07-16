@@ -51,6 +51,8 @@ CELERY_BEAT_SCHEDULE = {
     "recover-rebalances": {"task": "apps.rebalancing.tasks.recover_incomplete_rebalances", "schedule": 60.0},
     "sync-finnhub-history": {"task": "apps.market_data.tasks.sync_active_finnhub_universes", "schedule": 21600.0},
     "check-finnhub-history": {"task": "apps.market_data.tasks.check_finnhub_history_staleness", "schedule": 21600.0},
+    "verify-finnhub-mappings": {"task": "apps.market_data.tasks.verify_pending_finnhub_mappings", "schedule": 21600.0},
+    "monitor-market-data-providers": {"task": "apps.market_streams.tasks.monitor_market_data_providers", "schedule": 5.0},
     "compact-operational-records": {"task": "apps.event_bus.tasks.compact_operational_records", "schedule": 86400.0},
 }
 IB_GATEWAY_SERVICE_URL = os.getenv("IB_GATEWAY_SERVICE_URL", "http://localhost:8080/api/v1")
@@ -77,6 +79,22 @@ FINNHUB_REQUEST_TIMEOUT_SECONDS = int(os.getenv("FINNHUB_REQUEST_TIMEOUT_SECONDS
 FINNHUB_MAX_RETRIES = int(os.getenv("FINNHUB_MAX_RETRIES", "2"))
 FINNHUB_ENCRYPTION_KEY = os.getenv("FINNHUB_ENCRYPTION_KEY", "")
 FINNHUB_OPERATION_THROTTLE_LIMIT = int(os.getenv("FINNHUB_OPERATION_THROTTLE_LIMIT", "30"))
+MARKET_DATA_FALLBACK_ENABLED = os.getenv("MARKET_DATA_FALLBACK_ENABLED", "false").lower() == "true"
+FINNHUB_HISTORICAL_FALLBACK_ENABLED = os.getenv("FINNHUB_HISTORICAL_FALLBACK_ENABLED", "false").lower() == "true"
+FINNHUB_LIVE_FALLBACK_ENABLED = os.getenv("FINNHUB_LIVE_FALLBACK_ENABLED", "false").lower() == "true"
+FINNHUB_AUTO_FAILBACK_ENABLED = os.getenv("FINNHUB_AUTO_FAILBACK_ENABLED", "false").lower() == "true"
+IBKR_MARKET_DATA_FAILOVER_GRACE_SECONDS = int(os.getenv("IBKR_MARKET_DATA_FAILOVER_GRACE_SECONDS", "15"))
+FINNHUB_LIVE_STALE_SECONDS = int(os.getenv("FINNHUB_LIVE_STALE_SECONDS", "15"))
+FINNHUB_WS_URL = os.getenv("FINNHUB_WS_URL", "wss://ws.finnhub.io").rstrip("/")
+FINNHUB_WS_RECONNECT_MAX_SECONDS = int(os.getenv("FINNHUB_WS_RECONNECT_MAX_SECONDS", "30"))
+FINNHUB_ALLOWED_LATENESS_SECONDS = int(os.getenv("FINNHUB_ALLOWED_LATENESS_SECONDS", "2"))
+FINNHUB_WS_RECONCILE_SECONDS = int(os.getenv("FINNHUB_WS_RECONCILE_SECONDS", "2"))
+PRIMARY_RECOVERY_CONFIRMATION_EVENTS = int(os.getenv("PRIMARY_RECOVERY_CONFIRMATION_EVENTS", "3"))
+PRIMARY_PROBE_RETRY_SECONDS = int(os.getenv("PRIMARY_PROBE_RETRY_SECONDS", "30"))
+FINNHUB_MAPPING_REVALIDATE_SECONDS = int(os.getenv("FINNHUB_MAPPING_REVALIDATE_SECONDS", "86400"))
+FINNHUB_SUPPORTED_ASSET_CLASSES = tuple(
+    value.strip().upper() for value in os.getenv("FINNHUB_SUPPORTED_ASSET_CLASSES", "STK").split(",") if value.strip()
+)
 OPTIMIZATION_THROTTLE_LIMIT = int(os.getenv("OPTIMIZATION_THROTTLE_LIMIT", "30"))
 EXPENSIVE_OPERATION_THROTTLE_WINDOW_SECONDS = int(os.getenv("EXPENSIVE_OPERATION_THROTTLE_WINDOW_SECONDS", "60"))
 OUTBOX_RETENTION_DAYS = int(os.getenv("OUTBOX_RETENTION_DAYS", "30"))

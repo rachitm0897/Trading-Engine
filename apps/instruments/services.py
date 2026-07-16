@@ -76,7 +76,17 @@ def resolve_instrument(*, instrument_id=None, ticker=None, asset_class="STK", ex
 def record_qualified_contract(instrument, result):
     if not result.get("conid"):
         raise ValueError("IBKR qualification result has no conId")
+    previous=BrokerContract.objects.filter(instrument=instrument).values(
+        "conid","primary_exchange","local_symbol").first()
     contract=BrokerContract.objects.update_or_create(instrument=instrument, defaults={"conid":int(result["conid"]),
         "primary_exchange":result.get("primary_exchange", ""), "local_symbol":result.get("local_symbol", instrument.symbol),
         "description":result.get("description", ""),"qualified_at":timezone.now()})[0]
-    publish_instrument_registry(contract);return contract
+    publish_instrument_registry(contract)
+    from .models import InstrumentProviderMapping
+    mapping,_=InstrumentProviderMapping.objects.get_or_create(instrument=instrument,provider="FINNHUB")
+    identity=(contract.conid,contract.primary_exchange,contract.local_symbol)
+    if previous and identity!=(previous["conid"],previous["primary_exchange"],previous["local_symbol"]):
+        mapping.status="PENDING";mapping.verification_method="";mapping.verified_at=None
+        mapping.last_error="IBKR contract identity changed; Finnhub mapping must be reverified"
+        mapping.save(update_fields=["status","verification_method","verified_at","last_error","updated_at"])
+    return contract

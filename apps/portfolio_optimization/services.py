@@ -243,11 +243,13 @@ def _load_prices(instruments, *, lookback_days, minimum_observations, refresh_hi
 
 
 def _current_weights(portfolio, nav, instrument_ids, available_cash=None):
-    positions = PortfolioPosition.objects.filter(portfolio=portfolio).select_related("instrument")
+    from apps.market_data.pricing import effective_position_price
+    positions = PortfolioPosition.objects.filter(portfolio=portfolio).select_related("instrument__market_state")
     result = {}
     outside = D(0)
     for position in positions:
-        value = D(position.quantity) * D(position.market_price)
+        price,_,_=effective_position_price(position)
+        value = D(position.quantity) * price
         weight = value / nav if nav else D(0)
         if position.instrument_id in instrument_ids:
             result[position.instrument_id] = weight
@@ -576,9 +578,11 @@ def latest_prices(optimization_run):
         if not price:
             raise OptimizationError(f"No historical reference price is available for {target.instrument.symbol}")
         result[target.instrument_id] = price.adjusted_close or price.close
-    for position in PortfolioPosition.objects.filter(portfolio=optimization_run.portfolio):
-        if position.instrument_id not in result and position.market_price > 0:
-            result[position.instrument_id] = position.market_price
+    from apps.market_data.pricing import effective_position_price
+    for position in PortfolioPosition.objects.filter(portfolio=optimization_run.portfolio).select_related("instrument__market_state"):
+        price,_,_=effective_position_price(position)
+        if position.instrument_id not in result and price > 0:
+            result[position.instrument_id] = price
     return result
 
 

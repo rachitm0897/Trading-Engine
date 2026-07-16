@@ -46,6 +46,8 @@ new_api = [
     path("data-providers/finnhub/",market_data_views.status),
     path("data-providers/finnhub/configure/",market_data_views.configure),
     path("data-providers/finnhub/test/",market_data_views.test),
+    path("data-providers/finnhub/mappings/",market_data_views.mappings),
+    path("data-providers/finnhub/mappings/<int:instrument_id>/",market_data_views.mappings),
     path("portfolio-universe/",optimization_views.universes),
     path("portfolio-optimization/policies/",optimization_views.policies),
     path("portfolio-optimization/preview/",optimization_views.execute,{"preview":True}),
