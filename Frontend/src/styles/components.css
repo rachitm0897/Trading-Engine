@@ -27,7 +27,7 @@
 .safety-note { margin: auto .58rem .65rem; padding: .65rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-subtle); }
 .safety-note p { margin: .45rem 0 0; color: var(--text-muted); font-size: .62rem; }
 .app-main { min-width: 0; }
-.app-topbar { position: sticky; z-index: 20; top: 0; height: 58px; display: flex; align-items: center; justify-content: space-between; padding: 0 clamp(.75rem, 1.6vw, 1.4rem); border-bottom: 1px solid var(--border); background: rgb(13 18 27 / 94%); backdrop-filter: blur(12px); }
+.app-topbar { position: sticky; z-index: 20; top: 0; height: 58px; display: flex; align-items: center; justify-content: space-between; padding: 0 clamp(.75rem, 1.6vw, 1.4rem); border-bottom: 1px solid var(--border); background: var(--topbar-bg); backdrop-filter: blur(12px); }
 .topbar-title { display: flex; align-items: center; gap: .7rem; }
 .topbar-title span, .topbar-title strong { display: block; }
 .topbar-title span { color: var(--text-muted); font-size: .56rem; letter-spacing: .08em; }
@@ -97,6 +97,7 @@
 .data-table tbody tr:last-child td { border-bottom: 0; }
 .data-table tbody tr:hover { background: var(--surface-hover); }
 .data-table tbody tr[aria-selected="true"] { background: var(--accent-soft); box-shadow: inset 2px 0 var(--accent); }
+.data-table tbody tr[tabindex] { cursor: pointer; }
 .primary-cell { display: flex; flex-direction: column; gap: .2rem; min-width: 100px; }
 .primary-cell strong, .primary-cell a { color: var(--text); font-weight: 700; text-decoration: none; }
 .primary-cell a:hover { color: var(--accent); }
