@@ -74,9 +74,9 @@ export const queries = {
     queryFn: () => request<DashboardSummary>(withQuery('dashboard/summary/', {portfolio: portfolioId})),
     refetchInterval: POLL_INTERVAL,
   }),
-  portfolioSeries: (portfolioId?: number | null) => queryOptions({
-    queryKey: ['portfolio-series', portfolioId ?? 'default'],
-    queryFn: () => request<PortfolioSeries>(withQuery('portfolios/series/', {portfolio: portfolioId})),
+  portfolioSeries: (portfolioId?: number | null, controls?: {range?: string; interval?: string}) => queryOptions({
+    queryKey: controls ? ['portfolio-series', portfolioId ?? 'default', controls] : ['portfolio-series', portfolioId ?? 'default'],
+    queryFn: () => request<PortfolioSeries>(withQuery('portfolios/series/', {portfolio: portfolioId, range: controls?.range, interval: controls?.interval})),
     refetchInterval: 30_000,
   }),
   orders: (filters: {portfolioId?: number | null; status?: string; symbol?: string} = {}) => queryOptions({
@@ -158,9 +158,9 @@ export const queries = {
     enabled: strategyId > 0,
     refetchInterval: POLL_INTERVAL,
   }),
-  strategyChart: (strategyId: number) => queryOptions({
-    queryKey: ['strategy-chart', strategyId],
-    queryFn: () => request<StrategyChartData>(`strategy-instances/${strategyId}/chart/`),
+  strategyChart: (strategyId: number, controls?: {range?: string; interval?: string}) => queryOptions({
+    queryKey: controls ? ['strategy-chart', strategyId, controls] : ['strategy-chart', strategyId],
+    queryFn: () => request<StrategyChartData>(withQuery(`strategy-instances/${strategyId}/chart/`, {range: controls?.range, interval: controls?.interval})),
     enabled: strategyId > 0,
     refetchInterval: POLL_INTERVAL,
   }),

@@ -25,7 +25,7 @@ export function StrategyDetailPage() {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const strategy = useQuery(queries.strategy(id))
   const timeline = useQuery({...queries.strategyTimeline(id), enabled: id > 0 && (tab === 'Overview' || tab === 'Activity')})
-  const chart = useQuery({...queries.strategyChart(id), enabled: id > 0 && tab === 'Chart'})
+  const chart = useQuery({...queries.strategyChart(id), enabled: id > 0 && (tab === 'Overview' || tab === 'Chart')})
   const action = useMutation({
     mutationFn: ({name, reason}: {name: 'enable' | 'pause' | 'flatten'; reason?: string}) => request<unknown>(`strategy-instances/${id}/${name}/`, mutationOptions('POST', reason ? {reason, event_id: `operator-${name}-${crypto.randomUUID()}`} : {}, true)),
     onSuccess: async () => {
@@ -59,7 +59,7 @@ export function StrategyDetailPage() {
     {action.isError && <ErrorState title="Strategy action failed" error={action.error} compact />}
     {deleteAction.isError && <ErrorState title="Strategy deletion blocked" error={deleteAction.error} compact />}
     <div className="tabs" role="tablist" aria-label="Strategy details">{tabs.map((name) => <button key={name} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setSearchParams({tab: name.toLowerCase()})}>{name}</button>)}</div>
-    {tab === 'Overview' && <OverviewTab strategy={item} timeline={timeline.data || []} timelineLoading={timeline.isLoading} />}
+    {tab === 'Overview' && <OverviewTab strategy={item} timeline={timeline.data || []} timelineLoading={timeline.isLoading} chart={chart} />}
     {tab === 'Chart' && <ChartTab query={chart} />}
     {tab === 'Activity' && <ActivityTab query={timeline} />}
     {tab === 'Configuration' && <ConfigurationTab strategy={item} />}
@@ -69,7 +69,7 @@ export function StrategyDetailPage() {
   </div>
 }
 
-function OverviewTab({strategy, timeline, timelineLoading}: {strategy: StrategyInstance; timeline: StrategyTimelineItem[]; timelineLoading: boolean}) {
+function OverviewTab({strategy, timeline, timelineLoading, chart}: {strategy: StrategyInstance; timeline: StrategyTimelineItem[]; timelineLoading: boolean; chart: UseQueryResult<StrategyChartData, Error>}) {
   const warmup = strategy.warmup_required ? Math.min(1, strategy.warmup_progress / strategy.warmup_required) : 1
   return <div className="page-stack">
     <section className="metric-grid compact">
@@ -81,6 +81,7 @@ function OverviewTab({strategy, timeline, timelineLoading}: {strategy: StrategyI
     <div className="detail-grid">
       <TerminalPanel id="readiness" title="Readiness" description="Contract, subscription, and persisted streaming progress"><dl className="detail-list"><div><dt>Data path</dt><dd><StatusBadge status={strategy.streaming?.status || 'UNKNOWN'} /></dd></div><div><dt>Contract</dt><dd>{strategy.conid ? <><StatusBadge status="QUALIFIED" /><code>{strategy.conid}</code></> : <StatusBadge status="PENDING" />}</dd></div><div><dt>Subscription</dt><dd><StatusBadge status={strategy.streaming?.subscription_state || 'MISSING'} /></dd></div><div><dt>Warm-up</dt><dd><div className="wide-progress"><span>{strategy.warmup_progress} / {strategy.warmup_required} bars</span><div><i style={{width: `${warmup * 100}%`}} /></div></div></dd></div><div><dt>Last raw event</dt><dd>{formatDateTime(strategy.streaming?.last_raw_event)}</dd></div><div><dt>Last canonical event</dt><dd>{formatDateTime(strategy.streaming?.last_canonical_event)}</dd></div><div><dt>Last final bar</dt><dd>{formatDateTime(strategy.last_final_bar)}</dd></div><div><dt>Last indicator</dt><dd>{formatDateTime(strategy.streaming?.last_indicator)}</dd></div><div><dt>Last strategy run</dt><dd>{formatDateTime(strategy.streaming?.last_strategy_run)}</dd></div><div><dt>State</dt><dd><StatusBadge status={strategy.state} /></dd></div><div><dt>Mode</dt><dd><StatusBadge status={strategy.execution_mode} /></dd></div>{strategy.streaming?.last_error && <div><dt>Last error</dt><dd>{strategy.streaming.last_error}</dd></div>}</dl></TerminalPanel>
       <TerminalPanel id="latest-indicators" title="Latest indicators" description="Values used by the strategy’s current input bindings">{Object.entries(strategy.latest_indicators).length ? <dl className="indicator-list">{Object.entries(strategy.latest_indicators).map(([name, value]) => <div key={name}><dt>{name.replaceAll('_', ' ')}</dt><dd className="mono">{formatNumber(value)}</dd></div>)}</dl> : <EmptyState title="Indicators are warming up" description="Persisted final indicator values will appear after the required inputs arrive." />}</TerminalPanel>
+      <div className="detail-wide"><ChartTab query={chart} /></div>
       <TerminalPanel id="execution-timeline" title="Execution timeline" description="Recent signal-to-target and order-intent trace" className="detail-wide">{timelineLoading ? <Skeleton lines={4} /> : <ActivityTimeline items={timeline.slice(0, 8).map(timelineItem)} />}</TerminalPanel>
     </div>
   </div>
