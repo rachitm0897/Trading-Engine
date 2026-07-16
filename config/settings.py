@@ -20,6 +20,7 @@ INSTALLED_APPS = [
     "apps.oms", "apps.execution", "apps.reconciliation", "apps.audit",
     "apps.event_bus", "apps.market_streams", "apps.rebalancing", "apps.position_sizing",
     "apps.market_data", "apps.portfolio_optimization", "apps.portfolio_construction",
+    "apps.research",
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware", "corsheaders.middleware.CorsMiddleware",
@@ -54,6 +55,8 @@ CELERY_BEAT_SCHEDULE = {
     "verify-finnhub-mappings": {"task": "apps.market_data.tasks.verify_pending_finnhub_mappings", "schedule": 21600.0},
     "monitor-market-data-providers": {"task": "apps.market_streams.tasks.monitor_market_data_providers", "schedule": 5.0},
     "compact-operational-records": {"task": "apps.event_bus.tasks.compact_operational_records", "schedule": 86400.0},
+    "research-daily-refresh": {"task": "apps.research.tasks.refresh_research_pipeline", "schedule": 86400.0},
+    "research-weekly-scoring": {"task": "apps.research.tasks.score_current_candidates", "schedule": 604800.0},
 }
 IB_GATEWAY_SERVICE_URL = os.getenv("IB_GATEWAY_SERVICE_URL", "http://localhost:8080/api/v1")
 GATEWAY_SERVICE_TOKEN = os.getenv("GATEWAY_SERVICE_TOKEN", "test-token")
@@ -102,3 +105,20 @@ BROKER_SNAPSHOT_RETENTION_DAYS = int(os.getenv("BROKER_SNAPSHOT_RETENTION_DAYS",
 READINESS_RETENTION_DAYS = int(os.getenv("READINESS_RETENTION_DAYS", "30"))
 STREAM_HEALTH_RETENTION_DAYS = int(os.getenv("STREAM_HEALTH_RETENTION_DAYS", "30"))
 OPERATIONAL_COMPACTION_BATCH_SIZE = int(os.getenv("OPERATIONAL_COMPACTION_BATCH_SIZE", "1000"))
+RESEARCH_ENABLED = os.getenv("RESEARCH_ENABLED", "false").lower() == "true"
+RESEARCH_BUNDLE_PATH = os.getenv(
+    "RESEARCH_BUNDLE_PATH", str(BASE_DIR.parent / "Trading_Engine_Stock_Strategy_Universe_JSON")
+)
+RESEARCH_ARTIFACT_ROOT = os.getenv("RESEARCH_ARTIFACT_ROOT", str(BASE_DIR / "research_artifacts"))
+RESEARCH_MAX_PARALLEL_TASKS = int(os.getenv("RESEARCH_MAX_PARALLEL_TASKS", "4"))
+RESEARCH_DAILY_PROVIDER = os.getenv("RESEARCH_DAILY_PROVIDER", "FINNHUB").upper()
+RESEARCH_SCORE_MAX_AGE_DAYS = int(os.getenv("RESEARCH_SCORE_MAX_AGE_DAYS", "7"))
+RESEARCH_RECOMMENDATION_MAX_AGE_DAYS = int(os.getenv("RESEARCH_RECOMMENDATION_MAX_AGE_DAYS", "1"))
+RESEARCH_TASK_ROUTES = {
+    "apps.research.tasks.refresh_research_pipeline": {"queue": "research_data"},
+    "apps.research.tasks.calculate_features": {"queue": "research_features"},
+    "apps.research.tasks.run_experiment": {"queue": "research_backtests"},
+    "apps.research.tasks.score_current_candidates": {"queue": "research_scoring"},
+    "apps.research.tasks.generate_recommendation": {"queue": "research_recommendations"},
+}
+CELERY_TASK_ROUTES = RESEARCH_TASK_ROUTES

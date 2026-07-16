@@ -246,14 +246,38 @@ def snapshot_plan(plan):
     policy_rows = {}
     for goal in goals:
         rules = resolved_goal_rules(goal.timeframe_bucket, goal.risk_level)
-        goal_rows.append({
+        goal_row = {
             "id": goal.pk,
             "name": goal.name,
             "allocation_weight": decimal_string(goal.allocation_weight),
             "timeframe_bucket": goal.timeframe_bucket,
             "risk_level": goal.risk_level,
             "display_order": goal.display_order,
-        })
+            "construction_source": goal.construction_source,
+            "accepted_recommendation_run_id": goal.accepted_recommendation_run_id,
+        }
+        if goal.construction_source == "ACCEPTED_RECOMMENDATION":
+            if not goal.accepted_recommendation_run_id:
+                raise ConstructionError("Recommendation construction mode requires an accepted recommendation")
+            from apps.research.services.acceptance import validate_recommendation_for_construction
+
+            try:
+                accepted = validate_recommendation_for_construction(goal.accepted_recommendation_run)
+            except ValueError as exc:
+                raise ConstructionError(str(exc)) from exc
+            goal_row["accepted_recommendation"] = {
+                "run_id": goal.accepted_recommendation_run_id,
+                "expires_at": goal.accepted_recommendation_run.expires_at.isoformat(),
+                "dataset_version_id": goal.accepted_recommendation_run.dataset_version_id,
+                "protocol_version_id": goal.accepted_recommendation_run.protocol_version_id,
+                "cash_weight": decimal_string(accepted["cash_weight"]),
+                "stock_weights": {
+                    str(instrument_id): decimal_string(weight)
+                    for instrument_id, weight in accepted["stock_weights"].items()
+                },
+                "group_weights": accepted["group_weights"],
+            }
+        goal_rows.append(goal_row)
         policy_rows[str(goal.pk)] = {
             key: decimal_string(value) if isinstance(value, D) else value for key, value in rules.items()
         }
@@ -465,7 +489,24 @@ def run_construction(construction_run, *, refresh_history=True):
                 "risk_contributions": {},
                 "warnings": [],
             }
-            if goal["timeframe_bucket"] == "NOW":
+            construction_source = goal.get("construction_source", "MANUAL_OPTIMIZER")
+            if construction_source == "ACCEPTED_RECOMMENDATION":
+                accepted = goal.get("accepted_recommendation") or {}
+                local_weights = {
+                    int(instrument_id): D(weight)
+                    for instrument_id, weight in accepted.get("stock_weights", {}).items()
+                }
+                if set(local_weights) != set(instrument_ids):
+                    raise ConstructionError(
+                        f"Accepted recommendation selections changed for goal {goal['name']}; detach or regenerate"
+                    )
+                if any(weight > maximum_stock for weight in local_weights.values()):
+                    raise ConstructionError(f"Accepted recommendation exceeds the live stock cap for goal {goal['name']}")
+                cash_weight = D(accepted.get("cash_weight", 1))
+                if cash_weight < minimum_cash or sum(local_weights.values(), D(0)) + cash_weight != D(1):
+                    raise ConstructionError(f"Accepted recommendation violates the live cash floor for goal {goal['name']}")
+                metrics = _single_stock_metrics(instruments, local_weights, refresh_history)
+            elif goal["timeframe_bucket"] == "NOW":
                 cash_weight = D(1)
             elif not instruments:
                 cash_weight = D(1)
@@ -612,7 +653,9 @@ def run_construction(construction_run, *, refresh_history=True):
                 "goal_nav": decimal_string(run.nav * allocation),
                 "timeframe_bucket": goal["timeframe_bucket"],
                 "risk_level": goal["risk_level"],
-                "optimizer_method": rules["optimizer_method"],
+                "optimizer_method": "ACCEPTED_RECOMMENDATION" if construction_source == "ACCEPTED_RECOMMENDATION" else rules["optimizer_method"],
+                "construction_source": construction_source,
+                "accepted_recommendation_run_id": goal.get("accepted_recommendation_run_id"),
                 "cash_weight": decimal_string(cash_weight),
                 "maximum_stock_weight": decimal_string(maximum_stock),
                 "stocks": stocks,
@@ -827,6 +870,21 @@ def apply_construction_run(construction_run, idempotency_key, *, mode="SHADOW"):
     )
     if run.status != "COMPLETED":
         raise ConstructionError("Only a completed construction run can be applied")
+    recommendation_ids = [
+        item.get("accepted_recommendation_run_id")
+        for item in run.goal_snapshot
+        if item.get("construction_source") == "ACCEPTED_RECOMMENDATION"
+    ]
+    if recommendation_ids:
+        from apps.research.models import GoalRecommendationRun
+
+        current = {
+            item.pk: item for item in GoalRecommendationRun.objects.filter(pk__in=recommendation_ids)
+        }
+        for recommendation_id in recommendation_ids:
+            recommendation = current.get(recommendation_id)
+            if not recommendation or recommendation.expires_at <= timezone.now():
+                raise ConstructionError("Accepted recommendation expired after preview; regenerate before apply")
     if any(item.get("apply_blocked") for item in run.goal_results):
         raise ConstructionError(
             "Every non-cash-only goal must include at least one stock, and enabled strategy shares must total exactly 100%"

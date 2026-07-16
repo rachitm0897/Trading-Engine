@@ -17,6 +17,10 @@ class PortfolioConstructionPlan(models.Model):
 
 
 class PortfolioGoalAllocation(models.Model):
+    CONSTRUCTION_SOURCES = [
+        ("MANUAL_OPTIMIZER", "Manual optimizer"),
+        ("ACCEPTED_RECOMMENDATION", "Accepted recommendation"),
+    ]
     plan = models.ForeignKey(PortfolioConstructionPlan, on_delete=models.CASCADE, related_name="goals")
     name = models.CharField(max_length=128)
     allocation_weight = models.DecimalField(max_digits=10, decimal_places=8)
@@ -24,6 +28,16 @@ class PortfolioGoalAllocation(models.Model):
     risk_level = models.PositiveSmallIntegerField(choices=[(level, label) for level, _, label in RISK_OPTIONS])
     enabled = models.BooleanField(default=True)
     display_order = models.PositiveSmallIntegerField(default=0)
+    construction_source = models.CharField(
+        max_length=32, choices=CONSTRUCTION_SOURCES, default="MANUAL_OPTIMIZER"
+    )
+    accepted_recommendation_run = models.ForeignKey(
+        "research.GoalRecommendationRun",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="accepted_goals",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

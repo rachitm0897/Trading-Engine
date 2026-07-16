@@ -72,6 +72,8 @@ def _goal_row(goal):
         "risk_level": goal.risk_level,
         "enabled": goal.enabled,
         "display_order": goal.display_order,
+        "construction_source": goal.construction_source,
+        "accepted_recommendation_run_id": goal.accepted_recommendation_run_id,
         "resolved_rules": rules,
         "instrument_count": goal.instrument_selections.filter(enabled=True).count(),
         "created_at": goal.created_at,
@@ -347,6 +349,9 @@ def goal_detail(request, goal_id):
         with transaction.atomic():
             goal = PortfolioGoalAllocation.objects.select_for_update().select_related("plan").get(pk=goal_id)
             plan = PortfolioConstructionPlan.objects.select_for_update().get(pk=goal.plan_id)
+            from apps.research.services.acceptance import require_manual_edit_allowed
+
+            require_manual_edit_allowed(goal)
             if request.method == "DELETE":
                 result = {"id": goal.pk, "name": goal.name, "plan_id": plan.pk}
                 goal.delete()
@@ -393,6 +398,9 @@ def goal_instruments(request, goal_id):
     if request.method != "POST":
         return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "GET or POST required", "details": {}})
     try:
+        from apps.research.services.acceptance import require_manual_edit_allowed
+
+        require_manual_edit_allowed(goal)
         payload = _payload(request)
         allowed = {"instrument_id", "enabled", "minimum_weight", "maximum_weight", "display_order"}
         unknown = set(payload) - allowed
@@ -437,6 +445,9 @@ def instrument_detail(request, goal_instrument_id):
             selection = GoalInstrumentSelection.objects.select_related(
                 "goal_allocation__plan", "instrument",
             ).get(pk=goal_instrument_id)
+            from apps.research.services.acceptance import require_manual_edit_allowed
+
+            require_manual_edit_allowed(selection.goal_allocation)
             plan = PortfolioConstructionPlan.objects.select_for_update().get(pk=selection.goal_allocation.plan_id)
             if request.method == "DELETE":
                 result = {"id": selection.pk, "goal_id": selection.goal_allocation_id}
@@ -565,6 +576,9 @@ def instrument_assignments(request, goal_instrument_id):
     if request.method != "POST":
         return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "GET or POST required", "details": {}})
     try:
+        from apps.research.services.acceptance import require_manual_edit_allowed
+
+        require_manual_edit_allowed(selection.goal_allocation)
         values = _assignment_values(_payload(request), selection)
         with transaction.atomic():
             assignment = GoalStrategyAssignment.objects.create(
@@ -592,6 +606,9 @@ def assignment_detail(request, assignment_id):
                 "goal_instrument_selection__instrument", "strategy_definition", "risk_policy", "order_policy",
             ).get(pk=assignment_id)
             selection = assignment.goal_instrument_selection
+            from apps.research.services.acceptance import require_manual_edit_allowed
+
+            require_manual_edit_allowed(selection.goal_allocation)
             plan = PortfolioConstructionPlan.objects.select_for_update().get(pk=selection.goal_allocation.plan_id)
             if request.method == "DELETE":
                 result = {"id": assignment.pk, "goal_instrument_id": selection.pk}

@@ -6,6 +6,7 @@ COPY Backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY Backend/ .
 COPY streaming/kafka/schemas /streaming/kafka/schemas
+COPY Trading_Engine_Stock_Strategy_Universe_JSON /research_bundle
 RUN chmod +x entrypoint.sh
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --retries=5 CMD curl -fsS http://127.0.0.1:${PORT:-8000}/healthz || exit 1
