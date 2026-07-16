@@ -25,11 +25,11 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
-  MetricCard,
   PageHeader,
-  Panel,
   Skeleton,
   StatusBadge,
+  TerminalMetric,
+  TerminalPanel,
   formatCompact,
   formatMoney,
   formatNumber,
@@ -196,10 +196,10 @@ export function PortfolioBuilderPage() {
       title="Portfolio Builder"
       description="Divide one portfolio into goal slices, construct each slice independently, and apply one combined paper-only rebalance."
     />
-    {!plan ? <Panel title="Create a construction plan" description="One plan organizes up to ten virtual goals for this portfolio.">
+    {!plan ? <TerminalPanel id="create-construction-plan" title="Create a construction plan" description="One plan organizes up to ten virtual goals for this portfolio.">
       <button className="button-primary" disabled={createPlan.isPending} onClick={() => createPlan.mutate()}>{createPlan.isPending ? 'Creating…' : 'Start Portfolio Builder'}</button>
       {createPlan.isError && <ErrorState error={createPlan.error} compact />}
-    </Panel> : <>
+    </TerminalPanel> : <>
       <ol className="builder-steps" aria-label="Portfolio Builder steps">
         {['Allocate goals', 'Add stocks & assign strategies', 'Preview', 'Apply'].map((label, index) => {
           const number = index + 1
@@ -208,7 +208,7 @@ export function PortfolioBuilderPage() {
           </li>
         })}
       </ol>
-      {step === 1 && <Panel title="1. Allocate goals" description="Draft percentages may be incomplete while editing; continuing requires exactly 100%.">
+      {step === 1 && <TerminalPanel id="allocate-goals" title="1. Allocate goals" description="Draft percentages may be incomplete while editing; continuing requires exactly 100%." collapsible={false}>
         <div className="builder-total"><strong>Allocated: {formatNumber(allocated)}% of 100%</strong><span className={validDraft ? 'positive-text' : 'field-error'}>{validDraft ? 'Ready to continue' : localErrors.join(' · ')}</span></div>
         <div className="goal-editor-list">
           {drafts.map((goal, index) => <GoalEditor
@@ -227,8 +227,8 @@ export function PortfolioBuilderPage() {
           <button className="button-primary" disabled={!validDraft || saveGoals.isPending} onClick={() => saveGoals.mutate(undefined, {onSuccess: () => setStep(2)})}>{saveGoals.isPending ? 'Saving…' : 'Save & select investments'}</button>
         </div>
         {(addGoal.isError || saveGoals.isError || removeGoal.isError) && <ErrorState title="Goal changes were not saved" error={addGoal.error || saveGoals.error || removeGoal.error} compact />}
-      </Panel>}
-      {step === 2 && <Panel title="2. Add stocks and assign strategies" description="Stocks define each optimizer universe. Strategy assignments divide ownership of a stock weight without changing it.">
+      </TerminalPanel>}
+      {step === 2 && <TerminalPanel id="stock-strategy-assignments" title="2. Add stocks and assign strategies" description="Stocks define each optimizer universe. Strategy assignments divide ownership of a stock weight without changing it." collapsible={false}>
         <div className="goal-selection-list">
           {plan.goals.filter((goal) => goal.enabled).map((goal) => <GoalSelections key={goal.id} goal={goal} instruments={stockInstruments} />)}
         </div>
@@ -240,9 +240,9 @@ export function PortfolioBuilderPage() {
           <ErrorState title="Construction preview failed" error={previewMutation.error} compact />
           {previewErrorMessage.includes('Finnhub API key is not configured') && <p className="inline-note">Portfolio preview needs recent price history. <Link to="/system">Configure Finnhub in System</Link>, then retry.</p>}
         </>}
-      </Panel>}
+      </TerminalPanel>}
       {step === 3 && <PreviewStep run={shownPreview} onBack={() => setStep(2)} onContinue={() => setStep(4)} />}
-      {step === 4 && <Panel title="4. Apply once" description={`Apply one combined target through the existing ${system.data?.execution_mode || 'SHADOW'} rebalance and execution safety pipeline.`}>
+      {step === 4 && <TerminalPanel id="apply-construction" title="4. Apply once" description={`Apply one combined target through the existing ${system.data?.execution_mode || 'SHADOW'} rebalance and execution safety pipeline.`} collapsible={false}>
         {!shownPreview ? <EmptyState title="No completed preview" description="Return to step 2 and preview the construction first." /> : <>
           <div className="apply-summary">
             <StatusBadge status={shownPreview.application_status} />
@@ -252,7 +252,7 @@ export function PortfolioBuilderPage() {
           {shownPreview.goals?.some((goal) => goal.apply_blocked) && <div className="inline-warning"><StatusBadge status="BLOCKED" /><p>Add at least one stock to every non-NOW goal and make each stock's enabled strategy shares total 100% before applying.</p></div>}
           {applyMutation.isError && <ErrorState title="Construction application was blocked" error={applyMutation.error} compact />}
         </>}
-      </Panel>}
+      </TerminalPanel>}
       <ConfirmActionDialog
         open={confirmOpen}
         title="Apply the combined portfolio target?"
@@ -429,16 +429,16 @@ function AssignmentFields({draft, setDraft, strategies, strategy, policies, pref
 }
 
 function PreviewStep({run, onBack, onContinue}: {run: PortfolioConstructionRun | null; onBack: () => void; onContinue: () => void}) {
-  if (!run) return <Panel title="3. Preview" description="Construct every goal before reviewing the combined portfolio."><EmptyState title="No preview yet" /><button className="button-secondary" onClick={onBack}>Back to stocks and assignments</button></Panel>
+  if (!run) return <TerminalPanel id="construction-preview-empty" title="3. Preview" description="Construct every goal before reviewing the combined portfolio." collapsible={false}><EmptyState title="No preview yet" /><button className="button-secondary" onClick={onBack}>Back to stocks and assignments</button></TerminalPanel>
   const targets = run.targets || []
-  return <Panel title="3. Preview" description="Local goal targets are weighted and merged into one final portfolio target and one net trade list.">
+  return <TerminalPanel id="construction-preview" title="3. Preview" description="Local goal targets are weighted and merged into one final portfolio target and one net trade list." collapsible={false}>
     <section className="metric-grid compact">
-      <MetricCard label="Expected return" value={formatPercent(run.metrics.expected_return)} />
-      <MetricCard label="Expected volatility" value={formatPercent(run.metrics.expected_volatility)} />
-      <MetricCard label="Sharpe ratio" value={formatNumber(run.metrics.sharpe_ratio)} />
-      <MetricCard label="Combined cash" value={formatPercent(run.final_target_weights.cash)} />
-      <MetricCard label="Net turnover" value={formatPercent(run.rebalance?.planned_turnover)} />
-      <MetricCard label="Planner" value={<StatusBadge status={run.rebalance?.mode || 'SHADOW'} />} />
+      <TerminalMetric label="Expected return" value={formatPercent(run.metrics.expected_return)} />
+      <TerminalMetric label="Expected volatility" value={formatPercent(run.metrics.expected_volatility)} />
+      <TerminalMetric label="Sharpe ratio" value={formatNumber(run.metrics.sharpe_ratio)} />
+      <TerminalMetric label="Combined cash" value={formatPercent(run.final_target_weights.cash)} />
+      <TerminalMetric label="Net turnover" value={formatPercent(run.rebalance?.planned_turnover)} />
+      <TerminalMetric label="Planner" value={<StatusBadge status={run.rebalance?.mode || 'SHADOW'} />} />
     </section>
     <div className="goal-preview-grid">{(run.goals || []).map((goal) => <section key={goal.goal_id} className="goal-preview-card"><header><div><h3>{goal.name}</h3><p>{formatPercent(goal.allocation_weight)} · {goal.timeframe_bucket} · Risk {goal.risk_level}</p></div><StatusBadge status={goal.optimizer_method || 'CASH ONLY'} /></header><div className="goal-preview-cash"><span>Cash inside goal</span><strong>{formatPercent(goal.cash_weight)}</strong></div><ul>{goal.stocks.map((stock) => <li key={stock.instrument_id}><strong>{stock.symbol}</strong><span>{formatPercent(stock.local_weight)} local stock weight · {formatPercent(stock.portfolio_contribution)} complete-portfolio stock contribution</span><ul>{stock.strategies.map((strategy) => <li key={strategy.assignment_id}><span>{strategy.strategy_name} · {formatPercent(strategy.strategy_share)} share · {formatPercent(strategy.portfolio_weight)} strategy-controlled portfolio weight</span></li>)}</ul>{!stock.strategy_share_valid && <span className="field-error">Strategy shares total {formatPercent(stock.strategy_share_total)}; 100% is required.</span>}</li>)}</ul>{!goal.stocks.length && <p className="inline-note">Cash-only target</p>}{goal.warnings.length > 0 && <p className="field-help">{goal.warnings.map((item) => item.message || item.code).join(' · ')}</p>}</section>)}</div>
     <div><h3>Aggregated strategy instance targets</h3><DataTable rows={run.metrics.strategy_targets || []} columns={[
@@ -462,5 +462,5 @@ function PreviewStep({run, onBack, onContinue}: {run: PortfolioConstructionRun |
     ]} getRowKey={(item) => item.instrument_id} emptyTitle="No net trades required" /></div>
     {run.warnings.length > 0 && <div className="inline-warning"><StatusBadge status="WARNING" /><p>{formatCompact(run.warnings)}</p></div>}
     <div className="system-actions"><button className="button-secondary" onClick={onBack}>Back to stocks and assignments</button><button className="button-primary" onClick={onContinue}>Continue to apply</button></div>
-  </Panel>
+  </TerminalPanel>
 }
