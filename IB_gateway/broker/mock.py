@@ -1,5 +1,5 @@
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from .base import BrokerAdapter
 
 class MockBrokerAdapter(BrokerAdapter):
@@ -27,16 +27,25 @@ class MockBrokerAdapter(BrokerAdapter):
         count=min(int(str(payload.get("duration", "30 D")).split()[0]), 30)
         end=date.today()
         bars=[]
+        intraday = payload.get("bar_size", "1 day") != "1 day"
         for offset in range(count, 0, -1):
             day=end-timedelta(days=offset)
             if day.weekday() >= 5:
                 continue
-            price=100 + len(bars)
-            bars.append({"date":day.isoformat(),"open":str(price),"high":str(price+1),
-                         "low":str(price-1),"close":str(price),"volume":"1000000",
-                         "bar_count":1,"average":str(price)})
+            starts = [datetime(day.year, day.month, day.day, 15, 0, tzinfo=timezone.utc) + timedelta(hours=hour) for hour in range(6)] if intraday else [day]
+            for start in starts:
+                price=100 + len(bars) / 10
+                bars.append({"date":start.isoformat() if intraday else start.isoformat(),"open":str(price),"high":str(price+1),
+                             "low":str(price-1),"close":str(price),"volume":"1000000",
+                             "bar_count":1,"average":str(price)})
         return {"conid":int(payload["conid"]),"symbol":payload["symbol"],"provider":"IBKR",
-                "what_to_show":payload.get("what_to_show","TRADES"),"bars":bars}
+                "what_to_show":payload.get("what_to_show","TRADES"),"bar_size":payload.get("bar_size", "1 day"),"bars":bars}
+    def historical_schedule(self, payload):
+        end=date.today();sessions=[]
+        for offset in range(int(payload.get("days",5)),0,-1):
+            day=end-timedelta(days=offset)
+            if day.weekday()<5:sessions.append({"reference_date":day.isoformat(),"start":f"{day.isoformat()}T14:30:00+00:00","end":f"{day.isoformat()}T21:00:00+00:00"})
+        return {"conid":int(payload["conid"]),"symbol":payload["symbol"],"provider":"IBKR","timezone":"UTC","sessions":sessions}
     def subscribe_market_data(self,payload):
         key=payload["subscription_key"];runtime_key=payload.get("gateway_subscription_key") or key
         self.subscriptions[runtime_key]=dict(payload)

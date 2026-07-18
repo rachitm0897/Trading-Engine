@@ -23,8 +23,8 @@ from ..models import (
 )
 from ..enums import ImplementationStatus
 from .classification import hierarchy
-from .mvp import EXPECTED_STOCKS, EXPECTED_STRATEGIES, readiness_matrix
 from .optimizer import RecommendationOptimizationError, optimize_sleeves
+from .recommendation_cache import target_stock_count
 
 
 D = Decimal
@@ -36,7 +36,7 @@ def _policy_for_goal(goal):
     name = f"LIVE-{goal.timeframe_bucket}-R{goal.risk_level}"
     defaults = {
         "minimum_candidate_score":65,"maximum_candidate_age_days":settings.RESEARCH_SCORE_MAX_AGE_DAYS,
-        "number_of_stocks":5,"minimum_sectors":3,"sector_cap":"0.35","industry_cap":"0.25",
+        "number_of_stocks":target_stock_count(goal.timeframe_bucket, goal.risk_level),"minimum_sectors":3,"sector_cap":"0.35","industry_cap":"0.25",
         "sub_industry_cap":"0.20","per_stock_cap":rules["maximum_stock_weight"],
         "strategy_family_cap":"0.40","maximum_turnover":"1.00","minimum_cash":rules["minimum_cash_weight"],
         "target_volatility":D("0.05")+D(goal.risk_level)*D("0.03"),
@@ -96,7 +96,7 @@ def _latest_builder_eligibility(instrument_id, as_of_date):
     return InstrumentEligibilitySnapshot.objects.filter(
         universe_member__instrument_id=instrument_id,
         as_of_date__lte=as_of_date,
-        builder_eligible=True,
+        research_eligible=True,
     ).select_related("universe_member").order_by("-as_of_date").first()
 
 
@@ -112,8 +112,6 @@ def _candidate_rows(run):
         dataset_version=run.dataset_version,
         instrument__isnull=False,
         strategy__role="EXECUTION",
-        instrument__symbol__in=EXPECTED_STOCKS,
-        strategy__implementations__executable_strategy_definition__key__in=EXPECTED_STRATEGIES,
     ).select_related("strategy", "instrument__issuer").order_by("-score").distinct()
     rows = []
     for score in scores:
@@ -122,7 +120,8 @@ def _candidate_rows(run):
             continue
         implementation = ResearchStrategyImplementation.objects.filter(
             research_strategy=score.strategy,
-            status__in=[ImplementationStatus.BUILDER_READY,ImplementationStatus.APPROVED],
+            status__in=[ImplementationStatus.BUILDER_READY,ImplementationStatus.APPROVED,
+                        ImplementationStatus.SHADOW_VALIDATED,ImplementationStatus.APPROVED_FOR_RECOMMENDATION],
             exact_semantic_match=True,
             executable_strategy_definition__enabled=True,
         ).select_related("executable_strategy_definition").first()
@@ -167,30 +166,9 @@ def _candidate_rows(run):
     allowed_instruments=[];selected=[]
     for row in rows:
         if row["instrument_id"] in allowed_instruments:continue
-        if len(allowed_instruments)>=min(5,run.policy.number_of_stocks):continue
+        if len(allowed_instruments)>=min(settings.RECOMMENDATION_CANDIDATE_POOL_SIZE,run.policy.number_of_stocks):continue
         allowed_instruments.append(row["instrument_id"]);selected.append(row)
     return selected
-
-
-def _blockers_for_empty_candidates():
-    if not settings.RESEARCH_ENABLED or not settings.RESEARCH_MVP_ENABLED:
-        return [{"code":"RESEARCH_DISABLED","message":"The recommendation MVP is disabled"}]
-    matrix=readiness_matrix();codes=[]
-    for stock in matrix["stocks"]:
-        codes.extend(stock.get("blockers",[]))
-        for cell in stock.get("strategies",[]):codes.extend(cell.get("blockers",[]))
-    allowed={
-        "FINNHUB_MAPPING_MISSING":"A pilot stock has no verified Finnhub provider mapping",
-        "IBKR_CONTRACT_NOT_QUALIFIED":"A pilot stock has no exact qualified IBKR contract",
-        "INSUFFICIENT_VALID_HISTORY":"A pilot stock does not have 756 valid adjusted daily bars",
-        "NO_VALIDATED_IMPLEMENTATION":"A pilot strategy has no semantically validated runtime adapter",
-        "NO_PASSING_BACKTEST":"A pilot stock-strategy pair has no completed passing backtest",
-        "STRATEGY_NOT_BUILDER_READY":"A pilot strategy still requires SHADOW validation before Builder use",
-    }
-    unique=[code for code in dict.fromkeys(codes) if code in allowed]
-    if not unique:unique=["NO_CANDIDATE_FOR_TIMEFRAME_RISK"]
-    return [{"code":code,"message":allowed.get(code,"No approved candidate supports this timeframe and risk")}
-            for code in unique]
 
 
 def run_recommendation(run_or_id):
@@ -211,10 +189,7 @@ def run_recommendation(run_or_id):
         else:
             candidates = _candidate_rows(run)
             if not candidates:
-                blockers=_blockers_for_empty_candidates()
-                run.candidate_snapshot=[];run.optimizer_snapshot={};run.metrics={"sleeve_count":0,"blockers":blockers}
-                run.warnings=blockers;run.status="BLOCKED";run.error=blockers[0]["code"]
-                run.completed_at=timezone.now();run.save();return run
+                raise ValueError("No current full-model candidates; use the plan recommendation batch fallback tiers")
             else:
                 live_rules=resolved_goal_rules(run.goal_allocation.timeframe_bucket,run.goal_allocation.risk_level)
                 constraints = {

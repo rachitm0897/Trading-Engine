@@ -1,22 +1,31 @@
 # Finflock IBKR Trading Execution Engine
 
-A paper-first execution platform that turns deterministic strategy targets into aggregated portfolio targets, risk-checked orders, broker executions, append-only ledgers, and reconciliation records. It is a new, self-contained codebase; the referenced `ibkr_gateway_docker_prototype` is not a dependency and was not modified.
+A paper-first execution platform that converts deterministic portfolio targets into risk-checked orders, broker executions, append-only ledgers, and reconciliation records.
 
 ## Applications
 
-- `Backend/` — Django/DRF, PostgreSQL, Redis, Celery, strategy/allocation/risk/OMS/execution/reconciliation.
+- `Backend/` — Django, PostgreSQL, Redis, Celery, research, construction, allocation, risk, OMS, execution, and reconciliation.
 - `Frontend/` — React/TypeScript operator application served by Nginx.
-- `IB_gateway/` — one-port Django, IBC, IB Gateway, Xvfb/Fluxbox, VNC/noVNC, Nginx, Supervisor, and the sole `ib_async` worker.
+- `IB_gateway/` — the sole `ib_async` connection owner, plus IB Gateway/IBC and noVNC behind one public Nginx port.
+- `streaming/` — private Kafka contracts and PyFlink jobs; PostgreSQL remains the financial source of truth.
 
-`streaming/` contains private Kafka contracts and PyFlink jobs; it is infrastructure, not a fourth public application. PostgreSQL remains the financial source of truth. Strategies, Kafka, Flink and the Frontend cannot access the TWS socket; only the Gateway worker connects to `127.0.0.1:4001/4002`.
+Strategies, Kafka, Flink, and the frontend cannot access the TWS socket. Kafka uses a transactional PostgreSQL outbox; sizing, risk, OMS, Gateway, ledgers, kill switch, and reconciliation remain mandatory.
 
-Kafka carries versioned immutable events through a transactional PostgreSQL outbox. PyFlink normalizes market data, creates event-time 1m/5m/1d OHLCV bars, computes SMA/RSI/Donchian/momentum/volatility/average-volume indicators and publishes price-quality transitions. Backend consumers persist outputs idempotently. Allocation and rebalancing are shadow-first and can create only `OrderIntent`; sizing, risk, OMS, Gateway, ledgers and reconciliation remain mandatory.
+The [Portfolio Builder](docs/PORTFOLIO_BUILDER.md) now uses Goals → Recommendations → Preview & Apply. One plan-level request selects diversified stocks and one primary long-only strategy per stock from cached full-universe research. Duplicate stocks and compatible identities aggregate across goals into one combined target. Generation creates no orders, rebalances, strategy instances, enablement, or LIVE path; apply remains explicit and every created or updated instance remains disabled in SHADOW.
 
-The deterministic [Portfolio Builder](docs/PORTFOLIO_BUILDER.md) divides one real portfolio into virtual goal allocations, constructs each goal from a qualified stock universe with fixed timeframe/risk rules, and separately divides each stock weight among schema-configured strategies. Strategies own constructed stock weight but do not influence Markowitz weighting. Duplicate stocks and compatible strategy identities aggregate across goals, one combined stock target enters the existing rebalancer, and every created or updated strategy instance remains disabled in `SHADOW` mode with an explicit target weight. Goals do not create separate broker portfolios or financial ledgers.
+The [Research Universe](docs/RESEARCH_UNIVERSE.md) validates and imports the complete 500-stock/97-strategy bundle. Every catalogue strategy has an explicit audited Python implementation and scope-aware engine; JSON formula text is metadata and is never evaluated. Incremental daily/intraday data, corporate actions, fundamentals, analyst estimates, events, point-in-time features, bounded experiments, role-specific scores, and recommendation caches run outside web requests. Pair/basket models remain research-only until atomic multi-instrument and short execution exist.
 
-The versioned [Research Universe](docs/RESEARCH_UNIVERSE.md) imports the repository's 500-stock/97-strategy JSON bundle only after schema, hash, count, taxonomy, and enum validation. Strategy JSON is catalog metadata, never evaluated runtime code. Point-in-time data, cost-aware walk-forward experiments, hard rejection and scoring, explicit human promotion, and SHADOW evidence gate executable mappings. Cached approved sleeves can produce a GICS-aware goal recommendation; acceptance only fills the existing Builder selections and assignments, and exact accepted weights still require the normal preview and one combined SHADOW/PAPER apply.
+After activating the bundle, run:
 
-The operational recommendation pilot is deliberately fixed to AAPL, JPM, XOM, JNJ, and WMT across Fixed Weight, SMA, RSI, Donchian, and Volatility-Target Momentum. After importing and activating the bundle, run `python manage.py bootstrap_recommendation_mvp`. The command is idempotent, creates the 25 deterministic experiment groups, runs only changed inputs, scores supported timeframe/risk pairs, and prints the 5×5 readiness matrix. Missing mappings, history, exact IBKR contracts, passing tests, or SHADOW evidence remain explicit blockers; no substitute stock, fake score, order, enabled strategy, or LIVE path is created.
+```powershell
+cd Backend
+python manage.py bootstrap_recommendation_system
+python manage.py warm_recommendation_cache
+```
+
+The scheduled data, feature, experiment, and scoring tasks must run before Tier 1 caches are expected. Finalists are exactly IBKR-qualified with deterministic substitutions. Missing optional data moves through explicit stale/full, price-only, baseline, and validated-snapshot fallbacks; the system never invents data, scores, contracts, or SHADOW evidence.
+
+`GET /healthz` is the process/database liveness probe. `GET /readyz` is the recommendation deployment gate and returns ready only after the active 500-member universe, 97-entry registry, and all 20 valid timeframe/risk cache profiles are current. Route recommendation traffic only after `/readyz` returns 200.
 
 ## Local start
 
@@ -34,7 +43,7 @@ Local URLs:
 - Gateway health: <http://localhost:8080/healthz>
 - noVNC: <http://localhost:8080/novnc/vnc.html>
 
-Compose defaults to the real `ib_async` broker adapter in paper mode. Supply IBKR and noVNC secrets in the root `.env`, start the stack, and use noVNC for login/2FA when IBKR requires operator action. Accounts, account values, positions, open/completed orders, and executions are synchronized through the Gateway event buffer into Backend PostgreSQL. No demo portfolio, instrument, account, or order data is created.
+Compose defaults to the real adapter in IBKR paper mode. Supply credentials in `.env` and use noVNC for login/2FA. No demo account, portfolio, instrument, or order data is created.
 
 ## Tests
 
@@ -44,21 +53,18 @@ cd ../IB_gateway && pytest
 cd ../Frontend && npm install && npm test && npm run build
 cd .. && ./.venv/Scripts/python -m pytest streaming/flink/tests
 docker compose config --quiet
-docker compose up --build -d
-docker compose ps
-powershell -NoProfile -File docs/streaming_recovery_smoke.ps1
 ```
 
-See [local development](docs/LOCAL_DEVELOPMENT.md), the [frontend redesign guide](docs/FRONTEND_REDESIGN.md), the [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), the [advanced target optimizer](docs/PORTFOLIO_OPTIMIZATION.md), the [research universe](docs/RESEARCH_UNIVERSE.md), the [MVP runbook](docs/RECOMMENDATION_MVP.md), the [backtesting protocol](docs/BACKTESTING_PROTOCOL.md), the [strategy promotion workflow](docs/STRATEGY_PROMOTION.md), and the [recommendation engine](docs/RECOMMENDATION_ENGINE.md).
+See [local development](docs/LOCAL_DEVELOPMENT.md), [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), [research universe](docs/RESEARCH_UNIVERSE.md), [backtesting](docs/BACKTESTING_PROTOCOL.md), [promotion](docs/STRATEGY_PROMOTION.md), and the [recommendation engine](docs/RECOMMENDATION_ENGINE.md).
 
 ## QFS
 
-The supported public URLs are:
+Supported public URLs are:
 
 - `https://qfsplatform.com/trading_eng_backend`
 - `https://qfsplatform.com/trading_eng_frontend`
 - `https://qfsplatform.com/trading_eng_gateway`
 
-Each application exposes one configurable `${PORT}`. Base paths, public URLs, and forwarded headers are configurable; see [QFS deployment](docs/QFS_DEPLOYMENT.md).
+Each application exposes one configurable `${PORT}`. See [QFS deployment](docs/QFS_DEPLOYMENT.md).
 
-> This application is paper-only and rejects live configuration at startup. Research support is daily and long-only for actionable recommendations; intraday, short, pair/basket, fundamental, and event strategies remain blocked until their required point-in-time data and runtime architecture exist.
+> LIVE configuration is rejected at startup. Actionable recommendations are long-only. Intraday, income, event, selector, allocator, and overlay research contribute when point-in-time data is available; short and pair/basket execution remain disabled.

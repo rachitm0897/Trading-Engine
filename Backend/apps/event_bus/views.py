@@ -92,6 +92,56 @@ def prometheus_metrics(request):
         reconnects.set((websocket_metric.value or {}).get("reconnect_count",0))
         for outcome,total in ((websocket_metric.value or {}).get("trade_aggregation") or {}).items():
             trade_drops.labels(outcome=outcome).set(total)
+    from django.db.models import Max
+    from django.utils import timezone
+    from apps.audit.models import AuditEvent
+    from apps.research.models import (
+        InstrumentFeatureSnapshot, RecommendationBatchRun, RecommendationCacheSnapshot,
+        ResearchCandidateScore, ResearchDataCoverageSummary, ResearchExperiment, ResearchStrategyImplementation,
+        ResearchUniverseMember,
+    )
+    Gauge("finflock_research_universe_members_mapped", "Active recommendation members mapped to instruments", registry=registry).set(
+        ResearchUniverseMember.objects.filter(universe__active=True, active=True, instrument__isnull=False).count()
+    )
+    coverage_gauge = Gauge("finflock_research_coverage_members", "Member coverage by research dataset", ["dataset"], registry=registry)
+    for field, label in (("daily_bar_count", "daily"), ("intraday_bar_count", "intraday"),
+                         ("fundamental_fact_count", "fundamentals"), ("event_count", "events")):
+        coverage_gauge.labels(dataset=label).set(ResearchDataCoverageSummary.objects.filter(**{f"{field}__gt": 0}).count())
+    feature_latest = InstrumentFeatureSnapshot.objects.aggregate(value=Max("available_at"))["value"]
+    Gauge("finflock_research_feature_age_seconds", "Age of newest common feature snapshot", registry=registry).set(
+        max(0, (timezone.now() - feature_latest).total_seconds()) if feature_latest else 0
+    )
+    Gauge("finflock_research_implementations_registered", "Registered strategy implementations", registry=registry).set(
+        ResearchStrategyImplementation.objects.count()
+    )
+    Gauge("finflock_research_experiments_completed", "Completed research experiments", registry=registry).set(
+        ResearchExperiment.objects.filter(status="COMPLETED").count()
+    )
+    score_latest = ResearchCandidateScore.objects.aggregate(value=Max("as_of_date"))["value"]
+    Gauge("finflock_research_score_age_seconds", "Age of newest candidate score", registry=registry).set(
+        max(0, (timezone.localdate() - score_latest).days * 86400) if score_latest else 0
+    )
+    cache_latest = RecommendationCacheSnapshot.objects.aggregate(value=Max("created_at"))["value"]
+    Gauge("finflock_recommendation_cache_age_seconds", "Age of newest recommendation cache", registry=registry).set(
+        max(0, (timezone.now() - cache_latest).total_seconds()) if cache_latest else 0
+    )
+    tier_gauge = Gauge("finflock_recommendation_fallback_snapshots", "Recommendation snapshots by fallback tier", ["tier"], registry=registry)
+    for tier in range(1, 6):
+        tier_gauge.labels(tier=str(tier)).set(RecommendationCacheSnapshot.objects.filter(fallback_tier=tier).count())
+    completed_batches = RecommendationBatchRun.objects.filter(status="COMPLETED", started_at__isnull=False, completed_at__isnull=False)
+    latencies = [(item.completed_at - item.started_at).total_seconds() for item in completed_batches.only("started_at", "completed_at")[:1000]]
+    Gauge("finflock_recommendation_latency_seconds", "Mean completed recommendation batch latency", registry=registry).set(
+        sum(latencies) / len(latencies) if latencies else 0
+    )
+    substitutions = sum(int((metrics or {}).get("qualification_substitutions") or 0) for metrics in completed_batches.values_list("metrics", flat=True))
+    Gauge("finflock_recommendation_qualification_substitutions", "Finalist contract substitutions", registry=registry).set(substitutions)
+    failure_gauge = Gauge("finflock_research_provider_failures", "Recorded provider failures by pipeline stage", ["stage"], registry=registry)
+    failures = {}
+    for data in AuditEvent.objects.filter(event_type="research.provider.failure").values_list("data", flat=True):
+        stage = str((data or {}).get("stage") or "unknown")
+        failures[stage] = failures.get(stage, 0) + 1
+    for stage, total in failures.items():
+        failure_gauge.labels(stage=stage).set(total)
     return HttpResponse(generate_latest(registry),content_type=CONTENT_TYPE_LATEST)
 
 

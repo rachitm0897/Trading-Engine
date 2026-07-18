@@ -25,6 +25,16 @@ SCOPE_ROLES = {
 }
 
 
+def strategy_role(source):
+    """Resolve the operational role from explicit catalogue semantics, not formula text."""
+    family = str(source.get("family", "")).lower()
+    if family == "event":
+        return "EVENT"
+    if family == "income":
+        return "INCOME"
+    return SCOPE_ROLES[source["scope"]]
+
+
 class BundleValidationError(ValueError):
     pass
 

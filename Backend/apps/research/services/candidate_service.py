@@ -74,13 +74,13 @@ def _update_lifecycle(strategy,has_score,has_eligible):
         ).exists()
         if profile:implementation.status=ImplementationStatus.BUILDER_READY
     implementation.save(update_fields=["status","updated_at"])
-    completed=strategy.experiments.filter(experiment_type="MVP_WALK_FORWARD",status="COMPLETED").count()
+    completed=strategy.experiments.filter(role="EXECUTION",status="COMPLETED").count()
     features_ready=not strategy.feature_requirements.filter(required=True).exclude(feature__status="VALIDATED").exists()
     readiness,_=ResearchStrategyReadiness.objects.update_or_create(
         research_strategy=strategy,as_of_date=timezone.localdate(),
-        defaults={"data_ready":completed>=5,
+        defaults={"data_ready":completed>=1,
                   "features_ready":features_ready,"implementation_ready":implementation.exact_semantic_match,
-                  "backtest_ready":completed>=5,"approved":has_eligible,
+                  "backtest_ready":completed>=1,"approved":has_eligible,
                   "builder_ready":implementation.status in {ImplementationStatus.BUILDER_READY,ImplementationStatus.APPROVED},
                   "blocking_reasons":[]},
     )
@@ -96,7 +96,7 @@ def _update_lifecycle(strategy,has_score,has_eligible):
 
 def score_completed_trials():
     updated=0;experiments=ResearchTrial.objects.filter(
-        status="COMPLETED",instrument__isnull=False,experiment__status="COMPLETED"
+        status="COMPLETED",instrument__isnull=False,experiment__status="COMPLETED",experiment__role="EXECUTION"
     ).values_list("experiment_id",flat=True).distinct()
     strategies={}
     for experiment_id in experiments:

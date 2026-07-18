@@ -62,7 +62,7 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
             contract,
             endDateTime=payload.get("end_time", ""),
             durationStr=payload["duration"],
-            barSizeSetting="1 day",
+            barSizeSetting=payload.get("bar_size", "1 day"),
             whatToShow=payload.get("what_to_show", "TRADES"),
             useRTH=bool(payload.get("use_rth", True)),
             formatDate=2,
@@ -71,13 +71,24 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         bars=[]
         for row in rows:
             bars.append({
-                "date":self._bar_time(row).date().isoformat(),
+                "date":self._bar_time(row).date().isoformat() if payload.get("bar_size", "1 day")=="1 day" else self._bar_time(row).isoformat(),
                 "open":str(row.open),"high":str(row.high),"low":str(row.low),"close":str(row.close),
                 "volume":str(max(0, row.volume)),"bar_count":int(getattr(row,"barCount",0) or 0),
                 "average":str(getattr(row,"average",0) or 0),
             })
         return {"conid":contract.conId,"symbol":contract.symbol,"provider":"IBKR",
-                "what_to_show":payload.get("what_to_show","TRADES"),"bars":bars}
+                "what_to_show":payload.get("what_to_show","TRADES"),"bar_size":payload.get("bar_size","1 day"),"bars":bars}
+    def historical_schedule(self, payload):
+        qualified=self.ib.qualifyContracts(self._contract(payload))
+        if not qualified or int(qualified[0].conId)!=int(payload["conid"]):
+            raise RuntimeError("Selected exact IBKR contract could not be qualified for schedule data")
+        contract=qualified[0]
+        schedule=self.ib.reqHistoricalSchedule(contract,numDays=int(payload["days"]),
+            endDateTime=payload.get("end_time", ""),useRTH=bool(payload.get("use_rth",True)))
+        sessions=[]
+        for item in getattr(schedule,"sessions",[]) or []:
+            sessions.append({"reference_date":str(item.refDate),"start":item.startDateTime.isoformat(),"end":item.endDateTime.isoformat()})
+        return {"conid":contract.conId,"symbol":contract.symbol,"provider":"IBKR","timezone":str(getattr(schedule,"timeZone","")),"sessions":sessions}
     @staticmethod
     def _timeframe(value):
         mapping={"1m":("1 min",60),"5m":("5 mins",300),"15m":("15 mins",900),"1h":("1 hour",3600),"1d":("1 day",86400)}

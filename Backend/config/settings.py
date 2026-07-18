@@ -3,6 +3,8 @@ from pathlib import Path
 import dj_database_url
 from corsheaders.defaults import default_headers
 
+from apps.research.configuration import RecommendationSystemConfiguration
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "test-only-secret")
 DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
@@ -55,9 +57,16 @@ CELERY_BEAT_SCHEDULE = {
     "verify-finnhub-mappings": {"task": "apps.market_data.tasks.verify_pending_finnhub_mappings", "schedule": 21600.0},
     "monitor-market-data-providers": {"task": "apps.market_streams.tasks.monitor_market_data_providers", "schedule": 5.0},
     "compact-operational-records": {"task": "apps.event_bus.tasks.compact_operational_records", "schedule": 86400.0},
+    "research-universe-mapping": {"task": "apps.research.tasks.refresh_universe_mapping", "schedule": 86400.0},
     "research-daily-refresh": {"task": "apps.research.tasks.refresh_research_pipeline", "schedule": 86400.0},
-    "research-weekly-scoring": {"task": "apps.research.tasks.score_current_candidates", "schedule": 604800.0},
-    "recommendation-mvp-after-close": {"task": "apps.research.tasks.run_recommendation_mvp_pipeline", "schedule": 86400.0},
+    "research-intraday-refresh": {"task": "apps.research.tasks.refresh_intraday_data", "schedule": 3600.0},
+    "research-fundamentals": {"task": "apps.research.tasks.refresh_fundamentals", "schedule": 86400.0},
+    "research-events": {"task": "apps.research.tasks.refresh_events", "schedule": 3600.0},
+    "research-features": {"task": "apps.research.tasks.calculate_features", "schedule": 86400.0},
+    "research-experiments": {"task": "apps.research.tasks.schedule_research_experiments", "schedule": 86400.0},
+    "research-experiment-dispatch": {"task": "apps.research.tasks.dispatch_research_experiments", "schedule": 60.0},
+    "research-scoring": {"task": "apps.research.tasks.score_current_candidates", "schedule": 86400.0},
+    "recommendation-cache": {"task": "apps.research.tasks.warm_recommendation_cache", "schedule": 86400.0},
 }
 IB_GATEWAY_SERVICE_URL = os.getenv("IB_GATEWAY_SERVICE_URL", "http://localhost:8080/api/v1")
 GATEWAY_SERVICE_TOKEN = os.getenv("GATEWAY_SERVICE_TOKEN", "test-token")
@@ -107,31 +116,48 @@ BROKER_SNAPSHOT_RETENTION_DAYS = int(os.getenv("BROKER_SNAPSHOT_RETENTION_DAYS",
 READINESS_RETENTION_DAYS = int(os.getenv("READINESS_RETENTION_DAYS", "30"))
 STREAM_HEALTH_RETENTION_DAYS = int(os.getenv("STREAM_HEALTH_RETENTION_DAYS", "30"))
 OPERATIONAL_COMPACTION_BATCH_SIZE = int(os.getenv("OPERATIONAL_COMPACTION_BATCH_SIZE", "1000"))
-RESEARCH_ENABLED = os.getenv("RESEARCH_ENABLED", "true").lower() == "true"
-RESEARCH_MVP_ENABLED = os.getenv("RESEARCH_MVP_ENABLED", "true").lower() == "true"
-RESEARCH_MVP_STOCKS = os.getenv("RESEARCH_MVP_STOCKS", "AAPL,JPM,XOM,JNJ,WMT")
-RESEARCH_MVP_STRATEGIES = os.getenv(
-    "RESEARCH_MVP_STRATEGIES",
-    "FIXED_WEIGHT_REBALANCE,SMA_CROSSOVER,RSI_MEAN_REVERSION,DONCHIAN_BREAKOUT,VOLATILITY_TARGET_MOMENTUM",
+RECOMMENDATION_CONFIG = RecommendationSystemConfiguration.from_environment(
+    os.environ,
+    default_artifact_root=BASE_DIR / "research_artifacts",
 )
-RESEARCH_MVP_MINIMUM_BARS = os.getenv("RESEARCH_MVP_MINIMUM_BARS", "756")
-RESEARCH_MVP_LOOKBACK_YEARS = os.getenv("RESEARCH_MVP_LOOKBACK_YEARS", "5")
-RESEARCH_MVP_MAX_STOCKS = os.getenv("RESEARCH_MVP_MAX_STOCKS", "5")
-RESEARCH_MVP_MAX_STRATEGIES_PER_STOCK = os.getenv("RESEARCH_MVP_MAX_STRATEGIES_PER_STOCK", "1")
+RESEARCH_ENABLED = RECOMMENDATION_CONFIG.research_enabled
+RECOMMENDATION_SYSTEM_ENABLED = RECOMMENDATION_CONFIG.recommendation_system_enabled
+RECOMMENDATION_UNIVERSE_KEY = RECOMMENDATION_CONFIG.universe_key
+RECOMMENDATION_MAX_STOCKS = RECOMMENDATION_CONFIG.maximum_stocks
+RECOMMENDATION_MIN_STOCKS = RECOMMENDATION_CONFIG.minimum_stocks
+RECOMMENDATION_CANDIDATE_POOL_SIZE = RECOMMENDATION_CONFIG.candidate_pool_size
+RECOMMENDATION_MAX_STRATEGIES_PER_STOCK = RECOMMENDATION_CONFIG.maximum_strategies_per_stock
+RESEARCH_DAILY_LOOKBACK_YEARS = RECOMMENDATION_CONFIG.daily_lookback_years
+RESEARCH_INTRADAY_LOOKBACK_DAYS = RECOMMENDATION_CONFIG.intraday_lookback_days
+RESEARCH_MINIMUM_DAILY_BARS = RECOMMENDATION_CONFIG.minimum_daily_bars
+RESEARCH_SCORE_MAX_AGE_DAYS = RECOMMENDATION_CONFIG.score_max_age_days
+RESEARCH_STALE_SCORE_FALLBACK_DAYS = RECOMMENDATION_CONFIG.stale_score_fallback_days
+RECOMMENDATION_SNAPSHOT_MAX_AGE_HOURS = RECOMMENDATION_CONFIG.snapshot_max_age_hours
+RESEARCH_MAX_PARALLEL_DATA_TASKS = RECOMMENDATION_CONFIG.maximum_parallel_data_tasks
+RESEARCH_MAX_PARALLEL_BACKTEST_TASKS = RECOMMENDATION_CONFIG.maximum_parallel_backtest_tasks
 RESEARCH_BUNDLE_PATH = os.getenv(
     "RESEARCH_BUNDLE_PATH", str(BASE_DIR.parent / "Trading_Engine_Stock_Strategy_Universe_JSON")
 )
-RESEARCH_ARTIFACT_ROOT = os.getenv("RESEARCH_ARTIFACT_ROOT", str(BASE_DIR / "research_artifacts"))
-RESEARCH_MAX_PARALLEL_TASKS = int(os.getenv("RESEARCH_MAX_PARALLEL_TASKS", "4"))
+RESEARCH_ARTIFACT_ROOT = str(RECOMMENDATION_CONFIG.artifact_root)
 RESEARCH_DAILY_PROVIDER = os.getenv("RESEARCH_DAILY_PROVIDER", "FINNHUB").upper()
-RESEARCH_SCORE_MAX_AGE_DAYS = int(os.getenv("RESEARCH_SCORE_MAX_AGE_DAYS", "7"))
-RESEARCH_RECOMMENDATION_MAX_AGE_DAYS = int(os.getenv("RESEARCH_RECOMMENDATION_MAX_AGE_DAYS", "1"))
+RESEARCH_RECOMMENDATION_MAX_AGE_DAYS = max(1, RECOMMENDATION_SNAPSHOT_MAX_AGE_HOURS // 24)
 RESEARCH_TASK_ROUTES = {
-    "apps.research.tasks.refresh_research_pipeline": {"queue": "research_data"},
+    "apps.research.tasks.refresh_universe_mapping": {"queue": "research_mapping"},
+    "apps.research.tasks.refresh_research_pipeline": {"queue": "research_daily_data"},
+    "apps.research.tasks.refresh_intraday_data": {"queue": "research_intraday_data"},
+    "apps.research.tasks.refresh_fundamentals": {"queue": "research_fundamentals"},
+    "apps.research.tasks.refresh_events": {"queue": "research_events"},
     "apps.research.tasks.calculate_features": {"queue": "research_features"},
-    "apps.research.tasks.run_experiment": {"queue": "research_backtests"},
+    "apps.research.tasks.schedule_research_experiments": {"queue": "celery"},
+    "apps.research.tasks.dispatch_research_experiments": {"queue": "celery"},
+    "apps.research.tasks.run_single_asset_experiment": {"queue": "research_single_asset"},
+    "apps.research.tasks.run_cross_sectional_experiment": {"queue": "research_cross_sectional"},
+    "apps.research.tasks.run_allocator_experiment": {"queue": "research_allocators"},
+    "apps.research.tasks.run_overlay_experiment": {"queue": "research_overlays"},
+    "apps.research.tasks.run_event_experiment": {"queue": "research_cross_sectional"},
+    "apps.research.tasks.run_pair_experiment": {"queue": "research_pairs"},
     "apps.research.tasks.score_current_candidates": {"queue": "research_scoring"},
-    "apps.research.tasks.generate_recommendation": {"queue": "research_recommendations"},
-    "apps.research.tasks.run_recommendation_mvp_pipeline": {"queue": "research_data"},
+    "apps.research.tasks.warm_recommendation_cache": {"queue": "recommendation_cache"},
+    "apps.research.tasks.generate_recommendation_batch": {"queue": "recommendations"},
 }
 CELERY_TASK_ROUTES = RESEARCH_TASK_ROUTES

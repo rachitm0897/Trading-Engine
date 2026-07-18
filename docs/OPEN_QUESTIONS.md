@@ -1,57 +1,29 @@
 # Open questions and assumptions
 
-The implementation proceeds with these safe defaults:
+Implemented safe defaults:
 
-- Base currency is USD until account synchronization supplies the broker value.
-- Local Compose and QFS use `ib_async` in paper mode; the mocked adapter is restricted to automated tests.
-- Decimal quantities support fractional shares, while each instrument's configured lot size controls rounding.
-- Strategy configurations carry their own version; changing parameters should create a new version operationally.
-- Controlled 15-second polling is used for the first frontend release rather than SSE.
-- NAV/P&L history is reconstructed from persisted market bars and current holdings, anchored to the latest broker NAV; production history requires certified TimescaleDB snapshots and retention policies.
-- Sector limits apply only where instrument sector metadata exists.
-- New flow/rebalance execution defaults to `SHADOW`; `PAPER` must be selected explicitly and live is rejected.
-- A portfolio flow represents settled cash; approved strategy-capital changes commit atomically with the run and outbox fact.
-- Corrected bars are new deterministic `(bar_id, version)` final facts; strategies use final bars by default.
-- Local Kafka uses six partitions and single-node replication; production topology and retention require capacity planning.
-- Initial indicator parameters are SMA 20/50, RSI 14, Donchian 20, momentum 20, realized volatility 20 and average volume 20.
-- Strategy definitions are code-reviewed plugins with database metadata. Arbitrary operator-supplied Python is not loaded; adding a plugin remains a deployment/migration action.
-- A strategy instance represents one canonical instrument. Reusing a strategy across a universe is modeled as multiple instances so state, versioning, targets, and attribution remain unambiguous per instrument.
-- Material edits create an immutable `StrategyVersion`; name-only changes do not. Old versions and input bindings are retired, never mutated or deleted.
-- Indicator requirements are shared only when instrument, timeframe, indicator name, and canonical parameter hash are identical. Signal thresholds and target settings do not fragment indicator computation.
-- Net orders with multiple contributors preserve every exact version through `OrderIntentAttribution` and the intent version snapshot. The highest-priority contributing strategy supplies the net order policy; target quantities remain pro-rata attributed.
-- Observe mode records runs and signals but suppresses targets. Shadow records the complete planning facts but submits no OMS order. Paper is the only executable mode exposed by configurable-strategy APIs.
-- Disabling or pausing retires stream bindings once no active version references them and does not flatten attributed exposure. Flattening is a separate explicit target action.
-- IBKR contract qualification is asynchronous. A newly discovered ticker stays `BLOCKED` until the resulting conId is synchronized into `BrokerContract`; an existing qualified record activates without a second qualification.
-- Dynamic Flink windows close on event-time timers and use the configured allowed-lateness watermark. Parameter/timeframe registry changes are durable Kafka facts and checkpointed broadcast state.
-- `INSTRUMENT_SYMBOL_MAP` is the controlled Flink symbol-to-instrument-ID map for the local deployment.
-- Missing conviction/liquidity/cost metadata falls back to strategy priority and stable IDs for deterministic liquidation ordering.
-- Rebalance cost benefit initially uses the policy fee buffer plus five basis points of notional.
-- Sizing previews take broker restrictions and ADV as explicit auditable inputs until connected reference feeds are certified.
-- The five-stock MVP treats a successful empty Finnhub dividend/split response as reconciled corporate-action evidence; provider errors block Finnhub validation and use exact-contract IBKR `ADJUSTED_LAST` only as the bounded fallback.
-- An implementation may be approved for recommendation research after scoring, but `builder_ready` remains false until an explicit persisted `shadow_validated` evidence record exists. Bootstrap never fabricates that evidence.
+- the bundle supplies current 500-member/GICS membership only; no survivorship-free claim is made;
+- Finnhub is primary for incremental daily and intraday prices, corporate actions, fundamentals, estimates, and events; exact-contract IBKR is the bounded daily and intraday fallback;
+- provider retrieval time is used when historical publication time is unavailable, preventing backdating at the cost of less historical coverage;
+- research requires at least 756 valid daily bars; required intraday windows are bounded to 90 days;
+- missing optional role data removes that role's contribution and moves recommendations through explicit fallback tiers;
+- final IBKR qualification is lazy with ranked substitution, while background batches progressively qualify the full universe;
+- the normal frontend exposes neither Research administration nor manual recommendation acceptance;
+- generation and preview have no execution side effects; apply is explicit and remains SHADOW/PAPER only;
+- short and pair/basket runtime execution are disabled until borrow/cost data and atomic multi-instrument targets exist;
+- PostgreSQL stores state and summaries; large research artifacts use the configured filesystem/Parquet store;
+- operator observability is through admin, audit, structured logs, and `/metrics`.
 
-Before live use, operators must decide:
+Before production certification, operators must decide:
 
-- authoritative exchange calendar/holiday and stale-price thresholds;
-- account-specific margin, commission, concentration, turnover, and loss limits;
-- how IBKR Financial Advisor allocations or multiple accounts should map to portfolios;
-- alert channels and escalation owners for Gateway disconnects and material breaks;
-- backup retention and recovery objectives for PostgreSQL and Gateway event storage;
-- whether QFS strips prefixes in each environment (both are routed, but canonical redirects should match the proxy);
-- approved IB Gateway/IBC upgrade cadence and paper certification procedure.
-- production Kafka replication, retention, encryption/authentication and alert thresholds;
-- production Flink parallelism, checkpoint retention/storage and upgrade runbook;
-- ownership and deployment of the canonical instrument symbol map;
-- authoritative conviction, liquidity, tax-lot and transaction-cost inputs for liquidation policies;
-- whether accepted flows need second approval before strategy capital becomes effective;
-- paper promotion criteria for `NEW_EXECUTION_MODE=SHADOW` to become `PAPER`.
-- whether mixed-strategy net orders should continue using highest-priority order policy or use a dedicated portfolio-level policy resolver;
-- authoritative warm-up backfill source and readiness SLA for newly enabled intraday versus daily strategies;
-- whether a future multi-instrument plugin needs an atomic universe-level target contract in addition to the current one-instance-per-instrument model;
-- retention and compaction policy for `strategy.inputs.v1`, immutable strategy versions, run context snapshots, and inactive input bindings.
-- licensed providers for point-in-time index membership, delistings, corporate actions, filings/fundamentals, and exact event timestamps;
-- production exchange-calendar coverage and an S3-compatible Parquet research-artifact backend;
-- borrow availability/cost and atomic multi-instrument execution before enabling shorts or pair/basket strategies;
-- authenticated operator roles before exposing research activation, experiment scheduling, provider overrides, or promotion as mutation APIs.
+- licensed sources for point-in-time historical index membership, delistings, GICS, filings, estimate revisions, and exact event timestamps;
+- authoritative exchange calendars, holiday coverage, stale thresholds, and corporate-action reconciliation SLAs;
+- an S3-compatible immutable artifact backend, retention, encryption, backup, and recovery objectives;
+- research queue capacity, nightly/weekly/monthly throughput targets, and alert ownership;
+- account-specific margin, commission, tax-lot, concentration, turnover, liquidity, and loss limits;
+- the paper evidence and second-approval policy required to move a strategy from SHADOW validation to PAPER enablement;
+- production Kafka/Flink replication, checkpoints, retention, symbol-map ownership, and upgrade procedures;
+- whether a future multi-instrument plugin needs atomic portfolio targets and a dedicated net-order policy resolver;
+- authenticated operator roles before exposing dataset activation, scheduling, overrides, or promotion as mutation APIs.
 
-Until these research-data questions are resolved, affected strategies remain catalog-only and cannot become Portfolio Builder eligible.
+Until the relevant licensed data exists, affected historical experiments fail safely or remain unpromoted; the engine does not manufacture availability timestamps, scores, contracts, or SHADOW evidence.

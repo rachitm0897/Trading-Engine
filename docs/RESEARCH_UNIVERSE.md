@@ -1,33 +1,34 @@
-# Research Universe
+# Research universe
 
-`Trading_Engine_Stock_Strategy_Universe_JSON/` is the repository source bundle. It contains a current 500-stock snapshot, the full public 11/25/74/163 GICS transcription, 97 strategy hypotheses, compatibility rules, and a backtest protocol. The stock list is not historical membership and must not be used for a survivorship-unbiased historical claim.
+`Trading_Engine_Stock_Strategy_Universe_JSON/` is the trusted source bundle: exactly 500 current US large-cap members, 97 strategy definitions, and the complete 11/25/74/163 GICS hierarchy. It is a current snapshot, not historical membership, so it must not be represented as survivorship-free history.
 
-## Import
-
-Trusted operators run:
+## Activate and bootstrap
 
 ```powershell
 cd Backend
 ..\.venv\Scripts\python.exe manage.py validate_research_bundle ..\Trading_Engine_Stock_Strategy_Universe_JSON
 ..\.venv\Scripts\python.exe manage.py import_research_bundle ..\Trading_Engine_Stock_Strategy_Universe_JSON --activate
+..\.venv\Scripts\python.exe manage.py bootstrap_recommendation_system
 ```
 
-Validation checks required files, byte sizes, SHA-256 hashes, repository JSON Schemas, fixed counts, GICS parent paths, stock sub-industries, unique symbols/CIKs/strategy IDs, representative-share exclusions, scopes, and frequencies. Import runs in one transaction, rejects changed content under the same version, is idempotent for the same manifest, and atomically retires the prior active version.
+Validation checks schemas, manifest sizes and SHA-256 hashes, fixed counts, taxonomy paths, enum values, symbols, CIKs, and all 97 registry entries. Import is transactional and idempotent, retires the previous active version, registers every explicit implementation, and never evaluates formula text from JSON.
 
-Issuers use CIK identity; ticker remains instrument identity. Deterministic mapping reuses `Instrument` and `InstrumentProviderMapping`, creates only an unqualified canonical instrument when unambiguous, and never creates a `BrokerContract`. Exact IBKR qualification remains an operator-controlled separate gate. Research eligibility requires verified provider data; Builder eligibility additionally requires an exact qualified broker contract.
+Issuer identity uses CIK; instrument identity remains exchange/currency/symbol. Mapping is batched and failure-isolated. Finnhub mappings must be verified. IBKR contracts are qualified separately through the authenticated Gateway; Backend never connects to TWS directly. Background qualification covers the universe, while the online path rechecks and substitutes finalists only.
 
-Operational `InstrumentPriceHistory.adjusted_close` is not silently upgraded to research-grade data. Staging copies are `SUSPECT` until raw/adjusted OHLC, dividends, splits, total-return close, delistings, timestamps, and revisions reconcile. Fundamentals and events are queried only at or after public availability. Unknown event timing becomes next-session availability.
+## Data and provenance
 
-For the MVP, Finnhub requests use only the verified `InstrumentProviderMapping.provider_symbol`. Daily bars, dividends, splits, provider timestamps, and revisions are stored in versioned research rows. The validator requires 756 bars, consistent positive OHLC, non-negative volume, a bounded missing-session ratio, current data, reconciled corporate actions, adjusted OHLC, and no future revision. IBKR `ADJUSTED_LAST` history is a bounded fallback through the authenticated gateway; Backend never connects to TWS.
+Research storage is versioned and point-in-time:
 
-Read-only APIs are paginated:
+- ten years of adjusted and raw daily OHLCV, dividends, splits, total-return close, provider and revision timestamps;
+- up to 90 days of required 1m/5m/15m/1h IBKR history plus trading schedules;
+- corporate actions;
+- reported fundamentals with filing/public-availability timestamps and revisions;
+- analyst recommendations and estimates without backdating retrieval time;
+- earnings and other events with explicit availability and effective timestamps;
+- per-member coverage summaries and current eligibility.
 
-- `/api/v1/research/dataset-versions/`
-- `/api/v1/research/universes/` and `universes/{id}/members/`
-- `/api/v1/research/strategies/` and `strategies/{research_id}/`
-- `/api/v1/research/readiness/`
-- `/api/v1/research/candidate-scores/`
-- `/api/v1/research/experiments/{id}/`
-- `/api/v1/research/mvp/status/`, `/matrix/`, `/stocks/`, and `/strategies/`
+Daily refresh uses a revision overlap instead of re-downloading ten years. Finnhub is primary for daily research data; exact-contract IBKR `ADJUSTED_LAST` is the bounded fallback. Intraday refresh likewise uses incremental verified Finnhub candles first and exact-contract IBKR `TRADES` plus historical schedules as fallback. Structural OHLCV validation, freshness, session coverage, provider identity, corporate-action reconciliation, and the minimum 756 valid daily bars are explicit.
 
-Bundle activation, provider overrides, experiment scheduling, approval, and promotion remain management-command operations because default API authentication is not yet a safe administrative boundary.
+Feature snapshots carry as-of time, availability time, provider-data version, implementation version, and Parquet artifact URI. Point-in-time queries exclude records published after the simulated decision. Fundamental or event strategies remain unavailable when licensed historical timestamps are absent; the service does not backfill guessed timestamps.
+
+Research administration remains internal through Django admin, commands, audit events, structured logs, and `/metrics`. The normal frontend intentionally has no Research route. Existing read-only research APIs remain for operator compatibility; activation, overrides, scheduling, and promotion remain trusted command operations.

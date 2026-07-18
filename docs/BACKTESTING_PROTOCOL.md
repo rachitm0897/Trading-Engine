@@ -1,11 +1,18 @@
-# Backtesting Protocol
+# Backtesting protocol
 
-The active `BacktestProtocolVersion` stores `backtest_spec.json` and its configuration hash. Research interfaces are explicit for single-asset execution, cross-sectional selection, allocation, overlays, timestamped events, and pair/basket research. Pair/basket cannot emit a single-instrument runtime target.
+The active `BacktestProtocolVersion` stores the imported protocol and immutable configuration hash. Experiment identity includes dataset, protocol, implementation hash, feature version, instrument or universe, role, bounded parameter-space hash, date range, and provider-data version. Unchanged identities are reused; changed code, features, data, parameters, or dates create a new experiment.
 
-Daily signals use data through bar `t` and trade no earlier than `t+1`. The engine supports next-open fills, commission, half-spread, square-root impact, participation limits, and 5/10/25/50 bps stress. Long-only actionable runs reject negative exposures. Returns, trades, features, and attribution belong in immutable Parquet artifacts, not PostgreSQL JSON blobs.
+The system dispatches by role:
 
-Walk-forward helpers support rolling or expanding train/validation/test windows, explicit purge and embargo gaps, deterministic parameter budgets, and an untouched final holdout flag. Robustness utilities cover bootstrap intervals, neighboring-parameter stability, deflated Sharpe, probability of backtest overfitting, and Benjamini-Hochberg false-discovery control. Every sampled parameter trial is recorded; oversized grids are deterministically sampled after retaining a baseline.
+- execution strategies use the next-bar, long-only single-asset engine;
+- selectors and income models rank a point-in-time cross-section and evaluate later holdout returns;
+- allocators fit on formation returns and apply weights only to a later holdout;
+- overlays use only the regime available at the decision time;
+- event models filter strictly on public availability;
+- pair/basket models screen bounded same-peer neighbours and remain runtime-ineligible.
 
-The recommendation MVP uses five years where available, protects the last 126 sessions, and requires at least three independent test windows. Each trial records total return, CAGR, volatility, Sharpe, Sortino, Calmar, drawdown and duration, turnover, activity, exposure, win rate, profit factor, costs, 25/50 bps stress, capacity, subperiod and regime dependence, neighboring-parameter stability, holdout results, and deflated-Sharpe multiple-testing evidence. Fixed Weight uses its own one-entry activity threshold and is not rejected for having few discrete trades.
+Single-asset research requires at least 756 valid adjusted daily bars, protects the last 126 sessions, and uses expanding walk-forward train/validation/test windows with purge and embargo gaps. Signals formed at `t` execute no earlier than `t+1` open. Commission, half-spread, square-root impact, participation, and 25/50 bps stresses are recorded. The final holdout is never used to choose parameters.
 
-The current bundle is only a present-day membership snapshot. Historical testing is valid only when the data source supplies point-in-time membership, delistings and returns, historical GICS, revisions, filing/publication timestamps, and exact event availability. Otherwise results are prospective system tests and must be labelled as such.
+Parameter grids are never expanded without a bound. Canonical parameters are retained and remaining trials are deterministically sampled using family budgets. Trials record return, CAGR, volatility, Sharpe, Sortino, Calmar, drawdown/duration, turnover, activity, exposure, costs, capacity, subperiod/regime consistency, neighbour stability, holdout results, and deflated-Sharpe evidence. Hard rejection covers timestamp ambiguity, bad data, negative high-cost performance, excessive drawdown, inadequate activity/capacity, subperiod dependence, unstable parameters, multiple-testing failure, and unprotected holdout.
+
+Large panels, returns, trades, pair screens, attribution, and robustness outputs are written as immutable Parquet artifacts. PostgreSQL stores identities, summaries, scores, status, and provenance. The present bundle is a current membership snapshot; results are prospective system tests unless licensed point-in-time membership, delistings, GICS, filings, and event history are supplied.

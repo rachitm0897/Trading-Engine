@@ -771,64 +771,6 @@ export interface PortfolioConstructionPlan {
   updated_at: string
 }
 
-export interface ConstructionStrategyOption {
-  strategy_definition_id: number
-  key: string
-  name: string
-  summary: string
-  limitations: string
-  execution_timeframes: string[]
-  default_parameters: Record<string, Scalar>
-  parameter_schema: ParameterSchema
-  eligible: boolean
-  reason: string
-}
-
-export interface ConstructionEligibility {
-  goal_id: number
-  eligible: ConstructionStrategyOption[]
-  rejected: ConstructionStrategyOption[]
-}
-
-export interface GoalInstrumentSelection {
-  id: number
-  goal_id: number
-  instrument_id: number
-  symbol: string
-  asset_class: string
-  exchange: string
-  currency: string
-  minimum_weight: DecimalValue | null
-  maximum_weight: DecimalValue | null
-  display_order: number
-  enabled: boolean
-  assignment_count: number
-  created_at: string
-  updated_at: string
-}
-
-export interface GoalStrategyAssignment {
-  id: number
-  goal_instrument_id: number
-  goal_id: number
-  strategy_definition_id: number
-  strategy_key: string
-  strategy_name: string
-  instrument_id: number
-  symbol: string
-  execution_timeframe: string
-  parameter_overrides: JsonRecord
-  parameter_hash: string
-  strategy_share: DecimalValue
-  risk_policy_id: number | null
-  order_policy_id: number | null
-  create_instance: boolean
-  enabled: boolean
-  created_strategy_instance_id: number | null
-  created_at: string
-  updated_at: string
-}
-
 export interface GoalConstructionStrategy {
   assignment_id: number
   strategy_definition_id: number
@@ -870,168 +812,51 @@ export interface GoalConstructionResult {
   apply_blocked: boolean
 }
 
-export interface ResearchDatasetVersion {
-  id: number
-  bundle_name: string
-  version: string
-  snapshot_date: string
-  status: string
-  manifest_hash: string
-  validation_report: {counts?: Record<string, number>; current_snapshot_only?: boolean; warnings?: string[]}
-  imported_at: string | null
-  activated_at: string | null
-}
-
-export interface ResearchUniverse {
-  id: number
-  key: string
-  name: string
-  description: string
-  dataset_version_id: number
-  dataset_version: string
-  membership_type: 'CURRENT_SNAPSHOT' | 'POINT_IN_TIME'
-  active: boolean
-  member_count: number
-}
-
-export interface ResearchStrategy {
-  id: number
-  research_id: string
-  name: string
-  family: string
-  scope: string
-  role: string
-  production_status: string
-  supported_directions: string[]
-  supported_frequencies: string[]
-  active: boolean
-  dataset_version_id: number
-  implementation_statuses: string[]
-}
-
-export interface ResearchReadiness {
-  id: number
-  research_id: string
-  as_of_date: string
-  data_ready: boolean
-  features_ready: boolean
-  implementation_ready: boolean
-  backtest_ready: boolean
-  approved: boolean
-  builder_ready: boolean
-  blocking_reasons: string[]
-}
-
-export interface ResearchCandidateScore {
-  id: number
-  research_id: string
-  instrument_id: number | null
-  symbol: string | null
-  goal_timeframe: GoalTimeframe
-  risk_level: number
-  as_of_date: string
-  score: DecimalValue
-  eligible: boolean
-  hard_rejection_reasons: string[]
-  expires_at: string
-}
-
-export interface GoalRecommendationSleeve {
-  id: number
+export interface RecommendationStock {
   instrument_id: number
+  universe_member_id: number
   symbol: string
-  gics: {
-    sector?: {code: string; name: string}
-    industry_group?: {code: string; name: string}
-    industry?: {code: string; name: string}
-    sub_industry?: {code: string; name: string}
-  }
-  research_id: string
-  strategy_name: string
-  strategy_family: string
+  company?: string
+  gics?: {sector?: {code?: string; name?: string}; industry?: {code?: string; name?: string}}
+  research_strategy_id: string
   execution_strategy_definition_id: number
+  strategy_name?: string
   execution_timeframe: string
-  parameters: JsonRecord
-  sleeve_weight: DecimalValue
-  stock_weight: DecimalValue
-  strategy_share: DecimalValue
-  candidate_score: DecimalValue
+  weight: DecimalValue
+  candidate_score?: DecimalValue
   expected_return: DecimalValue
   expected_volatility: DecimalValue
   expected_drawdown: DecimalValue
-  cost_metrics: JsonRecord
-  rationale: string
-  rank: number
-  data_source: string | null
-  latest_data_date: string | null
+  reason: string
 }
 
-export interface GoalRecommendationRun {
-  id: number
+export interface RecommendationBatchGoal {
   goal_id: number
+  goal_name: string
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  recommendation_run_id: number | null
+  fallback_tier: number
+  stocks: RecommendationStock[]
+  cash_weight: DecimalValue
+  timeframe: GoalTimeframe
+  risk_level: number
+  metrics: JsonRecord
+  freshness: JsonRecord
+}
+
+export interface RecommendationBatch {
+  id: number
+  plan_id: number
   requested_plan_version: number
-  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'BLOCKED'
-  as_of_date: string
-  metrics: {cash_weight?: DecimalValue; expected_return?: DecimalValue; expected_volatility?: DecimalValue; sleeve_count?: number}
-  warnings: {code: string; message?: string}[]
-  blockers: {code: string; message?: string}[]
-  error: string
-  expires_at: string
-  accepted_at: string | null
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED'
   dataset_version_id: number
   protocol_version_id: number
+  metrics: JsonRecord
+  error: string
+  goals: RecommendationBatchGoal[]
   created_at: string
-  sleeves?: GoalRecommendationSleeve[]
-}
-
-export interface ResearchMVPCell {
-  strategy_key: string
-  research_id: string
-  status: string
-  score: number | null
-  approved: boolean
-  builder_ready: boolean
-  blockers: string[]
-  experiment_id: number | null
-}
-
-export interface ResearchMVPStock {
-  symbol: string
-  company: string
-  instrument_id: number | null
-  finnhub_status: string
-  finnhub_symbol: string | null
-  ibkr_status: string
-  conid: number | null
-  valid_bar_count: number
-  latest_date: string | null
-  provider: string | null
-  eligible: boolean
-  blockers: string[]
-  strategies: ResearchMVPCell[]
-}
-
-export interface ResearchMVPMatrix {
-  dataset_version: string | null
-  protocol_id: string | null
-  stocks: ResearchMVPStock[]
-  strategy_keys: string[]
-  generated_at: string
-}
-
-export interface ResearchMVPStatus {
-  research_enabled: boolean
-  mvp_enabled: boolean
-  finnhub: FinnhubProviderStatus
-  ibkr: {connected: boolean; error?: string; mode?: string}
-  pilot_stock_count: number
-  ready_stock_count: number
-  validated_strategy_count: number
-  completed_experiment_groups: number
-  eligible_candidate_count: number
-  last_data_refresh: string | null
-  last_experiment_run: string | null
-  matrix: ResearchMVPMatrix
+  started_at: string | null
+  completed_at: string | null
 }
 
 export interface PortfolioConstructionTarget {

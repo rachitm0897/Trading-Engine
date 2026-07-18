@@ -14,4 +14,6 @@ pytest
 `GET /healthz` is public for infrastructure probes. Every `/api/v1/*` route requires `Authorization: Bearer <GATEWAY_SERVICE_TOKEN>`. Order-changing requests should also send `Idempotency-Key`.
 # Bounded research history
 
-`POST /api/v1/market-data/history/` is an authenticated, durable, read-only broker command. It requires an exact positive conId and supports only `1 day` bars, `TRADES` or `ADJUSTED_LAST`, and a duration no longer than five years. It never opens an order path or a live market-data subscription.
+`POST /api/v1/market-data/history/` is an authenticated, durable, read-only broker command. It requires an exact positive conId and supports `1 min`, `5 mins`, `15 mins`, `1 hour`, and `1 day` bars with `TRADES` or `ADJUSTED_LAST`. Intraday duration is bounded to 90 days and daily duration to ten years.
+
+`POST /api/v1/market-data/schedule/` returns up to 365 days of exact-contract historical trading sessions. Backend uses it to validate intraday research windows. Both routes are idempotent durable commands; neither opens an order path nor a live subscription.

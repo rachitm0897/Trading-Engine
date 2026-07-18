@@ -1,17 +1,27 @@
-# Strategy Promotion
+# Strategy implementation and promotion
 
-All 97 imported strategies begin as hypotheses. JSON formulas and signal text are metadata and are never passed to `eval`, compiled, or used to generate runtime code.
+All 97 active catalogue IDs are present in `services/strategy_registry.py`. Each entry declares an importable Python object, role, scope-aware engine, data/features, explicit parameter names and bounded budget, compatible profiles, fallback behavior, implementation version/hash, and optional runtime mapping. Registry validation fails bundle activation or tests when an ID, path, role, or parameter schema differs. JSON formula and signal text are retained as documentation and are never evaluated, compiled, or used to generate code.
 
-The lifecycle is `DRAFT → VALIDATED → BACKTESTED → SCORED → APPROVED_FOR_RECOMMENDATION → SHADOW_VALIDATED → BUILDER_READY`. Registration and semantic validation do not require a score. Historical experiments may run from `VALIDATED` onward. Approval requires exact tested Python semantics, complete data, validated features, protocol backtests, score at least 65, no hard rejection, stable parameters, positive high-cost results, multiple-testing and protected holdout evidence, capacity, long-only compatibility, an exact enabled runtime definition, and deterministic golden vectors. SHADOW evidence is required only for `BUILDER_READY`; an approved research candidate without it remains unavailable to Portfolio Builder.
+Roles are deliberately separated. Selectors, income, allocators, events, and overlays contribute research scores; they do not manufacture single-stock strategy instances. Pair/basket models are bounded research-only screens and cannot create an order. Only exact long-only execution semantics have runtime definitions, and those recommendation-created definitions are hidden from the manual selector.
 
-Use the trusted command only after evidence exists:
+The lifecycle is:
+
+```text
+DRAFT → VALIDATED → BACKTESTED → SCORED → APPROVED_FOR_RECOMMENDATION
+      → SHADOW_VALIDATED → BUILDER_READY
+```
+
+Promotion requires tested Python semantics, validated point-in-time data/features, the active protocol, positive high-cost performance, capacity, stability, multiple-testing evidence, protected holdout, exact enabled runtime mapping, deterministic golden vectors, and an actor/evidence record. SHADOW evidence is never fabricated by bootstrap.
+
+Example for the baseline mapping:
 
 ```powershell
-python manage.py promote_research_strategy RESEARCH_ID `
-  apps.research.implementations.wave0.FixedWeightResearch `
+python manage.py promote_research_strategy BH_001 `
+  apps.research.implementations.baseline.BH_001 `
   FIXED_WEIGHT_REBALANCE `
+  --implementation-version full-universe-v1 `
   --actor operator-name `
   --evidence-json '{"golden_vector_passed":true,"high_cost_passed":true,"multiple_testing_passed":true,"shadow_validated":true}'
 ```
 
-The command does not create a new runtime definition and cannot approve selectors, allocators, overlays, long-short, pair/basket, or inexact mappings as ordinary single-asset plugins. Runtime definitions and instances remain subject to existing enabled flags and SHADOW/PAPER-only controls. Newly constructed instances remain disabled SHADOW.
+Promotion cannot bypass SHADOW/PAPER-only startup guards, create LIVE instances, or turn selectors/pairs into inexact runtime plugins. Applied Builder instances remain disabled until the existing operator review workflow enables an eligible PAPER instance.

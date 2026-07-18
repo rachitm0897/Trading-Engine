@@ -13,7 +13,8 @@ def get_plugin(definition_or_key):
     if isinstance(definition_or_key, str):
         raise ValueError(f"Unknown strategy plugin: {key}")
     module_name, class_name = definition_or_key.plugin_path.rsplit(".", 1)
-    plugin = getattr(import_module(module_name), class_name)()
+    plugin_class = getattr(import_module(module_name), class_name)
+    plugin = plugin_class.for_definition(definition_or_key) if hasattr(plugin_class, "for_definition") else plugin_class()
     if plugin.key != key:
         raise ValueError(f"Plugin key mismatch: expected {key}, got {plugin.key}")
     return plugin

@@ -112,15 +112,26 @@ def test_bounded_authenticated_daily_history_command(client):
 
 
 @pytest.mark.parametrize("update",[
-    {"duration":"6 Y"},{"bar_size":"1 hour"},{"what_to_show":"MIDPOINT"},{"use_rth":"yes"},
+    {"duration":"11 Y"},{"bar_size":"1 hour"},{"what_to_show":"MIDPOINT"},{"use_rth":"yes"},
 ])
-def test_daily_history_rejects_unbounded_or_non_daily_requests(client,update):
+def test_history_rejects_requests_outside_daily_and_intraday_bounds(client,update):
     payload={"conid":265598,"symbol":"AAPL","exchange":"SMART","currency":"USD",
              "bar_size":"1 day","duration":"5 Y","what_to_show":"TRADES","use_rth":True,"end_time":""}
     payload.update(update)
     result=client.post("/api/v1/market-data/history/",json.dumps(payload),content_type="application/json",
                        HTTP_IDEMPOTENCY_KEY=f"invalid-history:{list(update)[0]}",**AUTH)
     assert result.status_code==400 and GatewayCommand.objects.count()==0
+
+
+def test_bounded_intraday_history_command(client):
+    payload={"conid":265598,"symbol":"AAPL","exchange":"SMART","currency":"USD",
+             "bar_size":"1 hour","duration":"90 D","what_to_show":"TRADES",
+             "use_rth":True,"end_time":""}
+    accepted=client.post("/api/v1/market-data/history/",json.dumps(payload),content_type="application/json",
+                         HTTP_IDEMPOTENCY_KEY="history:aapl:1h",**AUTH)
+    assert accepted.status_code==202
+    command=GatewayCommand.objects.get(pk=accepted.json()["data"]["command_id"])
+    assert command.command_type=="REQUEST_HISTORICAL_DATA" and command.payload["bar_size"]=="1 hour"
 
 def test_no_credential_leakage(client,settings):
     settings.IB_USERNAME="SECRET_USER"; settings.IB_PASSWORD="SECRET_PASSWORD"

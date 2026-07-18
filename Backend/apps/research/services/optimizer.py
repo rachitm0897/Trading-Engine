@@ -86,9 +86,13 @@ def optimize_sleeves(candidates, *, constraints, current_weights=None, covarianc
     def objective(weights):
         expected_net = expected - np.asarray([float(item.get("cost_penalty", 0)) for item in candidates])
         instability = np.asarray([float(item.get("instability_penalty", 0)) for item in candidates])
+        recommended = np.asarray([float(item.get("recommended_weight", investable / count)) for item in candidates])
         turnover = np.sum(np.abs(weights - current))
         concentration = np.sum(weights ** 2)
-        return -float(expected_net @ weights) + risk_aversion * float(weights @ covariance @ weights) + 0.01 * turnover + 0.02 * concentration + float(instability @ weights)
+        recommendation_drift = np.sum((weights - recommended) ** 2)
+        return (-float(expected_net @ weights) + risk_aversion * float(weights @ covariance @ weights)
+                + 0.01 * turnover + 0.02 * concentration + float(instability @ weights)
+                + float(constraints.get("recommendation_penalty", 2.0)) * recommendation_drift)
 
     start = np.full(count, investable / count)
     for _ in range(25):

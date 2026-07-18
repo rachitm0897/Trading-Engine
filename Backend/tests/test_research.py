@@ -16,7 +16,7 @@ from apps.portfolio_construction.services import create_construction_run, run_co
 from apps.portfolios.models import TradingPortfolio
 from apps.research.engines.base import ResearchProtocolContext
 from apps.research.engines.single_asset import SingleAssetBacktestEngine
-from apps.research.implementations.wave0 import FixedWeightResearch
+from apps.research.implementations.baseline import BuyAndHoldResearch
 from apps.research.models import (
     GoalRecommendationPolicy,
     GoalRecommendationRun,
@@ -96,7 +96,7 @@ def test_backtest_executes_signal_on_next_bar_and_applies_cost():
         {"open": 121, "high": 122, "low": 120, "close": 121, "volume": 1_000_000},
     ]
     result = SingleAssetBacktestEngine().run(
-        FixedWeightResearch(), bars, {"target_weight": 1},
+        BuyAndHoldResearch(), bars, {"target_weight": 1},
         ResearchProtocolContext(commission_bps=10),
     )
     assert result.positions == [0.0, 1.0, 1.0]
@@ -174,7 +174,7 @@ def test_acceptance_creates_no_instance_or_rebalance_and_fixed_weight_survives_p
     research_strategy = ResearchStrategyDefinition.objects.get(dataset_version=dataset, research_id="BH_001")
     implementation = ResearchStrategyImplementation.objects.create(
         research_strategy=research_strategy,
-        implementation_path="apps.research.implementations.wave0.FixedWeightResearch",
+        implementation_path="apps.research.implementations.baseline.BH_001",
         implementation_version="test", implementation_hash="a" * 64, role="EXECUTION",
         exact_semantic_match=True, supported_frequency="1d", supported_direction="LONG",
         status="APPROVED", executable_strategy_definition=definition,

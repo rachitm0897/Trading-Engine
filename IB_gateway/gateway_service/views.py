@@ -119,19 +119,41 @@ def historical_data(request):
     missing=[key for key in required if payload.get(key) in (None,"")]
     if missing:raise ValueError(f"Missing fields: {', '.join(missing)}")
     if int(payload["conid"]) <= 0:raise ValueError("conid must be positive")
-    if str(payload["bar_size"]).lower() not in {"1 day","1d"}:raise ValueError("Only daily historical bars are supported")
-    match=re.fullmatch(r"([1-9][0-9]*)\s+([DY])",str(payload["duration"]).strip().upper())
-    if not match:raise ValueError("duration must use bounded D or Y units")
+    bar_sizes={"1 min":"1 min","1m":"1 min","5 mins":"5 mins","5m":"5 mins","15 mins":"15 mins","15m":"15 mins","1 hour":"1 hour","1h":"1 hour","1 day":"1 day","1d":"1 day"}
+    bar_size=bar_sizes.get(str(payload["bar_size"]).lower())
+    if not bar_size:raise ValueError("bar_size must be 1 min, 5 mins, 15 mins, 1 hour, or 1 day")
+    match=re.fullmatch(r"([1-9][0-9]*)\s+([DWMY])",str(payload["duration"]).strip().upper())
+    if not match:raise ValueError("duration must use bounded D, W, M, or Y units")
     amount,unit=int(match.group(1)),match.group(2)
-    if (unit=="Y" and amount>5) or (unit=="D" and amount>1827):raise ValueError("duration cannot exceed five years")
+    approximate_days=amount*({"D":1,"W":7,"M":31,"Y":366}[unit])
+    if bar_size=="1 day" and approximate_days>3660:raise ValueError("daily duration cannot exceed ten years")
+    if bar_size!="1 day" and approximate_days>90:raise ValueError("intraday duration cannot exceed ninety days")
     what=str(payload["what_to_show"]).upper()
     if what not in {"TRADES","ADJUSTED_LAST"}:raise ValueError("what_to_show must be TRADES or ADJUSTED_LAST")
     if not isinstance(payload["use_rth"],bool):raise ValueError("use_rth must be a boolean")
     if payload.get("end_time"):
         datetime.fromisoformat(str(payload["end_time"]).replace("Z","+00:00"))
-    normalized={**payload,"conid":int(payload["conid"]),"bar_size":"1 day","duration":f"{amount} {unit}",
+    normalized={**payload,"conid":int(payload["conid"]),"bar_size":bar_size,"duration":f"{amount} {unit}",
                 "what_to_show":what}
     return _queued(request,"REQUEST_HISTORICAL_DATA",normalized)
+
+@csrf_exempt
+@protected
+def historical_schedule(request):
+    invalid=_method(request,"POST")
+    if invalid:return invalid
+    payload=_payload(request)
+    allowed={"conid","symbol","exchange","currency","days","use_rth","end_time"}
+    unknown=set(payload)-allowed
+    if unknown:raise ValueError(f"Unsupported historical-schedule fields: {', '.join(sorted(unknown))}")
+    required=("conid","symbol","exchange","currency","days","use_rth")
+    missing=[key for key in required if payload.get(key) in (None,"")]
+    if missing:raise ValueError(f"Missing fields: {', '.join(missing)}")
+    days=int(payload["days"])
+    if int(payload["conid"])<=0 or not 1<=days<=365:raise ValueError("conid and days are out of range")
+    if not isinstance(payload["use_rth"],bool):raise ValueError("use_rth must be a boolean")
+    normalized={**payload,"conid":int(payload["conid"]),"days":days}
+    return _queued(request,"REQUEST_HISTORICAL_SCHEDULE",normalized)
 @csrf_exempt
 @protected
 def market_subscription(request, action=None):

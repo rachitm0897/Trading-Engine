@@ -1,91 +1,35 @@
 # Portfolio Builder
 
-Portfolio Builder is a deterministic, paper-only workflow for dividing one broker-backed `TradingPortfolio` into up to ten virtual goal slices. Goals are construction inputs only: they do not own cash, positions, fills, orders, or financial ledgers.
+Portfolio Builder divides one broker-backed `TradingPortfolio` into up to ten virtual goal slices. Goals are construction inputs; they do not own cash, positions, fills, orders, or ledgers.
 
-## Workflow
+## Normal workflow
 
-The frontend route is `/portfolio-builder` and has four steps:
+The `/portfolio-builder` frontend has three steps:
 
-1. Allocate enabled goals. Each row has a name, percentage, fixed timeframe bucket, and filtered risk level. Enabled percentages must total exactly 100% before preview or apply.
-2. Search IBKR, select an exact contract, qualify it, and add the resolved stock once to a goal universe. Assign one or more eligible strategies under that stock. Parameters come from the plugin schema, and enabled instance-creating assignments must divide the stock with explicit shares totalling exactly 100%.
-3. Preview local stock weights, complete-portfolio stock contributions, strategy-controlled portfolio weights, aggregated instance targets, current-versus-proposed weights, metrics, and one net rebalance trade list.
-4. Confirm once. The combined stock target enters the existing SHADOW or PAPER rebalance pipeline. Matching strategy instances are created or updated in disabled `SHADOW` mode and must be reviewed before they can be enabled.
+1. **Goals** — name, allocation percentage, timeframe, risk, and enabled status. Enabled allocations must total exactly 100%. One button saves every goal and generates the complete plan recommendation.
+2. **Recommendations** — grouped goal cards show symbol/company, fixed stock weight, one primary strategy and its timeframe, goal timeframe/risk, expected return/volatility/drawdown, and a short reason. The only actions are regenerate, preview, or return to goals. There is no stock search, strategy editor, ownership form, accept, detach, readiness matrix, or dataset/protocol display.
+3. **Preview & Apply** — preview merges goal contributions, duplicate stocks, strategy targets, cash, metrics, current/proposed weights, and one net trade list. Apply requires a separate explicit confirmation.
 
-The existing single-universe optimizer remains available on the Portfolio page as **Advanced target optimizer**.
+NOW remains 100% cash. For other profiles, the backend selects 5–20 names according to timeframe/risk, qualifies or substitutes exact IBKR finalists, enforces the live cash/stock rules and GICS/turnover constraints, fixes one 100% strategy share per stock, attaches all goals atomically, and bumps the plan version once.
 
-For any non-`NOW` goal, the operator may instead generate a cached research recommendation. Generation is asynchronous and has no execution side effect. Review shows GICS, stock and sleeve weights, strategy shares, score, expected risk/return/drawdown, costs, versions, warnings, and expiry. Acceptance rechecks plan version, expiry, data eligibility, exact broker qualification, current strategy approval, live cash/stock limits, GICS caps, and exact 100% strategy shares. It then updates the existing stock and assignment rows and labels the goal `ACCEPTED_RECOMMENDATION`.
+## Safety boundary
 
-The recommendation panel also shows pilot readiness, data provider and latest date, and exact blocker codes. `BLOCKED` is a terminal generation result that cannot be accepted. Regenerate reruns the cached online selection; it does not launch research. Detach returns the goal to manual mode. Acceptance still creates no orders, rebalance, preview, or strategy instances.
+Recommendation generation only updates construction metadata and immutable recommendation/audit records. It creates no order, rebalance, strategy instance, or enablement. Preview creates no order. Apply invokes the existing combined rebalancer exactly once; sizing, price provenance, cash/fee buffers, risk, sell-before-buy ordering, OMS, Gateway, ledgers, kill switch, and reconciliation remain mandatory. Any created/reused strategy instance is disabled in SHADOW, and LIVE configuration is rejected at startup.
 
-Accepted rows are immutable through normal edit APIs. The operator must explicitly detach or regenerate. In recommendation mode preview loads fixed local stock weights rather than calling manual Markowitz, while retaining normal aggregation, targets, trade preview, one combined rebalance, and disabled-SHADOW instance creation. Acceptance itself creates no instance, rebalance, order, or enabled strategy.
-
-## Fixed goal rules
-
-Timeframes are `NOW`, `HURRY`, `FAST`, `BUILD`, `GROW`, and `COMPOUND`. Risk levels are 1 through 5 (`PRESERVATION` through `AGGRESSIVE`). The backend repeats the frontend timeframe-risk validation.
-
-Goal cash is the larger of the fixed timeframe cash floor and risk cash floor. Risk also fixes the maximum local single-stock weight. Risk levels 1–3 use `MINIMUM_VARIANCE`; levels 4–5 use `MAXIMUM_SHARPE`. `NOW` is intentionally 100% cash. Optimization uses 252 trading days, requires at least 60 aligned observations, and remains stock-only, long-only, and unlevered.
-
-Edge behavior is explicit:
-
-- no selected stocks previews as cash with a warning; a non-`NOW` goal blocks apply;
-- one stock is capped by the goal's single-stock limit and the remainder stays cash;
-- two or more stocks use the same Markowitz solver as the advanced optimizer;
-- duplicate stocks across goals are merged using `goal allocation × local stock weight`.
-
-## Stock construction and strategy ownership
-
-Stocks and strategies are intentionally separate inputs. `GoalInstrumentSelection` defines the optimizer universe. Adding, removing, or changing strategy assignments does not change Markowitz stock weighting.
-
-For goal `g` and stock `i`, the complete-portfolio stock contribution is `P(g,i) = goal allocation × local optimizer weight`. For assignment `k`, the controlled portfolio weight is `T(g,i,k) = P(g,i) × strategy share`. Assignments with the same strategy definition, instrument, timeframe, validated parameter hash, risk policy, and order policy aggregate across goals into one instance target.
-
-Every applied instance receives an explicit configuration:
-
-```json
-{
-  "target_weight": "<aggregated strategy weight>",
-  "capital_share": "<aggregated strategy weight>",
-  "priority": 100,
-  "construction_run_id": "<run id>"
-}
-```
-
-Only a disabled `SHADOW` instance with the exact identity may be reused. If its target changed, the normal update workflow creates a new immutable strategy version. Enabled, `PAPER`, `OBSERVE`, and otherwise incompatible instances are never modified. Builder apply always leaves created or updated instances disabled in `SHADOW` mode.
-
-Deleting a Builder-created strategy clears the assignment's nullable instance backlink while preserving the stock, strategy definition, parameters, and ownership share. A later Builder apply may therefore create a fresh disabled `SHADOW` instance; the backlink is construction metadata and does not block normal strategy deletion.
+The advanced manual target optimizer remains available on the Portfolio page. Backend manual construction endpoints remain for compatibility/internal tools but are intentionally absent from the standard Builder UI.
 
 ## API
 
-All responses use the standard envelope. Mutations retain the application's CSRF behavior and preview/apply require `Idempotency-Key`.
-
 ```text
-GET/POST  /api/v1/portfolio-construction/plans/
-GET/PATCH /api/v1/portfolio-construction/plans/{plan_id}/
-POST      /api/v1/portfolio-construction/plans/{plan_id}/goals/
+GET/POST     /api/v1/portfolio-construction/plans/
+GET/PATCH    /api/v1/portfolio-construction/plans/{plan_id}/
+POST         /api/v1/portfolio-construction/plans/{plan_id}/goals/
 PATCH/DELETE /api/v1/portfolio-construction/goals/{goal_id}/
-GET       /api/v1/portfolio-construction/goals/{goal_id}/eligible-strategies/
-GET/POST  /api/v1/portfolio-construction/goals/{goal_id}/instruments/
-PATCH/DELETE /api/v1/portfolio-construction/instruments/{goal_instrument_id}/
-GET/POST  /api/v1/portfolio-construction/instruments/{goal_instrument_id}/assignments/
-PATCH/DELETE /api/v1/portfolio-construction/assignments/{assignment_id}/
-GET       /api/v1/instruments/search/
-POST      /api/v1/instruments/resolve/
-GET       /api/v1/strategy-policies/
-POST      /api/v1/portfolio-construction/preview/
-GET       /api/v1/portfolio-construction/runs/
-GET       /api/v1/portfolio-construction/runs/{run_id}/
-POST      /api/v1/portfolio-construction/runs/{run_id}/apply/
-POST      /api/v1/portfolio-construction/goals/{goal_id}/recommendations/
-GET       /api/v1/portfolio-construction/recommendations/{run_id}/
-POST      /api/v1/portfolio-construction/recommendations/{run_id}/accept/
-POST      /api/v1/portfolio-construction/goals/{goal_id}/detach-recommendation/
+POST         /api/v1/portfolio-construction/plans/{plan_id}/recommendations/
+GET          /api/v1/portfolio-construction/recommendation-batches/{batch_id}/
+POST         /api/v1/portfolio-construction/preview/
+GET          /api/v1/portfolio-construction/runs/{run_id}/
+POST         /api/v1/portfolio-construction/runs/{run_id}/apply/
 ```
 
-Preview and apply return `202 Accepted` while queued. Poll the construction run until `status` is `COMPLETED` or `FAILED`, then poll `application_status` until `APPLIED` or `FAILED`. Retryable failures require the original key and `Idempotency-Retry: true`.
-
-A failed preview is not a usable preview result. The UI remains on the stock-and-strategy step and displays the run's `last_error`; it never renders a failed run as an empty allocation. Preview requires sufficient recent Finnhub history, so an unconfigured provider is reported explicitly and must be configured from the System page before retrying.
-
-## Persistence and safety boundary
-
-`PortfolioConstructionRun` stores immutable plan, goal, stock-universe, strategy-assignment, and resolved-policy snapshots plus local results, strategy contribution details, aggregated instance targets, combined stock targets, warnings, retry state, and its optional applied rebalance. `PortfolioConstructionTarget` stores only final combined stock targets and goal contribution explanations. There are no goal-level cash or position ledgers.
-
-The rebalancer identifies these targets with `GOAL_CONSTRUCTION` and remains responsible for current positions, auditable prices, drift, cash and fee buffers, lots, minimum trades, final turnover, sell-before-buy sequencing, position sizing, risk checks, OMS, and paper execution. Portfolio Builder cannot configure LIVE mode, short selling, or leverage, and it never enables strategy instances automatically.
+Recommendation, preview, and apply POSTs require `Idempotency-Key`. Preview and apply runs are polled to terminal status. A failed preview is never rendered as an empty successful allocation.

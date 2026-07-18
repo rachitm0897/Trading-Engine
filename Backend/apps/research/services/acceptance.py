@@ -60,7 +60,8 @@ def validate_recommendation_for_construction(run, *, check_expiry=True):
         approved = ResearchStrategyImplementation.objects.filter(
             research_strategy=sleeve.research_strategy,
             executable_strategy_definition=sleeve.execution_strategy_definition,
-            status__in=["BUILDER_READY", "APPROVED"],
+            status__in=["VALIDATED", "BACKTESTED", "SCORED", "APPROVED_FOR_RECOMMENDATION",
+                        "SHADOW_VALIDATED", "BUILDER_READY", "APPROVED"],
             exact_semantic_match=True,
         ).exists()
         if not approved:
@@ -150,6 +151,7 @@ def accept_recommendation(run_or_id, *, actor="operator"):
                 execution_timeframe=sleeve.execution_timeframe,
                 parameter_overrides=sleeve.parameters,
                 strategy_share=sleeve.strategy_share,
+                system_generated=True,
             )
             parameter_hash = canonical_request_hash("parameters", parameters)
             assignment, _ = GoalStrategyAssignment.objects.update_or_create(

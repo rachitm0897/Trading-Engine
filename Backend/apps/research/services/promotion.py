@@ -15,8 +15,10 @@ from ..models import ResearchCandidateScore, ResearchStrategyImplementation, Res
 def implementation_hash(path):
     module_name, attribute = path.rsplit(".", 1)
     implementation = getattr(importlib.import_module(module_name), attribute)
-    source = inspect.getsource(implementation).encode("utf-8")
-    return hashlib.sha256(source).hexdigest()
+    target = implementation if inspect.isclass(implementation) or inspect.isfunction(implementation) else implementation.__class__
+    source = inspect.getsource(target)
+    state = repr(sorted(getattr(implementation, "__dict__", {}).items()))
+    return hashlib.sha256(f"{source}\n{state}".encode("utf-8")).hexdigest()
 
 
 @transaction.atomic

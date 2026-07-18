@@ -17,8 +17,9 @@ from ..models import (
     ResearchUniverse,
     ResearchUniverseMember,
 )
-from .bundle_validation import FREQUENCY_MAP, SCOPE_ROLES, canonical_hash, flatten_gics, validate_bundle
+from .bundle_validation import FREQUENCY_MAP, canonical_hash, flatten_gics, strategy_role, validate_bundle
 from .universe_mapping import map_research_universe
+from .strategy_registry import synchronize_strategy_registry
 
 
 class BundleImportError(ValueError):
@@ -138,7 +139,7 @@ def import_bundle(bundle_path, *, activate=False, map_instruments=True):
             name=source["name"],
             family=source["family"],
             scope=source["scope"],
-            role=SCOPE_ROLES[source["scope"]],
+            role=strategy_role(source),
             description=source.get("description", ""),
             research_hypothesis=source.get("research_hypothesis", ""),
             production_status=source.get("production_status", "RESEARCH_CANDIDATE"),
@@ -194,6 +195,7 @@ def import_bundle(bundle_path, *, activate=False, map_instruments=True):
         configuration_hash=canonical_hash(protocol),
         active=activate,
     )
+    synchronize_strategy_registry(dataset)
     if map_instruments:
         map_research_universe(universe, create_unqualified=True)
     if activate:

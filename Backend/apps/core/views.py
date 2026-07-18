@@ -26,6 +26,51 @@ def health(request):
     except Exception as exc:
         return response(status=503, error={"code": "DATABASE_UNAVAILABLE", "message": str(exc), "details": {}})
 
+
+def readiness(request):
+    """Deployment gate: recommendation traffic is ready only after every profile cache is warm."""
+    invalid = method_guard(request, "GET")
+    if invalid:
+        return invalid
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        if not settings.RECOMMENDATION_SYSTEM_ENABLED:
+            return response({"status": "ready", "recommendation_system": "disabled"})
+        from apps.portfolio_construction.rules import MAXIMUM_RISK
+        from apps.research.models import BacktestProtocolVersion, RecommendationCacheSnapshot
+        from apps.research.services.strategy_registry import REGISTRY
+        from apps.research.services.universe_pipeline import active_recommendation_universe
+
+        universe = active_recommendation_universe(require_complete=True)
+        protocol = BacktestProtocolVersion.objects.get(dataset_version=universe.dataset_version, active=True)
+        expected = {
+            (timeframe, risk_level)
+            for timeframe, maximum_risk in MAXIMUM_RISK.items()
+            for risk_level in range(1, maximum_risk + 1)
+        }
+        current = set(RecommendationCacheSnapshot.objects.filter(
+            dataset_version=universe.dataset_version, protocol_version=protocol,
+            status="COMPLETED", expires_at__gt=timezone.now(),
+        ).values_list("goal_timeframe", "risk_level"))
+        missing = sorted(expected - current)
+        details = {
+            "universe_members": universe.members.filter(active=True, membership_end__isnull=True).count(),
+            "strategy_implementations": len(REGISTRY), "current_cache_profiles": len(expected & current),
+            "required_cache_profiles": len(expected), "missing_cache_profiles": [f"{key}:{risk}" for key, risk in missing],
+        }
+        if len(REGISTRY) != 97 or missing:
+            return response(status=503, error={
+                "code": "RECOMMENDATION_SYSTEM_NOT_READY",
+                "message": "Bootstrap and cache warming must complete before recommendation traffic is enabled",
+                "details": details,
+            })
+        return response({"status": "ready", **details})
+    except Exception as exc:
+        return response(status=503, error={
+            "code": "RECOMMENDATION_SYSTEM_NOT_READY", "message": str(exc), "details": {},
+        })
+
 @ensure_csrf_cookie
 def system(request):
     invalid=method_guard(request,"GET")
