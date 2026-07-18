@@ -19,7 +19,7 @@ api_patterns = [
     path("orders/", views.orders), path("orders/<str:internal_id>/detail/", views.orders, {"action":"detail"}), path("orders/<str:internal_id>/", views.orders), path("orders/<str:internal_id>/cancel/", views.orders, {"action":"cancel"}), path("executions/", views.executions), path("reconciliation/", views.reconciliation),
     path("risk/", views.risk), path("audit/", views.audit),
 ]
-urlpatterns = [path("healthz", views.health),path("metrics",streaming_views.prometheus_metrics)] + [path(f"api/v1/{p.pattern}", p.callback, p.default_args) for p in api_patterns]
+urlpatterns = [path("healthz", views.health),path("readyz", views.readiness),path("metrics",streaming_views.prometheus_metrics)] + [path(f"api/v1/{p.pattern}", p.callback, p.default_args) for p in api_patterns]
 new_api = [
     path("dashboard/summary/",analytics_views.dashboard_summary),path("portfolios/series/",analytics_views.portfolio_series),
     path("strategy-definitions/",strategy_views.definitions),path("strategy-definitions/<str:key>/",strategy_views.definitions),
@@ -58,6 +58,8 @@ new_api = [
     path("portfolio-construction/plans/",construction_views.plans),
     path("portfolio-construction/plans/<int:plan_id>/",construction_views.plans),
     path("portfolio-construction/plans/<int:plan_id>/goals/",construction_views.plan_goals),
+    path("portfolio-construction/plans/<int:plan_id>/recommendations/",construction_views.plan_recommendations),
+    path("portfolio-construction/recommendation-batches/<int:batch_id>/",construction_views.recommendation_batches),
     path("portfolio-construction/goals/<int:goal_id>/",construction_views.goal_detail),
     path("portfolio-construction/goals/<int:goal_id>/eligible-strategies/",construction_views.goal_eligible_strategies),
     path("portfolio-construction/goals/<int:goal_id>/instruments/",construction_views.goal_instruments),
@@ -75,18 +77,10 @@ new_api = [
     path("research/strategies/<str:research_id>/",research_views.strategies),
     path("research/readiness/",research_views.readiness),
     path("research/candidate-scores/",research_views.candidate_scores),
-    path("research/mvp/status/",research_views.mvp_status,{"resource":"status"}),
-    path("research/mvp/matrix/",research_views.mvp_status,{"resource":"matrix"}),
-    path("research/mvp/stocks/",research_views.mvp_status,{"resource":"stocks"}),
-    path("research/mvp/strategies/",research_views.mvp_status,{"resource":"strategies"}),
     path("research/experiments/<int:experiment_id>/",research_views.experiments),
-    path("portfolio-construction/goals/<int:goal_id>/recommendations/",research_views.goal_recommendations),
-    path("portfolio-construction/recommendations/<int:run_id>/",research_views.recommendation_detail),
-    path("portfolio-construction/recommendations/<int:run_id>/accept/",research_views.recommendation_detail,{"action":"accept"}),
-    path("portfolio-construction/goals/<int:goal_id>/detach-recommendation/",research_views.detach_goal_recommendation),
 ]
 urlpatterns += [path("api/v1/" + str(p.pattern),p.callback,p.default_args) for p in new_api]
 if settings.APP_BASE_PATH:
     prefix = settings.APP_BASE_PATH.strip("/") + "/"
-    urlpatterns += [path(prefix + "healthz", views.health),path(prefix + "metrics",streaming_views.prometheus_metrics)] + [path(prefix + f"api/v1/{p.pattern}", p.callback, p.default_args) for p in api_patterns]
+    urlpatterns += [path(prefix + "healthz", views.health),path(prefix + "readyz", views.readiness),path(prefix + "metrics",streaming_views.prometheus_metrics)] + [path(prefix + f"api/v1/{p.pattern}", p.callback, p.default_args) for p in api_patterns]
     urlpatterns += [path(prefix + "api/v1/" + str(p.pattern),p.callback,p.default_args) for p in new_api]

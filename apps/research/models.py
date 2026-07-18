@@ -169,6 +169,31 @@ class InstrumentEligibilitySnapshot(models.Model):
         indexes = [models.Index(fields=["as_of_date", "research_eligible", "builder_eligible"], name="eligibility_date_idx")]
 
 
+class ResearchDataCoverageSummary(models.Model):
+    universe_member = models.OneToOneField(
+        ResearchUniverseMember, on_delete=models.PROTECT, related_name="data_coverage"
+    )
+    as_of_date = models.DateField()
+    daily_bar_count = models.PositiveIntegerField(default=0)
+    daily_start_date = models.DateField(null=True, blank=True)
+    daily_end_date = models.DateField(null=True, blank=True)
+    intraday_bar_count = models.PositiveIntegerField(default=0)
+    intraday_start_at = models.DateTimeField(null=True, blank=True)
+    intraday_end_at = models.DateTimeField(null=True, blank=True)
+    corporate_action_count = models.PositiveIntegerField(default=0)
+    fundamental_fact_count = models.PositiveIntegerField(default=0)
+    analyst_fact_count = models.PositiveIntegerField(default=0)
+    event_count = models.PositiveIntegerField(default=0)
+    last_successful_update = models.DateTimeField(null=True, blank=True)
+    recommendation_eligible = models.BooleanField(default=False)
+    provider_status = models.JSONField(default=dict)
+    quality_rules = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["as_of_date", "recommendation_eligible"], name="research_coverage_ready_idx")]
+
+
 class ResearchStrategyDefinition(models.Model):
     research_id = models.CharField(max_length=64)
     dataset_version = models.ForeignKey(ResearchDatasetVersion, on_delete=models.PROTECT, related_name="strategies")
@@ -303,6 +328,28 @@ class ResearchDailyBar(models.Model):
         indexes = [models.Index(fields=["instrument", "trading_date", "quality_status"], name="research_bar_date_idx")]
 
 
+class ResearchIntradayBar(models.Model):
+    instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT, related_name="research_intraday_bars")
+    frequency = models.CharField(max_length=8)
+    window_start = models.DateTimeField()
+    window_end = models.DateTimeField()
+    open = models.DecimalField(max_digits=24, decimal_places=8)
+    high = models.DecimalField(max_digits=24, decimal_places=8)
+    low = models.DecimalField(max_digits=24, decimal_places=8)
+    close = models.DecimalField(max_digits=24, decimal_places=8)
+    volume = models.DecimalField(max_digits=28, decimal_places=4)
+    vwap = models.DecimalField(max_digits=24, decimal_places=8, null=True, blank=True)
+    provider = models.CharField(max_length=32)
+    provider_timestamp = models.DateTimeField()
+    revision_timestamp = models.DateTimeField()
+    data_version = models.PositiveIntegerField(default=1)
+    quality_status = models.CharField(max_length=16, default="PENDING")
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["instrument", "frequency", "window_start", "data_version"], name="unique_research_intraday_version")]
+        indexes = [models.Index(fields=["instrument", "frequency", "window_start", "quality_status"], name="research_intraday_date_idx")]
+
+
 class ResearchCorporateAction(models.Model):
     ACTIONS = [(value, value) for value in ["DIVIDEND", "SPLIT", "SYMBOL_CHANGE", "MERGER", "SPIN_OFF", "DELISTING", "CASH_PROCEEDS"]]
     instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT, related_name="research_corporate_actions")
@@ -330,10 +377,34 @@ class ResearchFundamentalFact(models.Model):
     units = models.CharField(max_length=32)
     original_value = models.CharField(max_length=255)
     revision_version = models.PositiveIntegerField(default=1)
+    provider = models.CharField(max_length=32, blank=True)
+    provider_timestamp = models.DateTimeField(null=True, blank=True)
+    revision_timestamp = models.DateTimeField(null=True, blank=True)
+    data_version = models.PositiveIntegerField(default=1)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["issuer", "metric", "period_end", "revision_version"], name="unique_fundamental_revision")]
         indexes = [models.Index(fields=["issuer", "metric", "public_availability_timestamp"], name="fundamental_available_idx")]
+
+
+class ResearchAnalystFact(models.Model):
+    issuer = models.ForeignKey("instruments.Issuer", on_delete=models.PROTECT, related_name="research_analyst_facts")
+    instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT, null=True, blank=True, related_name="research_analyst_facts")
+    fact_type = models.CharField(max_length=64)
+    metric = models.CharField(max_length=128)
+    period_end = models.DateField(null=True, blank=True)
+    event_timestamp = models.DateTimeField()
+    public_availability_timestamp = models.DateTimeField()
+    value = models.DecimalField(max_digits=36, decimal_places=12, null=True, blank=True)
+    payload = models.JSONField(default=dict)
+    provider = models.CharField(max_length=32)
+    provider_timestamp = models.DateTimeField()
+    revision_timestamp = models.DateTimeField()
+    data_version = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["issuer", "fact_type", "metric", "event_timestamp", "data_version"], name="unique_analyst_fact_version")]
+        indexes = [models.Index(fields=["issuer", "fact_type", "public_availability_timestamp"], name="analyst_available_idx")]
 
 
 class ResearchEvent(models.Model):
@@ -346,6 +417,10 @@ class ResearchEvent(models.Model):
     timezone = models.CharField(max_length=64, default="UTC")
     payload = models.JSONField(default=dict)
     quality_status = models.CharField(max_length=16, default="PENDING")
+    provider = models.CharField(max_length=32, blank=True)
+    provider_timestamp = models.DateTimeField(null=True, blank=True)
+    revision_timestamp = models.DateTimeField(null=True, blank=True)
+    data_version = models.PositiveIntegerField(default=1)
 
     class Meta:
         indexes = [models.Index(fields=["event_type", "available_timestamp"], name="research_event_available_idx")]
@@ -362,6 +437,9 @@ class ResearchExperiment(models.Model):
     )
     implementation_hash = models.CharField(max_length=64, blank=True)
     data_version = models.CharField(max_length=64, blank=True)
+    provider_data_version = models.CharField(max_length=64, blank=True)
+    feature_version = models.CharField(max_length=64, blank=True)
+    role = models.CharField(max_length=24, choices=StrategyRole.choices, default=StrategyRole.EXECUTION)
     parameter_space_hash = models.CharField(max_length=64, blank=True)
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
@@ -376,7 +454,8 @@ class ResearchExperiment(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["dataset_version", "instrument", "strategy", "status"], name="research_mvp_pair_idx"),
+            models.Index(fields=["dataset_version", "role", "strategy", "status"], name="research_role_status_idx"),
+            models.Index(fields=["dataset_version", "instrument", "strategy", "status"], name="research_pair_status_idx"),
         ]
 
 
@@ -427,6 +506,84 @@ class ResearchCandidateScore(models.Model):
         ]
 
 
+class ResearchRoleScore(models.Model):
+    SCORE_TYPES = [(value, value) for value in ["STOCK", "EXECUTION", "ALLOCATOR", "OVERLAY", "EVENT", "PAIR_BASKET"]]
+    score_type = models.CharField(max_length=24, choices=SCORE_TYPES)
+    dataset_version = models.ForeignKey(ResearchDatasetVersion, on_delete=models.PROTECT, related_name="role_scores")
+    strategy = models.ForeignKey(ResearchStrategyDefinition, on_delete=models.PROTECT, null=True, blank=True, related_name="role_scores")
+    instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT, null=True, blank=True, related_name="research_role_scores")
+    goal_timeframe = models.CharField(max_length=16)
+    risk_level = models.PositiveSmallIntegerField()
+    as_of_date = models.DateField()
+    score = models.DecimalField(max_digits=9, decimal_places=4)
+    components = models.JSONField(default=dict)
+    contributing_strategy_ids = models.JSONField(default=list)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["score_type", "dataset_version", "strategy", "instrument", "goal_timeframe", "risk_level", "as_of_date"], name="unique_role_score_date")]
+        indexes = [models.Index(fields=["score_type", "goal_timeframe", "risk_level", "-score"], name="role_goal_score_idx")]
+
+
+class InstrumentFeatureSnapshot(models.Model):
+    instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT, related_name="research_feature_snapshots")
+    feature_key = models.CharField(max_length=128)
+    frequency = models.CharField(max_length=8)
+    as_of_date = models.DateField()
+    available_at = models.DateTimeField()
+    data_version = models.CharField(max_length=64)
+    implementation_version = models.CharField(max_length=64)
+    value = models.JSONField(default=dict)
+    artifact_uri = models.CharField(max_length=1000, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["instrument", "feature_key", "frequency", "as_of_date", "data_version", "implementation_version"], name="unique_instrument_feature")]
+        indexes = [models.Index(fields=["feature_key", "frequency", "as_of_date"], name="instrument_feature_date_idx")]
+
+
+class CrossSectionalFeatureSnapshot(models.Model):
+    universe = models.ForeignKey(ResearchUniverse, on_delete=models.PROTECT, related_name="cross_sectional_features")
+    feature_key = models.CharField(max_length=128)
+    frequency = models.CharField(max_length=8)
+    as_of_date = models.DateField()
+    available_at = models.DateTimeField()
+    data_version = models.CharField(max_length=64)
+    implementation_version = models.CharField(max_length=64)
+    summary = models.JSONField(default=dict)
+    artifact_uri = models.CharField(max_length=1000)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["universe", "feature_key", "frequency", "as_of_date", "data_version", "implementation_version"], name="unique_cross_section_feature")]
+        indexes = [models.Index(fields=["universe", "feature_key", "as_of_date"], name="cross_feature_date_idx")]
+
+
+class MarketRegimeSnapshot(models.Model):
+    universe = models.ForeignKey(ResearchUniverse, on_delete=models.PROTECT, related_name="regime_snapshots")
+    as_of_date = models.DateField()
+    available_at = models.DateTimeField()
+    regime = models.CharField(max_length=32)
+    features = models.JSONField(default=dict)
+    data_version = models.CharField(max_length=64)
+    implementation_version = models.CharField(max_length=64)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["universe", "as_of_date", "data_version", "implementation_version"], name="unique_market_regime")]
+
+
+class EventFeatureSnapshot(models.Model):
+    event = models.ForeignKey(ResearchEvent, on_delete=models.PROTECT, related_name="feature_snapshots")
+    instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT, null=True, blank=True, related_name="event_feature_snapshots")
+    feature_key = models.CharField(max_length=128)
+    as_of_date = models.DateField()
+    available_at = models.DateTimeField()
+    data_version = models.CharField(max_length=64)
+    implementation_version = models.CharField(max_length=64)
+    value = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["event", "feature_key", "as_of_date", "data_version", "implementation_version"], name="unique_event_feature")]
+
+
 class GoalRecommendationPolicy(models.Model):
     name = models.CharField(max_length=128, unique=True)
     minimum_candidate_score = models.DecimalField(max_digits=6, decimal_places=2, default=65)
@@ -451,7 +608,8 @@ class GoalRecommendationPolicy(models.Model):
 
 class GoalRecommendationRun(models.Model):
     goal_allocation = models.ForeignKey(
-        "portfolio_construction.PortfolioGoalAllocation", on_delete=models.PROTECT, related_name="recommendation_runs"
+        "portfolio_construction.PortfolioGoalAllocation", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="recommendation_runs",
     )
     requested_plan_version = models.PositiveIntegerField()
     policy = models.ForeignKey(GoalRecommendationPolicy, on_delete=models.PROTECT, related_name="recommendation_runs")
@@ -504,10 +662,71 @@ class GoalRecommendationSleeve(models.Model):
 
 class GoalRecommendationAcceptance(models.Model):
     recommendation_run = models.OneToOneField(GoalRecommendationRun, on_delete=models.PROTECT, related_name="acceptance")
-    goal = models.ForeignKey("portfolio_construction.PortfolioGoalAllocation", on_delete=models.PROTECT, related_name="recommendation_acceptances")
+    goal = models.ForeignKey(
+        "portfolio_construction.PortfolioGoalAllocation", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="recommendation_acceptances",
+    )
     accepted_plan_version = models.PositiveIntegerField()
     created_updated_instrument_selections = models.JSONField(default=list)
     created_updated_strategy_assignments = models.JSONField(default=list)
     accepted_by = models.CharField(max_length=255)
     accepted_at = models.DateTimeField(auto_now_add=True)
     change_summary = models.JSONField(default=dict)
+
+
+class RecommendationCacheSnapshot(models.Model):
+    dataset_version = models.ForeignKey(ResearchDatasetVersion, on_delete=models.PROTECT, related_name="recommendation_cache_snapshots")
+    protocol_version = models.ForeignKey(BacktestProtocolVersion, on_delete=models.PROTECT, related_name="recommendation_cache_snapshots")
+    goal_timeframe = models.CharField(max_length=16)
+    risk_level = models.PositiveSmallIntegerField()
+    as_of_date = models.DateField()
+    input_hash = models.CharField(max_length=64)
+    candidate_pool = models.JSONField(default=list)
+    selected_stocks = models.JSONField(default=list)
+    allocator_strategy_id = models.CharField(max_length=64, blank=True)
+    overlay_strategy_ids = models.JSONField(default=list)
+    expected_metrics = models.JSONField(default=dict)
+    gics_exposure = models.JSONField(default=dict)
+    fallback_tier = models.PositiveSmallIntegerField(default=1)
+    data_freshness = models.JSONField(default=dict)
+    status = models.CharField(max_length=16, choices=WorkStatus.choices, default=WorkStatus.COMPLETED)
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["dataset_version", "protocol_version", "goal_timeframe", "risk_level", "as_of_date", "input_hash"], name="unique_recommendation_cache")]
+        indexes = [models.Index(fields=["goal_timeframe", "risk_level", "status", "-created_at"], name="recommendation_cache_key_idx")]
+
+
+class RecommendationBatchRun(models.Model):
+    plan = models.ForeignKey("portfolio_construction.PortfolioConstructionPlan", on_delete=models.PROTECT, related_name="recommendation_batches")
+    requested_plan_version = models.PositiveIntegerField()
+    status = models.CharField(max_length=16, choices=WorkStatus.choices, default=WorkStatus.QUEUED)
+    idempotency_key = models.CharField(max_length=128, unique=True)
+    input_hash = models.CharField(max_length=64, db_index=True)
+    dataset = models.ForeignKey(ResearchDatasetVersion, on_delete=models.PROTECT, related_name="recommendation_batches")
+    protocol = models.ForeignKey(BacktestProtocolVersion, on_delete=models.PROTECT, related_name="recommendation_batches")
+    input_snapshot = models.JSONField(default=list)
+    metrics = models.JSONField(default=dict)
+    error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["plan", "status", "-created_at"], name="recommend_batch_status_idx")]
+
+
+class RecommendationBatchGoalResult(models.Model):
+    batch = models.ForeignKey(RecommendationBatchRun, on_delete=models.PROTECT, related_name="goal_results")
+    goal = models.ForeignKey(
+        "portfolio_construction.PortfolioGoalAllocation", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="recommendation_batch_results",
+    )
+    recommendation_run = models.ForeignKey(GoalRecommendationRun, on_delete=models.PROTECT, null=True, blank=True, related_name="batch_results")
+    status = models.CharField(max_length=16, choices=WorkStatus.choices, default=WorkStatus.QUEUED)
+    fallback_tier = models.PositiveSmallIntegerField(default=1)
+    summary = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["batch", "goal"], name="unique_batch_goal_result")]

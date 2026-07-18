@@ -21,7 +21,9 @@ class StrategyRole(models.TextChoices):
     EXECUTION = "EXECUTION"
     ALLOCATOR = "ALLOCATOR"
     OVERLAY = "OVERLAY"
+    EVENT = "EVENT"
     PAIR_BASKET = "PAIR_BASKET"
+    INCOME = "INCOME"
     RESEARCH_ONLY = "RESEARCH_ONLY"
 
 
@@ -50,7 +52,7 @@ class ImplementationStatus(models.TextChoices):
     APPROVED_FOR_RECOMMENDATION = "APPROVED_FOR_RECOMMENDATION"
     SHADOW_VALIDATED = "SHADOW_VALIDATED"
     BUILDER_READY = "BUILDER_READY"
-    # Kept for compatibility with deployments promoted before the MVP lifecycle.
+    # Kept for compatibility with deployments promoted under the legacy lifecycle.
     APPROVED = "APPROVED"
     RETIRED = "RETIRED"
 

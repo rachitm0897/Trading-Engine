@@ -11,7 +11,7 @@ from apps.instruments.models import BrokerContract, InstrumentProviderMapping
 from apps.market_data.models import InstrumentPriceHistory
 from apps.market_data.providers.finnhub import FinnhubClient
 
-from ..models import ResearchCorporateAction, ResearchDailyBar
+from ..models import ResearchCorporateAction, ResearchDailyBar, ResearchIntradayBar
 
 
 D = Decimal
@@ -225,7 +225,13 @@ def _gateway_rows(instrument, contract, *, years, gateway=None):
 def refresh_research_history(instrument, *, years=5, minimum_bars=756, finnhub=None, gateway=None,
                              as_of_date=None):
     as_of_date=as_of_date or timezone.localdate()
-    start_date=as_of_date-timedelta(days=int(years)*366)
+    latest = ResearchDailyBar.objects.filter(instrument=instrument).order_by("-trading_date").first()
+    # Re-read a short overlap so late vendor revisions and corporate actions are versioned,
+    # without fetching ten years for every member each day.
+    start_date=max(
+        as_of_date-timedelta(days=int(years)*366),
+        latest.trading_date-timedelta(days=10) if latest else date.min,
+    )
     mapping=InstrumentProviderMapping.objects.filter(
         instrument=instrument,provider="FINNHUB",status="VERIFIED"
     ).first()
@@ -247,3 +253,114 @@ def refresh_research_history(instrument, *, years=5, minimum_bars=756, finnhub=N
     report=validate_research_history(instrument,minimum_bars=minimum_bars,as_of_date=as_of_date)
     if primary_error:report["primary_error"]=primary_error
     return report
+
+
+def _as_datetime(value):
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt_timezone.utc)
+
+
+def _intraday_value(row, key, default=None):
+    return row.get(key, default) if isinstance(row, dict) else getattr(row, key, default)
+
+
+@transaction.atomic
+def _store_intraday_rows(instrument, rows, *, frequency, seconds, provider, sessions=()):
+    now, stored, revised, rejected = timezone.now(), 0, 0, 0
+    for raw in rows:
+        start = _as_datetime(_intraday_value(raw, "date", _intraday_value(raw, "window_start")))
+        end = _as_datetime(_intraday_value(raw, "window_end", start + timedelta(seconds=seconds)))
+        values = {
+            "open": D(str(_intraday_value(raw, "open"))).quantize(D("0.00000001")),
+            "high": D(str(_intraday_value(raw, "high"))).quantize(D("0.00000001")),
+            "low": D(str(_intraday_value(raw, "low"))).quantize(D("0.00000001")),
+            "close": D(str(_intraday_value(raw, "close"))).quantize(D("0.00000001")),
+            "volume": D(str(_intraday_value(raw, "volume", 0) or 0)).quantize(D("0.0001")),
+            "vwap": (
+                D(str(_intraday_value(raw, "average"))).quantize(D("0.00000001"))
+                if _intraday_value(raw, "average") not in (None, "") else None
+            ),
+        }
+        structurally_valid = (
+            min(values["open"], values["close"]) >= values["low"] > 0
+            and values["high"] >= max(values["open"], values["close"])
+            and values["volume"] >= 0
+        )
+        in_session = not sessions or any(session_start <= start < session_end for session_start, session_end in sessions)
+        quality = "VALID" if structurally_valid and in_session else "REJECTED"
+        latest = ResearchIntradayBar.objects.filter(
+            instrument=instrument, frequency=frequency, window_start=start,
+        ).order_by("-data_version").first()
+        comparable = {key: getattr(latest, key) for key in values} if latest else None
+        unchanged = bool(latest and comparable == values and latest.quality_status == quality and latest.provider == provider)
+        version = latest.data_version if unchanged else (latest.data_version + 1 if latest else 1)
+        _, created = ResearchIntradayBar.objects.update_or_create(
+            instrument=instrument, frequency=frequency, window_start=start, data_version=version,
+            defaults={
+                "window_end": end, **values, "provider": provider,
+                "provider_timestamp": _intraday_value(raw, "provider_timestamp", now) or now,
+                "revision_timestamp": now, "quality_status": quality,
+            },
+        )
+        stored += int(created)
+        revised += int(bool(created and latest))
+        rejected += int(quality == "REJECTED")
+    return {"stored": stored, "revised": revised, "rejected": rejected}
+
+
+def refresh_intraday_history(instrument, *, frequency="1h", days=90, finnhub=None, gateway=None):
+    """Persist incremental Finnhub intraday bars with exact-contract IBKR fallback."""
+    bar_sizes = {"1m": ("1 min", 60), "5m": ("5 mins", 300), "15m": ("15 mins", 900), "1h": ("1 hour", 3600)}
+    if frequency not in bar_sizes:
+        raise ValueError("Research intraday frequency must be 1m, 5m, 15m, or 1h")
+    if not 1 <= int(days) <= 90:
+        raise ValueError("Research intraday history is bounded to 1-90 days")
+    seconds = bar_sizes[frequency][1]
+    now = timezone.now()
+    latest = ResearchIntradayBar.objects.filter(instrument=instrument, frequency=frequency).order_by("-window_start").first()
+    earliest = now - timedelta(days=int(days))
+    start = max(earliest, latest.window_start - timedelta(seconds=seconds * 2)) if latest else earliest
+    mapping = InstrumentProviderMapping.objects.filter(
+        instrument=instrument, provider="FINNHUB", status="VERIFIED",
+    ).first()
+    primary_error = None
+    provider = "FINNHUB"
+    sessions = []
+    try:
+        if not mapping:
+            raise ValueError("Verified Finnhub mapping is unavailable")
+        candles = (finnhub or FinnhubClient()).historical_candles(mapping.provider_symbol, frequency, start, now)
+        raw_rows = list(candles)
+    except Exception as exc:
+        primary_error = str(exc)
+        contract = BrokerContract.objects.filter(instrument=instrument, qualified_at__isnull=False).first()
+        if not contract:
+            raise ValueError(f"{instrument.symbol} has no Finnhub intraday data or exact qualified IBKR fallback") from exc
+        client = gateway or GatewayClient()
+        requested_days = max(1, min(int(days), (now.date() - start.date()).days + 1))
+        payload = {
+            "conid": contract.conid, "symbol": instrument.symbol, "exchange": instrument.exchange,
+            "currency": instrument.currency, "bar_size": bar_sizes[frequency][0], "duration": f"{requested_days} D",
+            "what_to_show": "TRADES", "use_rth": True, "end_time": "",
+        }
+        response = client.historical_bars(payload)
+        if int(response.get("conid") or 0) != int(contract.conid):
+            raise ValueError("IBKR historical data returned a different contract identity")
+        schedule = client.historical_schedule({
+            "conid": contract.conid, "symbol": instrument.symbol, "exchange": instrument.exchange,
+            "currency": instrument.currency, "days": requested_days, "use_rth": True, "end_time": "",
+        })
+        sessions = [(_as_datetime(item["start"]), _as_datetime(item["end"])) for item in schedule.get("sessions", [])]
+        raw_rows = response.get("bars", [])
+        provider = str(response.get("provider") or "IBKR_TRADES")
+    outcome = _store_intraday_rows(
+        instrument, raw_rows, frequency=frequency, seconds=seconds, provider=provider, sessions=sessions,
+    )
+    return {
+        "symbol": instrument.symbol, "frequency": frequency, "received": len(raw_rows),
+        **outcome, "session_count": len(sessions), "provider": provider,
+        **({"primary_error": primary_error} if primary_error else {}),
+    }

@@ -1,6 +1,7 @@
 import time
 import hashlib
 import json
+import time
 import requests
 from django.conf import settings
 
@@ -69,6 +70,12 @@ class GatewayClient:
         digest=hashlib.sha256(canonical.encode()).hexdigest()[:40]
         queued=self.request("POST","market-data/history/",json=payload,
                             idempotency_key=f"historical-data:{digest}",retries=0)
+        return self.wait_for_command(queued,timeout=timeout)
+    def historical_schedule(self, payload, timeout=30):
+        canonical=json.dumps(payload,sort_keys=True,separators=(",",":"),default=str)
+        digest=hashlib.sha256(canonical.encode()).hexdigest()[:40]
+        queued=self.request("POST","market-data/schedule/",json=payload,
+                            idempotency_key=f"historical-schedule:{digest}",retries=0)
         return self.wait_for_command(queued,timeout=timeout)
     def subscribe_market_data(self,payload,key):return self.request("POST","market-data/subscriptions/",json=payload,idempotency_key=key,retries=0)
     def cancel_market_data(self,payload,key):return self.request("POST","market-data/subscriptions/cancel/",json=payload,idempotency_key=key,retries=0)

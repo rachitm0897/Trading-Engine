@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from decimal import Decimal, InvalidOperation
 
@@ -14,6 +15,8 @@ from apps.core.views import response
 from apps.instruments.models import Instrument
 from apps.portfolios.models import TradingPortfolio
 from apps.strategies.models import OrderPolicy, StrategyDefinition, StrategyRiskPolicy
+from apps.research.models import RecommendationBatchRun
+from apps.research.services.recommendation_batch import create_recommendation_batch, run_recommendation_batch
 
 from .models import (
     GoalInstrumentSelection,
@@ -33,6 +36,9 @@ from .services import (
     validate_assignment,
     validate_instrument_selection,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _actor(request):
@@ -226,6 +232,69 @@ def _run_row(run, detail=False):
     return row
 
 
+def _recommendation_batch_row(batch, detail=True):
+    row = {
+        "id": batch.pk, "plan_id": batch.plan_id, "requested_plan_version": batch.requested_plan_version,
+        "status": batch.status, "dataset_version_id": batch.dataset_id, "protocol_version_id": batch.protocol_id,
+        "metrics": batch.metrics, "error": batch.error, "created_at": batch.created_at,
+        "started_at": batch.started_at, "completed_at": batch.completed_at,
+    }
+    if detail:
+        snapshots = {int(item["goal_id"]): item for item in (batch.input_snapshot or [])}
+        row["goals"] = [{
+            "goal_id": item.goal_id or (item.summary or {}).get("goal_id"),
+            "goal_name": item.goal.name if item.goal else (
+                (item.summary or {}).get("goal_name")
+                or snapshots.get(int((item.summary or {}).get("goal_id") or 0), {}).get("name", "Deleted goal")
+            ),
+            "status": item.status,
+            "recommendation_run_id": item.recommendation_run_id, "fallback_tier": item.fallback_tier,
+            **(item.summary or {}),
+        } for item in batch.goal_results.select_related("goal").order_by("goal__display_order", "goal_id")]
+    return row
+
+
+def plan_recommendations(request, plan_id):
+    if request.method != "POST":
+        return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "POST required", "details": {}})
+    key = request.headers.get("Idempotency-Key")
+    if not key:
+        return response(status=400, error={"code": "IDEMPOTENCY_KEY_REQUIRED", "message": "Idempotency-Key header is required", "details": {}})
+    throttled = throttle_response(request, "plan_recommendations", limit=settings.OPTIMIZATION_THROTTLE_LIMIT,
+                                  window_seconds=settings.EXPENSIVE_OPERATION_THROTTLE_WINDOW_SECONDS)
+    if throttled:
+        return throttled
+    try:
+        payload = _payload(request)
+        if payload:
+            raise ValueError("The request body must be empty; enabled goals are read from the locked plan")
+        batch, created = create_recommendation_batch(plan_id, key)
+        if created or batch.status in {"QUEUED", "RUNNING"}:
+            batch = run_recommendation_batch(batch, actor=_actor(request))
+        return response(_recommendation_batch_row(batch), status=201 if created else 200)
+    except PortfolioConstructionPlan.DoesNotExist:
+        return response(status=404, error={"code": "NOT_FOUND", "message": "Construction plan not found", "details": {}})
+    except (ValueError, json.JSONDecodeError) as exc:
+        return response(status=409, error={"code": "RECOMMENDATION_BATCH_FAILED", "message": str(exc), "details": {}})
+    except Exception:
+        logger.exception("Unexpected recommendation batch failure for plan %s", plan_id)
+        return response(status=500, error={
+            "code": "RECOMMENDATION_BATCH_INTERNAL_ERROR",
+            "message": "Recommendation generation failed unexpectedly. Retry or inspect the Backend logs.",
+            "details": {},
+        })
+
+
+def recommendation_batches(request, batch_id):
+    if request.method != "GET":
+        return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "GET required", "details": {}})
+    try:
+        batch = RecommendationBatchRun.objects.select_related("plan").get(pk=batch_id)
+        return response(_recommendation_batch_row(batch))
+    except RecommendationBatchRun.DoesNotExist:
+        return response(status=404, error={"code": "NOT_FOUND", "message": "Recommendation batch not found", "details": {}})
+
+
 def plans(request, plan_id=None):
     if request.method == "GET":
         if plan_id:
@@ -349,9 +418,6 @@ def goal_detail(request, goal_id):
         with transaction.atomic():
             goal = PortfolioGoalAllocation.objects.select_for_update().select_related("plan").get(pk=goal_id)
             plan = PortfolioConstructionPlan.objects.select_for_update().get(pk=goal.plan_id)
-            from apps.research.services.acceptance import require_manual_edit_allowed
-
-            require_manual_edit_allowed(goal)
             if request.method == "DELETE":
                 result = {"id": goal.pk, "name": goal.name, "plan_id": plan.pk}
                 goal.delete()
@@ -359,6 +425,9 @@ def goal_detail(request, goal_id):
                 event = "portfolio.construction_goal.deleted"
             else:
                 values = _goal_values(_payload(request), goal)
+                if goal.construction_source == "ACCEPTED_RECOMMENDATION":
+                    goal.construction_source = "MANUAL_OPTIMIZER"
+                    goal.accepted_recommendation_run = None
                 enabling = values.get("enabled", goal.enabled)
                 if enabling and not goal.enabled and plan.goals.filter(enabled=True).exclude(pk=goal.pk).count() >= 10:
                     raise ValueError("At most ten goals may be enabled")

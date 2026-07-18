@@ -92,7 +92,7 @@ def require_plan_ready(plan):
     return validation
 
 
-def strategy_eligibility(definition, goal):
+def strategy_eligibility(definition, goal, *, system_generated=False):
     reasons = []
     profile = StrategyConstructionProfile.objects.filter(strategy_definition=definition).first()
     plugin = None
@@ -107,7 +107,7 @@ def strategy_eligibility(definition, goal):
     else:
         if not profile.construction_enabled:
             reasons.append("Strategy is disabled for portfolio construction")
-        if not profile.user_selectable:
+        if not profile.user_selectable and not system_generated:
             reasons.append("Strategy is not user-selectable")
         if goal.timeframe_bucket not in profile.supported_goal_timeframes:
             reasons.append(f"Strategy does not support {goal.timeframe_bucket} goals")
@@ -160,7 +160,7 @@ def validate_instrument_selection(*, instrument, minimum_weight=None, maximum_we
 
 def validate_assignment(
     *, goal_instrument_selection, definition, execution_timeframe, parameter_overrides,
-    strategy_share=1, risk_policy=None, order_policy=None,
+    strategy_share=1, risk_policy=None, order_policy=None, system_generated=False,
 ):
     goal = goal_instrument_selection.goal_allocation
     validate_instrument_selection(
@@ -168,7 +168,7 @@ def validate_assignment(
         minimum_weight=goal_instrument_selection.minimum_weight,
         maximum_weight=goal_instrument_selection.maximum_weight,
     )
-    eligibility = strategy_eligibility(definition, goal)
+    eligibility = strategy_eligibility(definition, goal, system_generated=system_generated)
     if not eligibility["eligible"]:
         raise ConstructionError(eligibility["reason"])
     if execution_timeframe not in definition.supported_timeframes:

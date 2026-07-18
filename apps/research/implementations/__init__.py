@@ -1,3 +1,5 @@
-from .wave0 import IMPLEMENTATIONS, implementation_for
+"""Explicit research implementations.
 
-__all__ = ["IMPLEMENTATIONS", "implementation_for"]
+The JSON catalogue is specification data only.  Implementations are imported through
+the audited registry; formula and signal text from the bundle are never evaluated.
+"""

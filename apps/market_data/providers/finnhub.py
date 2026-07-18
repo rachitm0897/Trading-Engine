@@ -318,6 +318,38 @@ class FinnhubClient:
                                     "to_factor":str(numerator),"provider_payload":item}})
         return sorted(rows,key=lambda item:(item["effective_date"],item["action_type"]))
 
+    def basic_financials(self, symbol):
+        payload = self.get("stock/metric", {"symbol": symbol, "metric": "all"})
+        if not isinstance(payload, dict):
+            raise FinnhubError("Finnhub basic-financial response was not usable", code="FINNHUB_INVALID_RESPONSE")
+        return payload
+
+    def reported_financials(self, symbol):
+        payload = self.get("stock/financials-reported", {"symbol": symbol})
+        if not isinstance(payload, dict):
+            raise FinnhubError("Finnhub reported-financial response was not usable", code="FINNHUB_INVALID_RESPONSE")
+        return list(payload.get("data") or [])
+
+    def recommendation_trends(self, symbol):
+        payload = self.get("stock/recommendation", {"symbol": symbol})
+        if not isinstance(payload, list):
+            raise FinnhubError("Finnhub recommendation response was not usable", code="FINNHUB_INVALID_RESPONSE")
+        return payload
+
+    def earnings_estimates(self, symbol, *, frequency="quarterly"):
+        payload = self.get("stock/eps-estimate", {"symbol": symbol, "freq": frequency})
+        if not isinstance(payload, dict):
+            raise FinnhubError("Finnhub estimate response was not usable", code="FINNHUB_INVALID_RESPONSE")
+        return list(payload.get("data") or [])
+
+    def earnings_calendar(self, symbol, start_date, end_date):
+        payload = self.get("calendar/earnings", {
+            "symbol": symbol, "from": start_date.isoformat(), "to": end_date.isoformat(),
+        })
+        if not isinstance(payload, dict):
+            raise FinnhubError("Finnhub earnings-calendar response was not usable", code="FINNHUB_INVALID_RESPONSE")
+        return list(payload.get("earningsCalendar") or [])
+
     def quote(self, symbol):
         payload = self.get("quote", {"symbol": symbol})
         if not isinstance(payload, dict) or not payload.get("c"):
