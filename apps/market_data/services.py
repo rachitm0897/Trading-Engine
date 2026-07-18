@@ -1,5 +1,6 @@
 from django.db import transaction
 from django.utils import timezone
+from apps.instruments.models import InstrumentProviderMapping
 
 from .models import InstrumentPriceHistory, MarketDataFetchRun
 from .providers.finnhub import (
@@ -12,7 +13,8 @@ from .providers.finnhub import (
 )
 
 
-def fetch_daily_history(instrument, start_date, end_date, *, purpose="HISTORY", client=None):
+def fetch_daily_history(instrument, start_date, end_date, *, purpose="HISTORY", client=None,
+                        require_verified_mapping=False):
     """Preserve portfolio-optimization history behavior independently of fallback mappings."""
     run = MarketDataFetchRun.objects.create(
         instrument=instrument, purpose=purpose, requested_start=start_date, requested_end=end_date
@@ -21,7 +23,13 @@ def fetch_daily_history(instrument, start_date, end_date, *, purpose="HISTORY", 
     rows = []
     try:
         active_client = client or FinnhubClient()
-        rows = active_client.daily_candles(instrument.symbol, start_date, end_date)
+        mapping=InstrumentProviderMapping.objects.filter(
+            instrument=instrument,provider="FINNHUB",status="VERIFIED"
+        ).first()
+        if require_verified_mapping and not mapping:
+            raise FinnhubError("Verified Finnhub mapping is required",code="FINNHUB_MAPPING_MISSING",status_code=400)
+        provider_symbol=mapping.provider_symbol if mapping else instrument.symbol
+        rows = active_client.daily_candles(provider_symbol, start_date, end_date)
         now = timezone.now()
         rows_by_date = {row["trading_date"]: row for row in rows}
         dates = list(rows_by_date)
@@ -41,7 +49,8 @@ def fetch_daily_history(instrument, start_date, end_date, *, purpose="HISTORY", 
         run.status = "COMPLETED"
         run.records_received = len(rows)
         run.records_written = len(set(dates) - existing_dates)
-        run.response_metadata = getattr(active_client, "last_response_metadata", {})
+        run.response_metadata = {**getattr(active_client, "last_response_metadata", {}),
+                                 "provider_symbol":provider_symbol,"mapping_verified":bool(mapping)}
         run.completed_at = timezone.now()
         run.save(update_fields=["status", "records_received", "records_written", "response_metadata", "completed_at"])
         return run

@@ -67,7 +67,7 @@ class MappingClient:
         return self.profile_value
 
 
-def test_mapping_requires_exact_currency_and_exchange_evidence_and_detects_ambiguity():
+def test_mapping_requires_exact_currency_and_exchange_evidence_and_deduplicates_identity():
     instrument, _ = canonical()
     mapping = verify_finnhub_mapping(instrument, client=MappingClient())
     assert mapping.status == "VERIFIED" and mapping.provider_symbol == "AAPL" and mapping.exchange_mic == "XNAS"
@@ -76,11 +76,23 @@ def test_mapping_requires_exact_currency_and_exchange_evidence_and_detects_ambig
     mapping.save(update_fields=["status"])
     duplicate = MappingClient(candidates=MappingClient().candidates * 2)
     mapping = verify_finnhub_mapping(instrument, client=duplicate)
-    assert mapping.status == "AMBIGUOUS" and mapping.verified_at is None
+    assert mapping.status == "VERIFIED" and mapping.provider_symbol == "AAPL"
 
     mismatch = MappingClient(profile={**MappingClient().profile_value, "currency": "EUR"})
     mapping = verify_finnhub_mapping(instrument, client=mismatch)
     assert mapping.status == "UNSUPPORTED" and "currenc" in mapping.last_error.lower()
+
+
+def test_mapping_recognizes_full_nyse_provider_exchange_name_without_mic():
+    instrument,_=canonical("JNJ",conid=8719,primary_exchange="NYSE")
+    client=MappingClient(
+        candidates=[{"provider_symbol":"JNJ","display_symbol":"JNJ","description":"Johnson & Johnson",
+                     "type":"Common Stock","currency":"","mic":"","figi":"","isin":""}],
+        profile={"provider_symbol":"JNJ","currency":"USD",
+                 "provider_exchange":"NEW YORK STOCK EXCHANGE, INC.","country":"US"},
+    )
+    mapping=verify_finnhub_mapping(instrument,client=client)
+    assert mapping.status=="VERIFIED" and mapping.provider_exchange=="NEW YORK STOCK EXCHANGE, INC."
 
 
 def test_non_stock_and_unverified_contracts_fail_closed(settings):

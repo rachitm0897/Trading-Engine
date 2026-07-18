@@ -37,6 +37,17 @@ def resolve_instrument(*, instrument_id=None, ticker=None, asset_class="STK", ex
     """Resolve operator input to a canonical instrument and qualified IBKR contract."""
     selected_contract=BrokerContract.objects.select_related("instrument").filter(conid=int(conid)).first() if conid else None
     if selected_contract:
+        if qualify:
+            selected_instrument=selected_contract.instrument
+            payload={"symbol":selected_instrument.symbol,"asset_class":selected_instrument.asset_class,
+                     "exchange":selected_instrument.exchange,"currency":selected_instrument.currency,
+                     "primary_exchange":primary_exchange or selected_contract.primary_exchange or selected_instrument.primary_exchange,
+                     "local_symbol":local_symbol or selected_contract.local_symbol or selected_instrument.symbol,
+                     "description":description or selected_contract.description}
+            payload["conid"]=int(conid)
+            result=(gateway or GatewayClient()).qualify_contract_exact(payload,f"qualify:conid:{int(conid)}")
+            if int(result.get("conid") or 0)!=int(conid):raise ValueError("IBKR qualified a different contract than the selected conId")
+            selected_contract=record_qualified_contract(selected_instrument,result)
         publish_instrument_registry(selected_contract)
         return selected_contract.instrument,selected_contract,None
     if instrument_id:

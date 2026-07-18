@@ -22,6 +22,7 @@ from .models import (
 from .services.acceptance import accept_recommendation, detach_recommendation
 from .services.classification import hierarchy
 from .services.recommendations import create_recommendation_run
+from .services.mvp import mvp_status as build_mvp_status, readiness_matrix
 
 
 def _actor(request):
@@ -171,6 +172,30 @@ def candidate_scores(request):
     })
 
 
+def mvp_status(request,resource="status"):
+    if request.method!="GET":
+        return response(status=405,error={"code":"METHOD_NOT_ALLOWED","message":"GET required","details":{}})
+    try:
+        if resource=="status":return response(build_mvp_status())
+        matrix=readiness_matrix()
+        if resource=="matrix":return response(matrix)
+        if resource=="stocks":return response(matrix["stocks"])
+        if resource=="strategies":
+            rows=[]
+            for key in matrix["strategy_keys"]:
+                cells=[cell for stock in matrix["stocks"] for cell in stock["strategies"] if cell["strategy_key"]==key]
+                rows.append({"strategy_key":key,"research_id":cells[0]["research_id"] if cells else None,
+                             "validated_pairs":sum("NO_VALIDATED_IMPLEMENTATION" not in cell["blockers"] for cell in cells),
+                             "completed_pairs":sum(cell["status"] in {"COMPLETED","BUILDER_READY"} for cell in cells),
+                             "approved_pairs":sum(cell["approved"] for cell in cells),
+                             "builder_ready":bool(cells and all(cell["builder_ready"] for cell in cells)),
+                             "blockers":list(dict.fromkeys(code for cell in cells for code in cell["blockers"]))})
+            return response(rows)
+        raise ValueError("Unsupported MVP status resource")
+    except ValueError as exc:
+        return response(status=409,error={"code":"MVP_CONFIGURATION_INVALID","message":str(exc),"details":{}})
+
+
 def experiments(request, experiment_id):
     if request.method != "GET":
         return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "GET required", "details": {}})
@@ -248,9 +273,15 @@ def _recommendation_row(run, detail=False):
         "warnings": run.warnings, "error": run.error, "expires_at": run.expires_at,
         "accepted_at": run.accepted_at, "dataset_version_id": run.dataset_version_id,
         "protocol_version_id": run.protocol_version_id, "created_at": run.created_at,
+        "blockers": run.warnings if run.status == "BLOCKED" else [],
     }
     if detail:
-        row["sleeves"] = [{
+        rows=[]
+        for sleeve in run.sleeves.select_related(
+            "instrument", "research_strategy", "execution_strategy_definition", "universe_member"
+        ).order_by("rank"):
+            eligibility=sleeve.universe_member.eligibility_snapshots.filter(as_of_date__lte=run.as_of_date).order_by("-as_of_date").first()
+            rows.append({
             "id": sleeve.pk, "instrument_id": sleeve.instrument_id, "symbol": sleeve.instrument.symbol,
             "gics": hierarchy(sleeve.instrument.classifications.filter(
                 taxonomy_version=run.dataset_version, effective_from__lte=run.as_of_date
@@ -265,7 +296,8 @@ def _recommendation_row(run, detail=False):
             "expected_return": sleeve.expected_return, "expected_volatility": sleeve.expected_volatility,
             "expected_drawdown": sleeve.expected_drawdown, "cost_metrics": sleeve.cost_metrics,
             "rationale": sleeve.rationale, "rank": sleeve.rank,
-        } for sleeve in run.sleeves.select_related(
-            "instrument", "research_strategy", "execution_strategy_definition"
-        ).order_by("rank")]
+            "data_source":(eligibility.metrics or {}).get("provider") if eligibility else None,
+            "latest_data_date":(eligibility.metrics or {}).get("latest_data_date") if eligibility else None,
+        })
+        row["sleeves"]=rows
     return row

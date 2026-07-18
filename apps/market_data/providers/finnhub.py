@@ -291,7 +291,32 @@ class FinnhubClient:
         return [{
             "trading_date": row.window_start.date(), "open": row.open, "high": row.high, "low": row.low,
             "close": row.close, "adjusted_close": row.close, "volume": row.volume,
+            "provider_timestamp": row.window_start,
         } for row in self.historical_candles(symbol, "1d", start, end)]
+
+    def corporate_actions(self, symbol, start_date, end_date):
+        common={"symbol":symbol,"from":start_date.isoformat(),"to":end_date.isoformat()}
+        dividends=self.get("stock/dividend",common)
+        splits=self.get("stock/split",common)
+        if not isinstance(dividends,list) or not isinstance(splits,list):
+            raise FinnhubError("Finnhub corporate-action response was not usable",code="FINNHUB_INVALID_RESPONSE")
+        rows=[]
+        for item in dividends:
+            amount=_nonnegative_decimal(item.get("amount",0),"dividend amount")
+            if not item.get("date"):raise FinnhubError("Finnhub dividend date is missing",code="FINNHUB_INVALID_RESPONSE")
+            rows.append({"action_type":"DIVIDEND","effective_date":str(item["date"]),
+                         "announced_date":item.get("declarationDate") or None,
+                         "payload":{"amount":str(amount),"currency":item.get("currency") or "",
+                                    "payment_date":item.get("payDate") or item.get("paymentDate"),
+                                    "record_date":item.get("recordDate"),"provider_payload":item}})
+        for item in splits:
+            if not item.get("date"):raise FinnhubError("Finnhub split date is missing",code="FINNHUB_INVALID_RESPONSE")
+            numerator=_positive_decimal(item.get("toFactor"),"split numerator")
+            denominator=_positive_decimal(item.get("fromFactor"),"split denominator")
+            rows.append({"action_type":"SPLIT","effective_date":str(item["date"]),"announced_date":None,
+                         "payload":{"factor":str(numerator/denominator),"from_factor":str(denominator),
+                                    "to_factor":str(numerator),"provider_payload":item}})
+        return sorted(rows,key=lambda item:(item["effective_date"],item["action_type"]))
 
     def quote(self, symbol):
         payload = self.get("quote", {"symbol": symbol})

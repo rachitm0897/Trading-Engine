@@ -51,9 +51,9 @@ def promote_strategy(
     ).first()
     if not profile:
         raise ValueError("Executable strategy requires an enabled construction profile")
-    required_evidence = {"golden_vector_passed", "high_cost_passed", "multiple_testing_passed", "shadow_validated"}
+    required_evidence = {"golden_vector_passed", "high_cost_passed", "multiple_testing_passed"}
     if not required_evidence.issubset({key for key, value in approval_evidence.items() if value is True}):
-        raise ValueError("Approval evidence is incomplete, including required SHADOW validation")
+        raise ValueError("Approval evidence is incomplete")
     row, _ = ResearchStrategyImplementation.objects.update_or_create(
         research_strategy=research_strategy,
         implementation_path=implementation_path,
@@ -64,15 +64,15 @@ def promote_strategy(
             "exact_semantic_match": True,
             "supported_frequency": "1d",
             "supported_direction": "LONG",
-            "status": "APPROVED",
+            "status": "BUILDER_READY" if approval_evidence.get("shadow_validated") else "APPROVED_FOR_RECOMMENDATION",
             "executable_strategy_definition": definition,
             "default_parameters": candidate.best_parameters,
             "approval_record": {"actor": approval_actor, "at": timezone.now().isoformat(), **approval_evidence},
         },
     )
     readiness.approved = True
-    readiness.builder_ready = True
-    readiness.blocking_reasons = []
+    readiness.builder_ready = bool(approval_evidence.get("shadow_validated"))
+    readiness.blocking_reasons = [] if readiness.builder_ready else ["SHADOW_VALIDATION_REQUIRED"]
     readiness.save(update_fields=["approved", "builder_ready", "blocking_reasons"])
     AuditEvent.objects.create(
         event_type="research.strategy.promoted",

@@ -88,6 +88,7 @@ def qualify_member_exact(member, *, conid, primary_exchange, local_symbol="", de
     """Operator-controlled exact qualification; this is never called by bundle import."""
     if not member.instrument_id:
         raise ValueError("Member must be instrument-mapped before broker qualification")
+    original_instrument_id=member.instrument_id
     instrument, contract, command = resolve_instrument(
         instrument_id=member.instrument_id,
         conid=conid,
@@ -99,8 +100,16 @@ def qualify_member_exact(member, *, conid, primary_exchange, local_symbol="", de
     )
     if command is not None or contract is None or int(contract.conid) != int(conid):
         raise ValueError("Exact IBKR qualification did not complete")
-    member.instrument = instrument
-    member.mapping_status = MappingStatus.BROKER_QUALIFIED
-    member.mapping_notes = f"Exact IBKR contract qualified: conId {contract.conid}"
-    member.save(update_fields=["instrument", "mapping_status", "mapping_notes"])
+    if instrument.issuer_id not in (None,member.issuer_id):
+        raise ValueError("Selected conId belongs to a canonical instrument for another issuer")
+    if instrument.issuer_id is None:
+        instrument.issuer_id=member.issuer_id;instrument.save(update_fields=["issuer"])
+    notes=f"Exact IBKR contract qualified: conId {contract.conid}"
+    ResearchUniverseMember.objects.filter(
+        issuer_id=member.issuer_id,source_symbol=member.source_symbol,
+    ).update(instrument=instrument,mapping_status=MappingStatus.BROKER_QUALIFIED,mapping_notes=notes)
+    InstrumentClassification.objects.filter(
+        issuer_id=member.issuer_id,instrument_id=original_instrument_id,
+    ).update(instrument=instrument)
+    member.refresh_from_db()
     return member

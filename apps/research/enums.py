@@ -45,6 +45,12 @@ class ReadinessStatus(models.TextChoices):
 class ImplementationStatus(models.TextChoices):
     DRAFT = "DRAFT"
     VALIDATED = "VALIDATED"
+    BACKTESTED = "BACKTESTED"
+    SCORED = "SCORED"
+    APPROVED_FOR_RECOMMENDATION = "APPROVED_FOR_RECOMMENDATION"
+    SHADOW_VALIDATED = "SHADOW_VALIDATED"
+    BUILDER_READY = "BUILDER_READY"
+    # Kept for compatibility with deployments promoted before the MVP lifecycle.
     APPROVED = "APPROVED"
     RETIRED = "RETIRED"
 
@@ -55,4 +61,4 @@ class WorkStatus(models.TextChoices):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     REJECTED = "REJECTED"
-
+    BLOCKED = "BLOCKED"

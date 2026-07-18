@@ -34,6 +34,7 @@ def system(request):
     from apps.risk.models import KillSwitch
     is_admin = bool(getattr(request, "user", None) and request.user.is_authenticated and request.user.is_active and request.user.is_staff)
     return response({"mode":"PAPER","execution_mode":settings.NEW_EXECUTION_MODE,
+        "allow_live_trading":settings.ALLOW_LIVE_TRADING,
         "is_admin":is_admin,"global_kill_switch": settings.GLOBAL_KILL_SWITCH or KillSwitch.objects.filter(scope="GLOBAL", enabled=True).exists(),
         "material_breaks": ReconciliationBreak.objects.filter(material=True, resolved=False).count(), "time": timezone.now().isoformat()})
 

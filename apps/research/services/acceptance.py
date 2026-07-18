@@ -60,7 +60,7 @@ def validate_recommendation_for_construction(run, *, check_expiry=True):
         approved = ResearchStrategyImplementation.objects.filter(
             research_strategy=sleeve.research_strategy,
             executable_strategy_definition=sleeve.execution_strategy_definition,
-            status="APPROVED",
+            status__in=["BUILDER_READY", "APPROVED"],
             exact_semantic_match=True,
         ).exists()
         if not approved:
