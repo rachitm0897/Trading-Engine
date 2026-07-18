@@ -18,6 +18,8 @@ Issuers use CIK identity; ticker remains instrument identity. Deterministic mapp
 
 Operational `InstrumentPriceHistory.adjusted_close` is not silently upgraded to research-grade data. Staging copies are `SUSPECT` until raw/adjusted OHLC, dividends, splits, total-return close, delistings, timestamps, and revisions reconcile. Fundamentals and events are queried only at or after public availability. Unknown event timing becomes next-session availability.
 
+For the MVP, Finnhub requests use only the verified `InstrumentProviderMapping.provider_symbol`. Daily bars, dividends, splits, provider timestamps, and revisions are stored in versioned research rows. The validator requires 756 bars, consistent positive OHLC, non-negative volume, a bounded missing-session ratio, current data, reconciled corporate actions, adjusted OHLC, and no future revision. IBKR `ADJUSTED_LAST` history is a bounded fallback through the authenticated gateway; Backend never connects to TWS.
+
 Read-only APIs are paginated:
 
 - `/api/v1/research/dataset-versions/`
@@ -26,5 +28,6 @@ Read-only APIs are paginated:
 - `/api/v1/research/readiness/`
 - `/api/v1/research/candidate-scores/`
 - `/api/v1/research/experiments/{id}/`
+- `/api/v1/research/mvp/status/`, `/matrix/`, `/stocks/`, and `/strategies/`
 
 Bundle activation, provider overrides, experiment scheduling, approval, and promotion remain management-command operations because default API authentication is not yet a safe administrative boundary.

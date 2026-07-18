@@ -2,7 +2,7 @@
 
 All 97 imported strategies begin as hypotheses. JSON formulas and signal text are metadata and are never passed to `eval`, compiled, or used to generate runtime code.
 
-Promotion requires exact tested Python semantics, complete point-in-time data, validated features, protocol backtests, score at least 65, no hard rejection, stable neighboring parameters, positive high-cost results, multiple-testing and final-holdout evidence, capacity, human approval, long-only compatibility, an exact enabled `StrategyDefinition`, an enabled `StrategyConstructionProfile`, deterministic golden vectors, and successful SHADOW validation.
+The lifecycle is `DRAFT → VALIDATED → BACKTESTED → SCORED → APPROVED_FOR_RECOMMENDATION → SHADOW_VALIDATED → BUILDER_READY`. Registration and semantic validation do not require a score. Historical experiments may run from `VALIDATED` onward. Approval requires exact tested Python semantics, complete data, validated features, protocol backtests, score at least 65, no hard rejection, stable parameters, positive high-cost results, multiple-testing and protected holdout evidence, capacity, long-only compatibility, an exact enabled runtime definition, and deterministic golden vectors. SHADOW evidence is required only for `BUILDER_READY`; an approved research candidate without it remains unavailable to Portfolio Builder.
 
 Use the trusted command only after evidence exists:
 

@@ -12,7 +12,7 @@ class GatewaySession(models.Model):
 
 class GatewayCommand(models.Model):
     STATUSES = [(value, value) for value in ["PENDING", "PROCESSING", "COMPLETED", "FAILED", "UNKNOWN"]]
-    TYPES = [(x,x) for x in ["RECONNECT","SEARCH_CONTRACTS","QUALIFY","SUBSCRIBE_MARKET_DATA","CANCEL_MARKET_DATA","PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER","KILL_SWITCH","REFRESH"]]
+    TYPES = [(x,x) for x in ["RECONNECT","SEARCH_CONTRACTS","QUALIFY","REQUEST_HISTORICAL_DATA","SUBSCRIBE_MARKET_DATA","CANCEL_MARKET_DATA","PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER","KILL_SWITCH","REFRESH"]]
     command_type = models.CharField(max_length=32, choices=TYPES)
     idempotency_key = models.CharField(max_length=128, unique=True)
     request_hash = models.CharField(max_length=64, default="", db_index=True)

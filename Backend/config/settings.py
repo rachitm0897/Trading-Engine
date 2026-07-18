@@ -57,10 +57,12 @@ CELERY_BEAT_SCHEDULE = {
     "compact-operational-records": {"task": "apps.event_bus.tasks.compact_operational_records", "schedule": 86400.0},
     "research-daily-refresh": {"task": "apps.research.tasks.refresh_research_pipeline", "schedule": 86400.0},
     "research-weekly-scoring": {"task": "apps.research.tasks.score_current_candidates", "schedule": 604800.0},
+    "recommendation-mvp-after-close": {"task": "apps.research.tasks.run_recommendation_mvp_pipeline", "schedule": 86400.0},
 }
 IB_GATEWAY_SERVICE_URL = os.getenv("IB_GATEWAY_SERVICE_URL", "http://localhost:8080/api/v1")
 GATEWAY_SERVICE_TOKEN = os.getenv("GATEWAY_SERVICE_TOKEN", "test-token")
-if os.getenv("ALLOW_LIVE_TRADING", "false").lower() == "true":
+ALLOW_LIVE_TRADING = os.getenv("ALLOW_LIVE_TRADING", "false").lower() == "true"
+if ALLOW_LIVE_TRADING:
     raise RuntimeError("Live trading is disabled; this application supports paper trading only")
 GLOBAL_KILL_SWITCH = os.getenv("GLOBAL_KILL_SWITCH", "false").lower() == "true"
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
@@ -105,7 +107,17 @@ BROKER_SNAPSHOT_RETENTION_DAYS = int(os.getenv("BROKER_SNAPSHOT_RETENTION_DAYS",
 READINESS_RETENTION_DAYS = int(os.getenv("READINESS_RETENTION_DAYS", "30"))
 STREAM_HEALTH_RETENTION_DAYS = int(os.getenv("STREAM_HEALTH_RETENTION_DAYS", "30"))
 OPERATIONAL_COMPACTION_BATCH_SIZE = int(os.getenv("OPERATIONAL_COMPACTION_BATCH_SIZE", "1000"))
-RESEARCH_ENABLED = os.getenv("RESEARCH_ENABLED", "false").lower() == "true"
+RESEARCH_ENABLED = os.getenv("RESEARCH_ENABLED", "true").lower() == "true"
+RESEARCH_MVP_ENABLED = os.getenv("RESEARCH_MVP_ENABLED", "true").lower() == "true"
+RESEARCH_MVP_STOCKS = os.getenv("RESEARCH_MVP_STOCKS", "AAPL,JPM,XOM,JNJ,WMT")
+RESEARCH_MVP_STRATEGIES = os.getenv(
+    "RESEARCH_MVP_STRATEGIES",
+    "FIXED_WEIGHT_REBALANCE,SMA_CROSSOVER,RSI_MEAN_REVERSION,DONCHIAN_BREAKOUT,VOLATILITY_TARGET_MOMENTUM",
+)
+RESEARCH_MVP_MINIMUM_BARS = os.getenv("RESEARCH_MVP_MINIMUM_BARS", "756")
+RESEARCH_MVP_LOOKBACK_YEARS = os.getenv("RESEARCH_MVP_LOOKBACK_YEARS", "5")
+RESEARCH_MVP_MAX_STOCKS = os.getenv("RESEARCH_MVP_MAX_STOCKS", "5")
+RESEARCH_MVP_MAX_STRATEGIES_PER_STOCK = os.getenv("RESEARCH_MVP_MAX_STRATEGIES_PER_STOCK", "1")
 RESEARCH_BUNDLE_PATH = os.getenv(
     "RESEARCH_BUNDLE_PATH", str(BASE_DIR.parent / "Trading_Engine_Stock_Strategy_Universe_JSON")
 )
@@ -120,5 +132,6 @@ RESEARCH_TASK_ROUTES = {
     "apps.research.tasks.run_experiment": {"queue": "research_backtests"},
     "apps.research.tasks.score_current_candidates": {"queue": "research_scoring"},
     "apps.research.tasks.generate_recommendation": {"queue": "research_recommendations"},
+    "apps.research.tasks.run_recommendation_mvp_pipeline": {"queue": "research_data"},
 }
 CELERY_TASK_ROUTES = RESEARCH_TASK_ROUTES

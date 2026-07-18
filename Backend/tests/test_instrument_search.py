@@ -29,3 +29,15 @@ def test_selected_conid_is_qualified_and_persisted_exactly():
     assert Instrument.objects.count()==1
     registry=OutboxEvent.objects.get(topic="instrument.registry.v1")
     assert registry.payload["conid"]==12345 and registry.payload["instrument_id"]==instrument.pk
+
+
+def test_existing_selected_conid_is_requalified_from_broker():
+    instrument=Instrument.objects.create(symbol="BHP",asset_class="STK",exchange="SMART",currency="AUD")
+    BrokerContract.objects.create(instrument=instrument,conid=12345,local_symbol="BHP",qualified_at=None)
+    resolved,contract,command=resolve_instrument(
+        instrument_id=instrument.pk,conid=12345,primary_exchange="ASX",local_symbol="BHP",
+        description="BHP Group Limited",gateway=BrokerStub(),
+    )
+    assert command is None and resolved==instrument
+    assert contract.qualified_at is not None and contract.primary_exchange=="ASX"
+    assert contract.description=="BHP Group Limited"

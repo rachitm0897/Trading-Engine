@@ -313,6 +313,8 @@ def process_command(command, adapter):
         result = {"results": adapter.search_contracts(command.payload["query"])}
     elif command.command_type == "QUALIFY":
         result = adapter.qualify_contract(command.payload)
+    elif command.command_type == "REQUEST_HISTORICAL_DATA":
+        result = adapter.historical_bars(command.payload)
     elif command.command_type == "SUBSCRIBE_MARKET_DATA":
         result = adapter.subscribe_market_data(command.payload)
     elif command.command_type == "CANCEL_MARKET_DATA":

@@ -175,9 +175,9 @@ def quantile_slices(values, buckets=10):
 def subperiod_consistency(period_metrics):
     values = np.asarray(period_metrics, dtype=float)
     if len(values) == 0:
-        return {"positive_fraction": 0.0, "coefficient_of_variation": float("inf")}
+        return {"positive_fraction": 0.0, "coefficient_of_variation": None}
     mean = float(np.mean(values))
     return {
         "positive_fraction": float(np.mean(values > 0)),
-        "coefficient_of_variation": float(np.std(values, ddof=1) / abs(mean)) if len(values) > 1 and mean else float("inf"),
+        "coefficient_of_variation": float(np.std(values, ddof=1) / abs(mean)) if len(values) > 1 and mean else None,
     }

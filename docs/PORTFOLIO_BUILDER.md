@@ -15,6 +15,8 @@ The existing single-universe optimizer remains available on the Portfolio page a
 
 For any non-`NOW` goal, the operator may instead generate a cached research recommendation. Generation is asynchronous and has no execution side effect. Review shows GICS, stock and sleeve weights, strategy shares, score, expected risk/return/drawdown, costs, versions, warnings, and expiry. Acceptance rechecks plan version, expiry, data eligibility, exact broker qualification, current strategy approval, live cash/stock limits, GICS caps, and exact 100% strategy shares. It then updates the existing stock and assignment rows and labels the goal `ACCEPTED_RECOMMENDATION`.
 
+The recommendation panel also shows pilot readiness, data provider and latest date, and exact blocker codes. `BLOCKED` is a terminal generation result that cannot be accepted. Regenerate reruns the cached online selection; it does not launch research. Detach returns the goal to manual mode. Acceptance still creates no orders, rebalance, preview, or strategy instances.
+
 Accepted rows are immutable through normal edit APIs. The operator must explicitly detach or regenerate. In recommendation mode preview loads fixed local stock weights rather than calling manual Markowitz, while retaining normal aggregation, targets, trade preview, one combined rebalance, and disabled-SHADOW instance creation. Acceptance itself creates no instance, rebalance, order, or enabled strategy.
 
 ## Fixed goal rules

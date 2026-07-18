@@ -21,7 +21,7 @@ def hard_rejection_reasons(metrics):
         (not metrics.get("timestamps_unambiguous", False), "LEAKAGE_OR_TIMESTAMP_AMBIGUITY"),
         (float(metrics.get("high_cost_net_return", -1)) < 0, "NEGATIVE_HIGH_COST_RESULT"),
         (float(metrics.get("maximum_drawdown", 1)) > float(metrics.get("maximum_allowed_drawdown", 0)), "DRAWDOWN_ABOVE_PROFILE"),
-        (int(metrics.get("trade_count", 0)) < int(metrics.get("minimum_trades", 1)), "INSUFFICIENT_TRADES"),
+        (not metrics.get("activity_threshold_pass", int(metrics.get("trade_count",0)) >= int(metrics.get("minimum_trades",1))), "INSUFFICIENT_STRATEGY_ACTIVITY"),
         (not metrics.get("parameter_neighborhood_stable", False), "UNSTABLE_PARAMETER_NEIGHBORHOOD"),
         (not metrics.get("capacity_pass", False), "LIQUIDITY_OR_CAPACITY_FAILURE"),
         (float(metrics.get("largest_subperiod_contribution", 1)) > float(metrics.get("maximum_subperiod_contribution", 0.60)), "SUBPERIOD_DEPENDENCE"),

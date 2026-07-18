@@ -236,7 +236,7 @@ class ResearchStrategyImplementation(models.Model):
     exact_semantic_match = models.BooleanField(default=False)
     supported_frequency = models.CharField(max_length=16)
     supported_direction = models.CharField(max_length=16)
-    status = models.CharField(max_length=16, choices=ImplementationStatus.choices, default=ImplementationStatus.DRAFT)
+    status = models.CharField(max_length=32, choices=ImplementationStatus.choices, default=ImplementationStatus.DRAFT)
     executable_strategy_definition = models.ForeignKey(
         "strategies.StrategyDefinition", on_delete=models.PROTECT, null=True, blank=True,
         related_name="research_implementations",
@@ -356,6 +356,15 @@ class ResearchExperiment(models.Model):
     universe = models.ForeignKey(ResearchUniverse, on_delete=models.PROTECT, related_name="experiments")
     protocol = models.ForeignKey(BacktestProtocolVersion, on_delete=models.PROTECT, related_name="experiments")
     dataset_version = models.ForeignKey(ResearchDatasetVersion, on_delete=models.PROTECT, related_name="experiments")
+    instrument = models.ForeignKey(
+        "instruments.Instrument", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="research_experiments",
+    )
+    implementation_hash = models.CharField(max_length=64, blank=True)
+    data_version = models.CharField(max_length=64, blank=True)
+    parameter_space_hash = models.CharField(max_length=64, blank=True)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
     experiment_type = models.CharField(max_length=32, default="WALK_FORWARD")
     parameter_budget = models.PositiveIntegerField(default=100)
     request_hash = models.CharField(max_length=64, db_index=True)
@@ -364,6 +373,11 @@ class ResearchExperiment(models.Model):
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     error = models.TextField(blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["dataset_version", "instrument", "strategy", "status"], name="research_mvp_pair_idx"),
+        ]
 
 
 class ResearchTrial(models.Model):
@@ -497,4 +511,3 @@ class GoalRecommendationAcceptance(models.Model):
     accepted_by = models.CharField(max_length=255)
     accepted_at = models.DateTimeField(auto_now_add=True)
     change_summary = models.JSONField(default=dict)
-

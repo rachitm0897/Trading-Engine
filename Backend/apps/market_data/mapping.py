@@ -14,6 +14,12 @@ MIC_BY_IBKR_EXCHANGE = {
     "BATS": {"BATS", "XCBO"}, "IEX": {"IEXG"}, "ASX": {"XASX"}, "LSE": {"XLON"},
     "TSE": {"XTKS"}, "TSX": {"XTSE"}, "SBF": {"XPAR"}, "FWB": {"XFRA"}, "IBIS": {"XETR"},
 }
+PROVIDER_EXCHANGE_ALIASES = {
+    "NYSE": {"NYSE", "NEWYORKSTOCKEXCHANGE"},
+    "NASDAQ": {"NASDAQ"}, "NASDAQ.NMS": {"NASDAQ"}, "NASDAQCM": {"NASDAQ"}, "NASDAQGM": {"NASDAQ"},
+    "ARCA": {"NYSEARCA", "ARCA"}, "NYSEARCA": {"NYSEARCA", "ARCA"},
+    "AMEX": {"NYSEAMERICAN", "AMEX"}, "BATS": {"BATS", "CBOE"},
+}
 
 
 def _normalized_symbol(value):
@@ -29,8 +35,10 @@ def _exchange_matches(instrument, contract, candidate, profile):
     if candidate_mic and candidate_mic in allowed_mics:
         return True, "MIC"
     provider_exchange = str(profile.get("provider_exchange") or "").strip().upper()
-    tokens = {primary, *allowed_mics}
-    if provider_exchange and any(token and token in provider_exchange.replace(" ", "") for token in tokens):
+    normalized_exchange = "".join(character for character in provider_exchange if character.isalnum())
+    tokens = {primary, *allowed_mics, *PROVIDER_EXCHANGE_ALIASES.get(primary, set())}
+    normalized_tokens = {"".join(character for character in token if character.isalnum()) for token in tokens}
+    if normalized_exchange and any(token and token in normalized_exchange for token in normalized_tokens):
         return True, "PROVIDER_EXCHANGE"
     return False, f"Finnhub exchange does not match IBKR primary exchange {primary}"
 
@@ -111,6 +119,16 @@ def verify_finnhub_mapping(instrument, *, client=None, provider_symbol=None, met
                 _normalized_symbol(instrument.symbol), _normalized_symbol(contract.local_symbol)
             }
         ]
+        # Finnhub may return duplicate search rows for the same exact listing.  They
+        # are one identity, not multiple competing mappings; retain the row with the
+        # richest exchange/currency evidence and keep genuine distinct symbols separate.
+        deduplicated = {}
+        for item in exact:
+            key = _normalized_symbol(item.get("provider_symbol"))
+            evidence = sum(bool(item.get(field)) for field in ("mic", "currency", "figi", "isin"))
+            current = deduplicated.get(key)
+            if current is None or evidence > current[0]:deduplicated[key] = (evidence, item)
+        exact = [item for _, item in deduplicated.values()]
         valid = []
         rejected = []
         for candidate in exact:

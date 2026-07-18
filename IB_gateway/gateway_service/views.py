@@ -1,4 +1,6 @@
 import json, secrets
+import re
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from django.conf import settings
 from django.db import connection
@@ -104,6 +106,32 @@ def qualify(request):
     payload=_payload(request)
     if not payload.get("conid") and not str(payload.get("symbol") or "").strip():raise ValueError("conid or symbol is required")
     return _queued(request,"QUALIFY",payload)
+@csrf_exempt
+@protected
+def historical_data(request):
+    invalid=_method(request,"POST")
+    if invalid:return invalid
+    payload=_payload(request)
+    allowed={"conid","symbol","exchange","currency","bar_size","duration","what_to_show","use_rth","end_time"}
+    unknown=set(payload)-allowed
+    if unknown:raise ValueError(f"Unsupported historical-data fields: {', '.join(sorted(unknown))}")
+    required=("conid","symbol","exchange","currency","bar_size","duration","what_to_show","use_rth")
+    missing=[key for key in required if payload.get(key) in (None,"")]
+    if missing:raise ValueError(f"Missing fields: {', '.join(missing)}")
+    if int(payload["conid"]) <= 0:raise ValueError("conid must be positive")
+    if str(payload["bar_size"]).lower() not in {"1 day","1d"}:raise ValueError("Only daily historical bars are supported")
+    match=re.fullmatch(r"([1-9][0-9]*)\s+([DY])",str(payload["duration"]).strip().upper())
+    if not match:raise ValueError("duration must use bounded D or Y units")
+    amount,unit=int(match.group(1)),match.group(2)
+    if (unit=="Y" and amount>5) or (unit=="D" and amount>1827):raise ValueError("duration cannot exceed five years")
+    what=str(payload["what_to_show"]).upper()
+    if what not in {"TRADES","ADJUSTED_LAST"}:raise ValueError("what_to_show must be TRADES or ADJUSTED_LAST")
+    if not isinstance(payload["use_rth"],bool):raise ValueError("use_rth must be a boolean")
+    if payload.get("end_time"):
+        datetime.fromisoformat(str(payload["end_time"]).replace("Z","+00:00"))
+    normalized={**payload,"conid":int(payload["conid"]),"bar_size":"1 day","duration":f"{amount} {unit}",
+                "what_to_show":what}
+    return _queued(request,"REQUEST_HISTORICAL_DATA",normalized)
 @csrf_exempt
 @protected
 def market_subscription(request, action=None):

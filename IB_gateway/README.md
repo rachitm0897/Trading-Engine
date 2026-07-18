@@ -12,3 +12,6 @@ pytest
 ```
 
 `GET /healthz` is public for infrastructure probes. Every `/api/v1/*` route requires `Authorization: Bearer <GATEWAY_SERVICE_TOKEN>`. Order-changing requests should also send `Idempotency-Key`.
+# Bounded research history
+
+`POST /api/v1/market-data/history/` is an authenticated, durable, read-only broker command. It requires an exact positive conId and supports only `1 day` bars, `TRADES` or `ADJUSTED_LAST`, and a duration no longer than five years. It never opens an order path or a live market-data subscription.

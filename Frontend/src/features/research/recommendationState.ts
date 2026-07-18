@@ -12,3 +12,9 @@ export function recommendationCanBeAccepted(run: GoalRecommendationRun, now = ne
 export function goalAllowsManualEdits(goal: PortfolioGoalAllocation) {
   return goal.construction_source !== 'ACCEPTED_RECOMMENDATION'
 }
+
+export function recommendationBlockerText(run: GoalRecommendationRun) {
+  return (run.blockers?.length ? run.blockers : run.warnings)
+    .map((item) => `${item.code}${item.message ? `: ${item.message}` : ''}`)
+    .join(' · ')
+}

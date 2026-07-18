@@ -27,6 +27,8 @@ The implementation proceeds with these safe defaults:
 - Missing conviction/liquidity/cost metadata falls back to strategy priority and stable IDs for deterministic liquidation ordering.
 - Rebalance cost benefit initially uses the policy fee buffer plus five basis points of notional.
 - Sizing previews take broker restrictions and ADV as explicit auditable inputs until connected reference feeds are certified.
+- The five-stock MVP treats a successful empty Finnhub dividend/split response as reconciled corporate-action evidence; provider errors block Finnhub validation and use exact-contract IBKR `ADJUSTED_LAST` only as the bounded fallback.
+- An implementation may be approved for recommendation research after scoring, but `builder_ready` remains false until an explicit persisted `shadow_validated` evidence record exists. Bootstrap never fabricates that evidence.
 
 Before live use, operators must decide:
 

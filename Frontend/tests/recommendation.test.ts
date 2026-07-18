@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 
 import type {GoalRecommendationRun, PortfolioGoalAllocation} from '../src/api/types'
-import {goalAllowsManualEdits, recommendationCanBeAccepted} from '../src/features/research/recommendationState'
+import {goalAllowsManualEdits, recommendationBlockerText, recommendationCanBeAccepted} from '../src/features/research/recommendationState'
 
 
 describe('recommendation safety state', () => {
@@ -19,5 +19,14 @@ describe('recommendation safety state', () => {
   it('requires detach before manual editing', () => {
     expect(goalAllowsManualEdits({construction_source: 'MANUAL_OPTIMIZER'} as PortfolioGoalAllocation)).toBe(true)
     expect(goalAllowsManualEdits({construction_source: 'ACCEPTED_RECOMMENDATION'} as PortfolioGoalAllocation)).toBe(false)
+  })
+
+  it('preserves exact backend blocker codes for display', () => {
+    const blocked = {...run, status: 'BLOCKED', blockers: [
+      {code: 'FINNHUB_MAPPING_MISSING', message: 'AAPL has no verified mapping'},
+      {code: 'IBKR_CONTRACT_NOT_QUALIFIED', message: 'JPM has no exact contract'},
+    ]} as GoalRecommendationRun
+    expect(recommendationBlockerText(blocked)).toContain('FINNHUB_MAPPING_MISSING: AAPL has no verified mapping')
+    expect(recommendationBlockerText(blocked)).toContain('IBKR_CONTRACT_NOT_QUALIFIED: JPM has no exact contract')
   })
 })

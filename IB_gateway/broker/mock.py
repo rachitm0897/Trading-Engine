@@ -1,4 +1,5 @@
 import time
+from datetime import date, timedelta
 from .base import BrokerAdapter
 
 class MockBrokerAdapter(BrokerAdapter):
@@ -22,6 +23,20 @@ class MockBrokerAdapter(BrokerAdapter):
             "conid":int(payload.get("conid") or abs(hash((symbol, payload.get("exchange","SMART")))) % 2_000_000_000),
             "primary_exchange":payload.get("primary_exchange") or "NASDAQ",
             "description":payload.get("description") or f"{symbol} mock corporation","qualified":True}
+    def historical_bars(self, payload):
+        count=min(int(str(payload.get("duration", "30 D")).split()[0]), 30)
+        end=date.today()
+        bars=[]
+        for offset in range(count, 0, -1):
+            day=end-timedelta(days=offset)
+            if day.weekday() >= 5:
+                continue
+            price=100 + len(bars)
+            bars.append({"date":day.isoformat(),"open":str(price),"high":str(price+1),
+                         "low":str(price-1),"close":str(price),"volume":"1000000",
+                         "bar_count":1,"average":str(price)})
+        return {"conid":int(payload["conid"]),"symbol":payload["symbol"],"provider":"IBKR",
+                "what_to_show":payload.get("what_to_show","TRADES"),"bars":bars}
     def subscribe_market_data(self,payload):
         key=payload["subscription_key"];runtime_key=payload.get("gateway_subscription_key") or key
         self.subscriptions[runtime_key]=dict(payload)

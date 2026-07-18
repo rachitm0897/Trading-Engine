@@ -962,16 +962,19 @@ export interface GoalRecommendationSleeve {
   cost_metrics: JsonRecord
   rationale: string
   rank: number
+  data_source: string | null
+  latest_data_date: string | null
 }
 
 export interface GoalRecommendationRun {
   id: number
   goal_id: number
   requested_plan_version: number
-  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'BLOCKED'
   as_of_date: string
   metrics: {cash_weight?: DecimalValue; expected_return?: DecimalValue; expected_volatility?: DecimalValue; sleeve_count?: number}
   warnings: {code: string; message?: string}[]
+  blockers: {code: string; message?: string}[]
   error: string
   expires_at: string
   accepted_at: string | null
@@ -979,6 +982,56 @@ export interface GoalRecommendationRun {
   protocol_version_id: number
   created_at: string
   sleeves?: GoalRecommendationSleeve[]
+}
+
+export interface ResearchMVPCell {
+  strategy_key: string
+  research_id: string
+  status: string
+  score: number | null
+  approved: boolean
+  builder_ready: boolean
+  blockers: string[]
+  experiment_id: number | null
+}
+
+export interface ResearchMVPStock {
+  symbol: string
+  company: string
+  instrument_id: number | null
+  finnhub_status: string
+  finnhub_symbol: string | null
+  ibkr_status: string
+  conid: number | null
+  valid_bar_count: number
+  latest_date: string | null
+  provider: string | null
+  eligible: boolean
+  blockers: string[]
+  strategies: ResearchMVPCell[]
+}
+
+export interface ResearchMVPMatrix {
+  dataset_version: string | null
+  protocol_id: string | null
+  stocks: ResearchMVPStock[]
+  strategy_keys: string[]
+  generated_at: string
+}
+
+export interface ResearchMVPStatus {
+  research_enabled: boolean
+  mvp_enabled: boolean
+  finnhub: FinnhubProviderStatus
+  ibkr: {connected: boolean; error?: string; mode?: string}
+  pilot_stock_count: number
+  ready_stock_count: number
+  validated_strategy_count: number
+  completed_experiment_groups: number
+  eligible_candidate_count: number
+  last_data_refresh: string | null
+  last_experiment_run: string | null
+  matrix: ResearchMVPMatrix
 }
 
 export interface PortfolioConstructionTarget {

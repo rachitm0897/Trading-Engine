@@ -1,5 +1,6 @@
 import time
 import hashlib
+import json
 import requests
 from django.conf import settings
 
@@ -42,6 +43,11 @@ class GatewayClient:
         current=queued
         while current.get("status") not in {"COMPLETED","FAILED","UNKNOWN"} and time.monotonic()<deadline:
             time.sleep(0.1);current=self.command(command_id)
+        # Enqueue responses intentionally contain only the command id and status.  When an
+        # idempotency key replays an already-terminal command, load its persisted result
+        # before returning instead of treating the absent result as an empty success.
+        if current.get("status") in {"COMPLETED","FAILED","UNKNOWN"} and "result" not in current:
+            current=self.command(command_id)
         if current.get("status") in {"FAILED","UNKNOWN"}:raise GatewayError(current.get("last_error") or f"Gateway command {command_id} failed")
         if current.get("status")!="COMPLETED":raise GatewayError(f"Gateway command {command_id} timed out")
         return current.get("result") or {}
@@ -58,5 +64,11 @@ class GatewayClient:
     def qualify_contract_exact(self, payload, key):
         queued=self.qualify_contract(payload,key)
         return self.wait_for_command(queued)
+    def historical_bars(self, payload, timeout=60):
+        canonical=json.dumps(payload,sort_keys=True,separators=(",",":"),default=str)
+        digest=hashlib.sha256(canonical.encode()).hexdigest()[:40]
+        queued=self.request("POST","market-data/history/",json=payload,
+                            idempotency_key=f"historical-data:{digest}",retries=0)
+        return self.wait_for_command(queued,timeout=timeout)
     def subscribe_market_data(self,payload,key):return self.request("POST","market-data/subscriptions/",json=payload,idempotency_key=key,retries=0)
     def cancel_market_data(self,payload,key):return self.request("POST","market-data/subscriptions/cancel/",json=payload,idempotency_key=key,retries=0)

@@ -21,7 +21,9 @@ from ..models import (
     ResearchDatasetVersion,
     ResearchStrategyImplementation,
 )
+from ..enums import ImplementationStatus
 from .classification import hierarchy
+from .mvp import EXPECTED_STOCKS, EXPECTED_STRATEGIES, readiness_matrix
 from .optimizer import RecommendationOptimizationError, optimize_sleeves
 
 
@@ -32,25 +34,18 @@ Q8 = D("0.00000001")
 def _policy_for_goal(goal):
     rules = resolved_goal_rules(goal.timeframe_bucket, goal.risk_level)
     name = f"LIVE-{goal.timeframe_bucket}-R{goal.risk_level}"
-    policy, _ = GoalRecommendationPolicy.objects.get_or_create(
+    defaults = {
+        "minimum_candidate_score":65,"maximum_candidate_age_days":settings.RESEARCH_SCORE_MAX_AGE_DAYS,
+        "number_of_stocks":5,"minimum_sectors":3,"sector_cap":"0.35","industry_cap":"0.25",
+        "sub_industry_cap":"0.20","per_stock_cap":rules["maximum_stock_weight"],
+        "strategy_family_cap":"0.40","maximum_turnover":"1.00","minimum_cash":rules["minimum_cash_weight"],
+        "target_volatility":D("0.05")+D(goal.risk_level)*D("0.03"),
+        "maximum_expected_drawdown":D("0.10")+D(goal.risk_level)*D("0.05"),
+        "minimum_liquidity":25_000_000,"approved_candidate_roles":["EXECUTION"],"active":True,
+    }
+    policy, _ = GoalRecommendationPolicy.objects.update_or_create(
         name=name,
-        defaults={
-            "minimum_candidate_score": 65,
-            "maximum_candidate_age_days": settings.RESEARCH_SCORE_MAX_AGE_DAYS,
-            "number_of_stocks": 20,
-            "minimum_sectors": 3,
-            "sector_cap": "0.35",
-            "industry_cap": "0.25",
-            "sub_industry_cap": "0.20",
-            "per_stock_cap": rules["maximum_stock_weight"],
-            "strategy_family_cap": "0.40",
-            "maximum_turnover": "1.00",
-            "minimum_cash": rules["minimum_cash_weight"],
-            "target_volatility": D("0.05") + D(goal.risk_level) * D("0.03"),
-            "maximum_expected_drawdown": D("0.10") + D(goal.risk_level) * D("0.05"),
-            "minimum_liquidity": 25_000_000,
-            "approved_candidate_roles": ["EXECUTION"],
-        },
+        defaults=defaults,
     )
     return policy, rules
 
@@ -117,7 +112,9 @@ def _candidate_rows(run):
         dataset_version=run.dataset_version,
         instrument__isnull=False,
         strategy__role="EXECUTION",
-    ).select_related("strategy", "instrument__issuer").order_by("-score")
+        instrument__symbol__in=EXPECTED_STOCKS,
+        strategy__implementations__executable_strategy_definition__key__in=EXPECTED_STRATEGIES,
+    ).select_related("strategy", "instrument__issuer").order_by("-score").distinct()
     rows = []
     for score in scores:
         readiness = _latest_builder_eligibility(score.instrument_id, run.as_of_date)
@@ -125,7 +122,7 @@ def _candidate_rows(run):
             continue
         implementation = ResearchStrategyImplementation.objects.filter(
             research_strategy=score.strategy,
-            status="APPROVED",
+            status__in=[ImplementationStatus.BUILDER_READY,ImplementationStatus.APPROVED],
             exact_semantic_match=True,
             executable_strategy_definition__enabled=True,
         ).select_related("executable_strategy_definition").first()
@@ -164,16 +161,36 @@ def _candidate_rows(run):
             "sub_industry": gics["sub_industry"]["code"],
             "gics": gics,
             "cost_metrics": score.cost_metrics,
+            "data_source":(readiness.metrics or {}).get("provider"),
+            "latest_data_date":(readiness.metrics or {}).get("latest_data_date"),
         })
-    allowed_instruments = []
-    selected = []
+    allowed_instruments=[];selected=[]
     for row in rows:
-        if row["instrument_id"] not in allowed_instruments:
-            if len(allowed_instruments) >= run.policy.number_of_stocks:
-                continue
-            allowed_instruments.append(row["instrument_id"])
-        selected.append(row)
+        if row["instrument_id"] in allowed_instruments:continue
+        if len(allowed_instruments)>=min(5,run.policy.number_of_stocks):continue
+        allowed_instruments.append(row["instrument_id"]);selected.append(row)
     return selected
+
+
+def _blockers_for_empty_candidates():
+    if not settings.RESEARCH_ENABLED or not settings.RESEARCH_MVP_ENABLED:
+        return [{"code":"RESEARCH_DISABLED","message":"The recommendation MVP is disabled"}]
+    matrix=readiness_matrix();codes=[]
+    for stock in matrix["stocks"]:
+        codes.extend(stock.get("blockers",[]))
+        for cell in stock.get("strategies",[]):codes.extend(cell.get("blockers",[]))
+    allowed={
+        "FINNHUB_MAPPING_MISSING":"A pilot stock has no verified Finnhub provider mapping",
+        "IBKR_CONTRACT_NOT_QUALIFIED":"A pilot stock has no exact qualified IBKR contract",
+        "INSUFFICIENT_VALID_HISTORY":"A pilot stock does not have 756 valid adjusted daily bars",
+        "NO_VALIDATED_IMPLEMENTATION":"A pilot strategy has no semantically validated runtime adapter",
+        "NO_PASSING_BACKTEST":"A pilot stock-strategy pair has no completed passing backtest",
+        "STRATEGY_NOT_BUILDER_READY":"A pilot strategy still requires SHADOW validation before Builder use",
+    }
+    unique=[code for code in dict.fromkeys(codes) if code in allowed]
+    if not unique:unique=["NO_CANDIDATE_FOR_TIMEFRAME_RISK"]
+    return [{"code":code,"message":allowed.get(code,"No approved candidate supports this timeframe and risk")}
+            for code in unique]
 
 
 def run_recommendation(run_or_id):
@@ -194,17 +211,20 @@ def run_recommendation(run_or_id):
         else:
             candidates = _candidate_rows(run)
             if not candidates:
-                result = {"weights": [], "cash_weight": 1.0, "expected_return": 0.0, "expected_volatility": 0.0}
-                warnings = [{"code": "NO_APPROVED_CANDIDATES", "message": "No current approved, broker-qualified candidates are available"}]
+                blockers=_blockers_for_empty_candidates()
+                run.candidate_snapshot=[];run.optimizer_snapshot={};run.metrics={"sleeve_count":0,"blockers":blockers}
+                run.warnings=blockers;run.status="BLOCKED";run.error=blockers[0]["code"]
+                run.completed_at=timezone.now();run.save();return run
             else:
+                live_rules=resolved_goal_rules(run.goal_allocation.timeframe_bucket,run.goal_allocation.risk_level)
                 constraints = {
-                    "minimum_cash": float(run.policy.minimum_cash),
-                    "per_stock_cap": float(run.policy.per_stock_cap),
+                    "minimum_cash": float(max(D(run.policy.minimum_cash),D(live_rules["minimum_cash_weight"]))),
+                    "per_stock_cap": float(min(D(run.policy.per_stock_cap),D(live_rules["maximum_stock_weight"]))),
                     "sector_cap": float(run.policy.sector_cap),
                     "industry_cap": float(run.policy.industry_cap),
                     "sub_industry_cap": float(run.policy.sub_industry_cap),
                     "strategy_family_cap": float(run.policy.strategy_family_cap),
-                    "minimum_sectors": run.policy.minimum_sectors,
+                    "minimum_sectors": min(3,len({row["instrument_id"] for row in candidates})),
                     "maximum_turnover": float(run.policy.maximum_turnover),
                     "risk_aversion": 6 - run.goal_allocation.risk_level,
                 }

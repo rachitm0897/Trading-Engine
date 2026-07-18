@@ -53,7 +53,7 @@ def calculate_member_eligibility(member, *, as_of_date=None):
         rows = [latest_by_date[key] for key in sorted(latest_by_date)]
         metrics = _metrics(rows)
         if not metrics:
-            reasons.append("NO_VALID_RESEARCH_DATA")
+            reasons.append("INSUFFICIENT_VALID_HISTORY")
     config = member.research_eligibility_configuration or {}
     if metrics:
         if metrics["price"] < float(config.get("minimum_unadjusted_price_usd", 5)):
@@ -61,7 +61,7 @@ def calculate_member_eligibility(member, *, as_of_date=None):
         if metrics["median_dollar_volume_20d"] < float(config.get("minimum_median_dollar_volume_20d_usd", 25_000_000)):
             reasons.append("LIQUIDITY_BELOW_MINIMUM")
         if metrics["history_days"] < int(config.get("minimum_adjusted_history_days", 756)):
-            reasons.append("INSUFFICIENT_ADJUSTED_HISTORY")
+            reasons.append("INSUFFICIENT_VALID_HISTORY")
         required_sessions = int(config.get("minimum_trading_days_252d", 240))
         if metrics["history_days"] >= 252 and metrics["trading_days_252d"] < required_sessions:
             reasons.append("INSUFFICIENT_RECENT_SESSIONS")
@@ -70,7 +70,7 @@ def calculate_member_eligibility(member, *, as_of_date=None):
             reasons.append("STALE_DATA")
     data_ready = not reasons
     provider_ready = bool(member.instrument_id and InstrumentProviderMapping.objects.filter(
-        instrument_id=member.instrument_id, status="VERIFIED"
+        instrument_id=member.instrument_id, provider="FINNHUB", status="VERIFIED"
     ).exists())
     broker_ready = bool(member.instrument_id and BrokerContract.objects.filter(
         instrument_id=member.instrument_id, qualified_at__isnull=False
@@ -95,8 +95,10 @@ def calculate_member_eligibility(member, *, as_of_date=None):
             "data_quality_status": "VALID" if data_ready else "BLOCKED",
             "research_eligible": data_ready and provider_ready,
             "builder_eligible": builder_eligible,
-            "rejection_reasons": reasons + ([] if provider_ready else ["PROVIDER_NOT_VERIFIED"]) + ([] if broker_ready else ["BROKER_NOT_QUALIFIED"]),
-            "metrics": {**metrics, "provider_ready": provider_ready, "broker_ready": broker_ready},
+            "rejection_reasons": list(dict.fromkeys(reasons + ([] if provider_ready else ["FINNHUB_MAPPING_MISSING"]) + ([] if broker_ready else ["IBKR_CONTRACT_NOT_QUALIFIED"]))),
+            "metrics": {**metrics, "provider_ready": provider_ready, "broker_ready": broker_ready,
+                        "latest_data_date": str(latest) if metrics and latest else None,
+                        "provider": rows[-1].provider if metrics and rows else None},
         },
     )
     return snapshot

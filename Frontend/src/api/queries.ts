@@ -40,6 +40,8 @@ import type {
   ResearchReadiness,
   ResearchStrategy,
   ResearchUniverse,
+  ResearchMVPMatrix,
+  ResearchMVPStatus,
 } from './types'
 
 const POLL_INTERVAL = 15_000
@@ -267,6 +269,16 @@ export const queries = {
     queryKey: ['research-candidate-scores'],
     queryFn: () => request<ResearchCandidateScore[]>('research/candidate-scores/?eligible=true&page_size=100'),
     staleTime: 30_000,
+  }),
+  researchMVPStatus: () => queryOptions({
+    queryKey: ['research-mvp-status'],
+    queryFn: () => request<ResearchMVPStatus>('research/mvp/status/'),
+    staleTime: 15_000,
+  }),
+  researchMVPMatrix: () => queryOptions({
+    queryKey: ['research-mvp-matrix'],
+    queryFn: () => request<ResearchMVPMatrix>('research/mvp/matrix/'),
+    staleTime: 15_000,
   }),
   recommendation: (runId?: number | null) => queryOptions({
     queryKey: ['goal-recommendation', runId ?? 'none'],

@@ -16,6 +16,8 @@ The deterministic [Portfolio Builder](docs/PORTFOLIO_BUILDER.md) divides one rea
 
 The versioned [Research Universe](docs/RESEARCH_UNIVERSE.md) imports the repository's 500-stock/97-strategy JSON bundle only after schema, hash, count, taxonomy, and enum validation. Strategy JSON is catalog metadata, never evaluated runtime code. Point-in-time data, cost-aware walk-forward experiments, hard rejection and scoring, explicit human promotion, and SHADOW evidence gate executable mappings. Cached approved sleeves can produce a GICS-aware goal recommendation; acceptance only fills the existing Builder selections and assignments, and exact accepted weights still require the normal preview and one combined SHADOW/PAPER apply.
 
+The operational recommendation pilot is deliberately fixed to AAPL, JPM, XOM, JNJ, and WMT across Fixed Weight, SMA, RSI, Donchian, and Volatility-Target Momentum. After importing and activating the bundle, run `python manage.py bootstrap_recommendation_mvp`. The command is idempotent, creates the 25 deterministic experiment groups, runs only changed inputs, scores supported timeframe/risk pairs, and prints the 5×5 readiness matrix. Missing mappings, history, exact IBKR contracts, passing tests, or SHADOW evidence remain explicit blockers; no substitute stock, fake score, order, enabled strategy, or LIVE path is created.
+
 ## Local start
 
 ```bash
@@ -47,7 +49,7 @@ docker compose ps
 powershell -NoProfile -File docs/streaming_recovery_smoke.ps1
 ```
 
-See [local development](docs/LOCAL_DEVELOPMENT.md), the [frontend redesign guide](docs/FRONTEND_REDESIGN.md), the [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), the [advanced target optimizer](docs/PORTFOLIO_OPTIMIZATION.md), the [research universe](docs/RESEARCH_UNIVERSE.md), the [backtesting protocol](docs/BACKTESTING_PROTOCOL.md), the [strategy promotion workflow](docs/STRATEGY_PROMOTION.md), and the [recommendation engine](docs/RECOMMENDATION_ENGINE.md).
+See [local development](docs/LOCAL_DEVELOPMENT.md), the [frontend redesign guide](docs/FRONTEND_REDESIGN.md), the [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), the [advanced target optimizer](docs/PORTFOLIO_OPTIMIZATION.md), the [research universe](docs/RESEARCH_UNIVERSE.md), the [MVP runbook](docs/RECOMMENDATION_MVP.md), the [backtesting protocol](docs/BACKTESTING_PROTOCOL.md), the [strategy promotion workflow](docs/STRATEGY_PROMOTION.md), and the [recommendation engine](docs/RECOMMENDATION_ENGINE.md).
 
 ## QFS
 

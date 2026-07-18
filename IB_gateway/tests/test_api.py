@@ -97,6 +97,31 @@ def test_market_subscription_cancel_preserves_route_action(client):
     assert command.command_type=="CANCEL_MARKET_DATA"
     assert command.payload=={"subscription_key":"1:1m"}
 
+
+def test_bounded_authenticated_daily_history_command(client):
+    payload={"conid":265598,"symbol":"AAPL","exchange":"SMART","currency":"USD",
+             "bar_size":"1 day","duration":"5 Y","what_to_show":"ADJUSTED_LAST",
+             "use_rth":True,"end_time":""}
+    unauthorized=client.post("/api/v1/market-data/history/",json.dumps(payload),content_type="application/json")
+    assert unauthorized.status_code==401
+    accepted=client.post("/api/v1/market-data/history/",json.dumps(payload),content_type="application/json",
+                         HTTP_IDEMPOTENCY_KEY="history:aapl",**AUTH)
+    assert accepted.status_code==202
+    command=GatewayCommand.objects.get(pk=accepted.json()["data"]["command_id"])
+    assert command.command_type=="REQUEST_HISTORICAL_DATA" and command.payload["what_to_show"]=="ADJUSTED_LAST"
+
+
+@pytest.mark.parametrize("update",[
+    {"duration":"6 Y"},{"bar_size":"1 hour"},{"what_to_show":"MIDPOINT"},{"use_rth":"yes"},
+])
+def test_daily_history_rejects_unbounded_or_non_daily_requests(client,update):
+    payload={"conid":265598,"symbol":"AAPL","exchange":"SMART","currency":"USD",
+             "bar_size":"1 day","duration":"5 Y","what_to_show":"TRADES","use_rth":True,"end_time":""}
+    payload.update(update)
+    result=client.post("/api/v1/market-data/history/",json.dumps(payload),content_type="application/json",
+                       HTTP_IDEMPOTENCY_KEY=f"invalid-history:{list(update)[0]}",**AUTH)
+    assert result.status_code==400 and GatewayCommand.objects.count()==0
+
 def test_no_credential_leakage(client,settings):
     settings.IB_USERNAME="SECRET_USER"; settings.IB_PASSWORD="SECRET_PASSWORD"
     content=client.get("/api/v1/session/",**AUTH).content.decode()

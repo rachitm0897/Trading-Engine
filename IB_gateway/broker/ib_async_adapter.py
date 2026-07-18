@@ -52,6 +52,32 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         if not qualified: raise RuntimeError("Contract qualification returned no result")
         contract = qualified[0]; self.contracts[str(contract.conId)] = contract
         return {**self._contract_data(contract, self._details(contract)), "qualified":True}
+    def historical_bars(self, payload):
+        qualified=self.ib.qualifyContracts(self._contract(payload))
+        if not qualified:raise RuntimeError("Selected exact IBKR contract could not be qualified for historical data")
+        contract=qualified[0]
+        if int(contract.conId) != int(payload["conid"]):
+            raise RuntimeError("IBKR returned a different contract identity")
+        rows=self.ib.reqHistoricalData(
+            contract,
+            endDateTime=payload.get("end_time", ""),
+            durationStr=payload["duration"],
+            barSizeSetting="1 day",
+            whatToShow=payload.get("what_to_show", "TRADES"),
+            useRTH=bool(payload.get("use_rth", True)),
+            formatDate=2,
+            keepUpToDate=False,
+        )
+        bars=[]
+        for row in rows:
+            bars.append({
+                "date":self._bar_time(row).date().isoformat(),
+                "open":str(row.open),"high":str(row.high),"low":str(row.low),"close":str(row.close),
+                "volume":str(max(0, row.volume)),"bar_count":int(getattr(row,"barCount",0) or 0),
+                "average":str(getattr(row,"average",0) or 0),
+            })
+        return {"conid":contract.conId,"symbol":contract.symbol,"provider":"IBKR",
+                "what_to_show":payload.get("what_to_show","TRADES"),"bars":bars}
     @staticmethod
     def _timeframe(value):
         mapping={"1m":("1 min",60),"5m":("5 mins",300),"15m":("15 mins",900),"1h":("1 hour",3600),"1d":("1 day",86400)}
