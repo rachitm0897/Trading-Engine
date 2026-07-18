@@ -66,6 +66,37 @@ const constructionPreview = {
   planned_trades: [{instrument_id: 5, symbol: 'NVDA', current_weight: .1, target_weight: .175, side: 'BUY', quantity: 60, reference_price: 125, estimated_cost: 1, suppressed: false, suppression_reason: ''}, {instrument_id: 6, symbol: 'MSFT', current_weight: 0, target_weight: .125, side: 'BUY', quantity: 31, reference_price: 400, estimated_cost: 1, suppressed: false, suppression_reason: ''}],
 }
 
+const recommendationBatch = {
+  id: 901, plan_id: 301, requested_plan_version: 4, status: 'COMPLETED', dataset_version_id: 21, protocol_version_id: 7,
+  metrics: {goal_count: 2, stock_count: 3, fallback_tiers: {'1': 2}}, error: '', created_at: '2026-07-13T01:00:00Z',
+  started_at: '2026-07-13T01:00:00Z', completed_at: '2026-07-13T01:00:03Z',
+  goals: [
+    {goal_id: 401, goal_name: 'Near-term reserve', status: 'COMPLETED', recommendation_run_id: 911, fallback_tier: 1,
+      cash_weight: .8, timeframe: 'HURRY', risk_level: 2, metrics: {expected_return: .05}, freshness: {feature_age_seconds: 30},
+      stocks: [{instrument_id: 5, universe_member_id: 1005, symbol: 'NVDA', company: 'NVIDIA Corporation',
+        gics: {sector: {code: '45', name: 'Information Technology'}}, research_strategy_id: 'BH_001',
+        execution_strategy_definition_id: 44, strategy_name: 'Buy and Hold', execution_timeframe: '1d', weight: .1,
+        candidate_score: .82, expected_return: .08, expected_volatility: .19, expected_drawdown: -.21,
+        reason: 'Strong quality and momentum with conservative position sizing.'}],
+    },
+    {goal_id: 402, goal_name: 'Long-term growth', status: 'COMPLETED', recommendation_run_id: 912, fallback_tier: 1,
+      cash_weight: .5, timeframe: 'GROW', risk_level: 5, metrics: {expected_return: .12}, freshness: {feature_age_seconds: 30},
+      stocks: [
+        {instrument_id: 5, universe_member_id: 1005, symbol: 'NVDA', company: 'NVIDIA Corporation',
+          gics: {sector: {code: '45', name: 'Information Technology'}}, research_strategy_id: 'MOM_002',
+          execution_strategy_definition_id: 44, strategy_name: 'Residual Momentum', execution_timeframe: '1d', weight: .25,
+          candidate_score: .91, expected_return: .16, expected_volatility: .28, expected_drawdown: -.31,
+          reason: 'Top-ranked residual momentum candidate with positive analyst revisions.'},
+        {instrument_id: 6, universe_member_id: 1006, symbol: 'MSFT', company: 'Microsoft Corporation',
+          gics: {sector: {code: '45', name: 'Information Technology'}}, research_strategy_id: 'QUAL_003',
+          execution_strategy_definition_id: 44, strategy_name: 'Quality Composite', execution_timeframe: '1d', weight: .25,
+          candidate_score: .88, expected_return: .13, expected_volatility: .2, expected_drawdown: -.23,
+          reason: 'Durable profitability and balance-sheet quality.'},
+      ],
+    },
+  ],
+}
+
 const data: Record<string, unknown> = {
   system: {mode: 'PAPER', execution_mode: 'SHADOW', is_admin: true, global_kill_switch: false, material_breaks: 0, time: '2026-07-13T01:00:00Z'},
   gateway: {connected: true, reconciled: true, mode: 'paper', last_callback: '2026-07-13T01:00:00Z', worker: 'paper-worker'},
@@ -179,6 +210,7 @@ beforeEach(() => {
       if (path === 'orders') return {ok: true, status: 201, json: async () => ({ok: true, data: {internal_id: 'created-order', status: 'QUEUED', decision: 'APPROVED'}, error: null, meta: {}})} as Response
       if (path === 'portfolio-optimization/preview') return {ok: true, status: 201, json: async () => ({ok: true, data: optimizationPreview, error: null, meta: {}})} as Response
       if (path === 'portfolio-optimization/run') return {ok: true, status: 201, json: async () => ({ok: true, data: {...optimizationPreview, application_status: 'APPLIED', applied_at: '2026-07-13T01:02:00Z', applied_rebalance: {id: 82, mode: 'SHADOW', status: 'PLANNED', phase: 'SHADOW_COMPLETE', planned_turnover: .24}}, error: null, meta: {}})} as Response
+      if (path === 'portfolio-construction/plans/301/recommendations') return {ok: true, status: 201, json: async () => ({ok: true, data: recommendationBatch, error: null, meta: {}})} as Response
       if (path === 'portfolio-construction/preview') {
         const preview = failConstructionPreview
           ? {...constructionPreview, status: 'FAILED', retryable: true, last_error: 'Finnhub API key is not configured', final_target_weights: {}, metrics: {}, goals: [], targets: [], planned_trades: [], rebalance: null}
@@ -203,7 +235,7 @@ test('renders six bookmarkable primary routes and paper status', async () => {
   expect(await screen.findByRole('heading', {name: 'Good overview, Primary paper'})).toBeInTheDocument()
   const nav = screen.getByRole('navigation', {name: 'Primary navigation'})
   const links = within(nav).getAllByRole('link')
-  expect(links.map((link) => link.textContent)).toEqual(['Dashboard', 'Strategies', 'Research', 'Portfolio Builder', 'Portfolio', 'Orders & Activity', 'System'])
+  expect(links.map((link) => link.textContent)).toEqual(['Dashboard', 'Strategies', 'Portfolio Builder', 'Portfolio', 'Orders & Activity', 'System'])
   expect(within(nav).getByRole('link', {name: 'Strategies'})).toHaveAttribute('href', '/strategies')
   expect(screen.getAllByText('PAPER').length).toBeGreaterThan(0)
 })
@@ -324,7 +356,7 @@ test('kill switch requires confirmation and an audit reason', async () => {
   expect(screen.getByText('22 / 22')).toBeInTheDocument()
 })
 
-test('portfolio builder filters risk, previews merged goals, and applies once', async () => {
+test('portfolio builder generates one-click recommendations, previews merged goals, and applies once', async () => {
   const user = userEvent.setup()
   window.history.replaceState({}, '', '/portfolio-builder')
   render(<App />)
@@ -333,23 +365,23 @@ test('portfolio builder filters risk, previews merged goals, and applies once', 
   const nearTermRisk = screen.getByLabelText('Near-term reserve risk')
   expect(within(nearTermRisk).queryByRole('option', {name: 'Growth'})).not.toBeInTheDocument()
   expect(within(nearTermRisk).getByRole('option', {name: 'Conservative'})).toBeInTheDocument()
-  await user.click(screen.getByRole('button', {name: 'Save & select investments'}))
+  await user.click(screen.getByRole('button', {name: 'Save goals & generate recommendations'}))
+  expect(await screen.findByRole('heading', {name: '2. Recommendations'})).toBeInTheDocument()
   expect(await screen.findByRole('heading', {name: 'Near-term reserve'})).toBeInTheDocument()
-  expect(screen.getByText('1 strategies not eligible')).toBeInTheDocument()
-  await user.click(screen.getByRole('button', {name: 'Preview combined portfolio'}))
-  expect(await screen.findByText('Final combined allocation')).toBeInTheDocument()
+  expect(screen.getByRole('heading', {name: 'Long-term growth'})).toBeInTheDocument()
+  expect(screen.getByText('Buy and Hold')).toBeInTheDocument()
+  expect(screen.getByText('Quality Composite')).toBeInTheDocument()
+  expect(screen.queryByLabelText(/IBKR stock search/)).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', {name: 'Preview portfolio'}))
+  expect(await screen.findByRole('heading', {name: '3. Preview & Apply'})).toBeInTheDocument()
   expect(screen.getByText('Shared by 2 goals')).toBeInTheDocument()
-  expect(screen.getByText('Aggregated strategy instance targets')).toBeInTheDocument()
-  expect(screen.getAllByText(/strategy-controlled portfolio weight/).length).toBeGreaterThan(0)
   expect(screen.getAllByText('17.5%').length).toBeGreaterThan(0)
-  expect(screen.getByText('One net rebalance')).toBeInTheDocument()
-  await user.click(screen.getByRole('button', {name: 'Continue to apply'}))
-  await user.click(screen.getByRole('button', {name: 'Apply combined target'}))
+  await user.click(screen.getByRole('button', {name: 'Confirm SHADOW apply'}))
   const dialog = screen.getByRole('dialog', {name: 'Apply the combined portfolio target?'})
   await user.click(within(dialog).getByRole('button', {name: 'Apply one combined target'}))
   expect(await screen.findByText(/Applied through rebalance 602/)).toBeInTheDocument()
-  expect(screen.getByRole('link', {name: 'Strategy 801'})).toHaveAttribute('href', '/strategies/801')
-  expect(screen.getByRole('link', {name: 'Review strategies'})).toHaveAttribute('href', '/strategies')
+  const applyCalls = vi.mocked(fetch).mock.calls.filter(([input, init]) => String(input).includes('/portfolio-construction/runs/501/apply/') && init?.method === 'POST')
+  expect(applyCalls).toHaveLength(1)
 })
 
 test('portfolio builder reports a failed preview instead of rendering an empty result', async () => {
@@ -357,41 +389,30 @@ test('portfolio builder reports a failed preview instead of rendering an empty r
   const user = userEvent.setup()
   window.history.replaceState({}, '', '/portfolio-builder')
   render(<App />)
-  await user.click(await screen.findByRole('button', {name: 'Save & select investments'}))
-  await user.click(await screen.findByRole('button', {name: 'Preview combined portfolio'}))
-  expect(await screen.findByText('Construction preview failed')).toBeInTheDocument()
+  await user.click(await screen.findByRole('button', {name: 'Save goals & generate recommendations'}))
+  await user.click(await screen.findByRole('button', {name: 'Preview portfolio'}))
+  expect(await screen.findByText('Recommendation workflow failed')).toBeInTheDocument()
   expect(screen.getByText('Finnhub API key is not configured')).toBeInTheDocument()
-  expect(screen.getByRole('link', {name: 'Configure Finnhub in System'})).toHaveAttribute('href', '/system')
-  expect(screen.queryByText('Final combined allocation')).not.toBeInTheDocument()
-  expect(screen.getByRole('button', {name: 'Preview combined portfolio'})).toBeInTheDocument()
+  expect(screen.queryByRole('heading', {name: '3. Preview & Apply'})).not.toBeInTheDocument()
+  expect(screen.getByRole('button', {name: 'Preview portfolio'})).toBeInTheDocument()
 })
 
-test('portfolio builder qualifies stocks and edits schema parameters with explicit multi-strategy shares', async () => {
+test('portfolio builder removes manual construction and keeps research metadata out of recommendation cards', async () => {
   const user = userEvent.setup()
   window.history.replaceState({}, '', '/portfolio-builder')
   render(<App />)
-  await user.click(await screen.findByRole('button', {name: 'Save & select investments'}))
-  const nearHeading = await screen.findByRole('heading', {name: 'Near-term reserve'})
-  const nearSection = nearHeading.closest('section') as HTMLElement
-  expect(within(nearSection).getByText('Strategy ownership: 100%')).toBeInTheDocument()
-
-  await user.type(within(nearSection).getByLabelText('Near-term reserve IBKR stock search'), 'nvda')
-  await user.click(await within(nearSection).findByRole('button', {name: 'Select NVDA NASDAQ USD'}))
-  await user.click(within(nearSection).getByRole('button', {name: 'Qualify selected contract'}))
-  await waitFor(() => expect(within(nearSection).getByText('QUALIFIED')).toBeInTheDocument())
-  await user.click(within(nearSection).getByRole('button', {name: 'Add stock'}))
-  await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/portfolio-construction/goals/401/instruments/'), expect.objectContaining({method: 'POST'})))
-
-  const lookback = within(nearSection).getAllByLabelText('NVDA Backend Breakout lookback')[0]
-  await user.clear(lookback)
-  await user.type(lookback, '30')
-  const share = within(nearSection).getAllByLabelText('NVDA Backend Breakout strategy share')[0]
-  await user.clear(share)
-  await user.type(share, '40')
-  await user.click(within(nearSection).getAllByRole('button', {name: 'Save assignment'})[0])
-  expect(await within(nearSection).findByText(/Strategy ownership: 90%/)).toBeInTheDocument()
-  const call = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).includes('/portfolio-construction/assignments/801/') && init?.method === 'PATCH')
-  expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({strategy_share: .4, parameter_overrides: {lookback: 30, direction: 'LONG'}})
+  await user.click(await screen.findByRole('button', {name: 'Save goals & generate recommendations'}))
+  expect(await screen.findByText('Residual Momentum')).toBeInTheDocument()
+  expect(screen.getByText('Durable profitability and balance-sheet quality.')).toBeInTheDocument()
+  expect(screen.queryByText(/dataset/i)).not.toBeInTheDocument()
+  expect(screen.queryByText(/protocol/i)).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', {name: 'Add stock'})).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', {name: 'Save assignment'})).not.toBeInTheDocument()
+  expect(screen.queryByLabelText(/strategy share/i)).not.toBeInTheDocument()
+  const recommendationCall = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).includes('/portfolio-construction/plans/301/recommendations/') && init?.method === 'POST')
+  expect(JSON.parse(String(recommendationCall?.[1]?.body))).toEqual({})
+  const goalPatches = vi.mocked(fetch).mock.calls.filter(([input, init]) => String(input).includes('/portfolio-construction/goals/') && init?.method === 'PATCH')
+  expect(goalPatches).toHaveLength(2)
 })
 
 test('advanced target optimizer previews metrics and planned SHADOW trades', async () => {

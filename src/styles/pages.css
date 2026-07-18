@@ -145,6 +145,3 @@
 .portfolio-builder .builder-total { position: sticky; z-index: 5; top: 98px; border: 1px solid var(--border); }
 .order-terminal-grid { display: grid; grid-template-columns: minmax(0, 2.3fr) minmax(290px, .8fr); align-items: start; gap: .75rem; }
 .order-inspector { position: sticky; top: 104px; max-height: calc(100vh - 120px); overflow-y: auto; }
-.research-mvp-matrix { min-width: 1180px; }
-.research-mvp-matrix th:not(:first-child), .research-mvp-matrix td:not(:first-child) { min-width: 150px; }
-.research-mvp-cell { align-items: flex-start; gap: var(--space-1); }

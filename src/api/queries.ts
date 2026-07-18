@@ -31,17 +31,7 @@ import type {
   PortfolioOptimizationRun,
   PortfolioConstructionPlan,
   PortfolioConstructionRun,
-  ConstructionEligibility,
-  GoalInstrumentSelection,
-  GoalStrategyAssignment,
-  GoalRecommendationRun,
-  ResearchCandidateScore,
-  ResearchDatasetVersion,
-  ResearchReadiness,
-  ResearchStrategy,
-  ResearchUniverse,
-  ResearchMVPMatrix,
-  ResearchMVPStatus,
+  RecommendationBatch,
 } from './types'
 
 const POLL_INTERVAL = 15_000
@@ -227,63 +217,10 @@ export const queries = {
     enabled: Boolean(portfolioId),
     refetchInterval: POLL_INTERVAL,
   }),
-  constructionEligibility: (goalId?: number | null) => queryOptions({
-    queryKey: ['construction-eligibility', goalId ?? 'none'],
-    queryFn: () => request<ConstructionEligibility>(`portfolio-construction/goals/${goalId}/eligible-strategies/`),
-    enabled: Boolean(goalId),
-    staleTime: 30_000,
-  }),
-  constructionInstruments: (goalId?: number | null) => queryOptions({
-    queryKey: ['construction-instruments', goalId ?? 'none'],
-    queryFn: () => request<GoalInstrumentSelection[]>(`portfolio-construction/goals/${goalId}/instruments/`),
-    enabled: Boolean(goalId),
-    staleTime: 15_000,
-  }),
-  constructionAssignments: (goalInstrumentId?: number | null) => queryOptions({
-    queryKey: ['construction-assignments', goalInstrumentId ?? 'none'],
-    queryFn: () => request<GoalStrategyAssignment[]>(`portfolio-construction/instruments/${goalInstrumentId}/assignments/`),
-    enabled: Boolean(goalInstrumentId),
-    staleTime: 15_000,
-  }),
-  researchDatasetVersions: () => queryOptions({
-    queryKey: ['research-dataset-versions'],
-    queryFn: () => request<ResearchDatasetVersion[]>('research/dataset-versions/'),
-    staleTime: 60_000,
-  }),
-  researchUniverses: () => queryOptions({
-    queryKey: ['research-universes'],
-    queryFn: () => request<ResearchUniverse[]>('research/universes/'),
-    staleTime: 60_000,
-  }),
-  researchStrategies: () => queryOptions({
-    queryKey: ['research-strategies'],
-    queryFn: () => request<ResearchStrategy[]>('research/strategies/?page_size=100'),
-    staleTime: 60_000,
-  }),
-  researchReadiness: () => queryOptions({
-    queryKey: ['research-readiness'],
-    queryFn: () => request<ResearchReadiness[]>('research/readiness/?page_size=100'),
-    staleTime: 30_000,
-  }),
-  researchCandidateScores: () => queryOptions({
-    queryKey: ['research-candidate-scores'],
-    queryFn: () => request<ResearchCandidateScore[]>('research/candidate-scores/?eligible=true&page_size=100'),
-    staleTime: 30_000,
-  }),
-  researchMVPStatus: () => queryOptions({
-    queryKey: ['research-mvp-status'],
-    queryFn: () => request<ResearchMVPStatus>('research/mvp/status/'),
-    staleTime: 15_000,
-  }),
-  researchMVPMatrix: () => queryOptions({
-    queryKey: ['research-mvp-matrix'],
-    queryFn: () => request<ResearchMVPMatrix>('research/mvp/matrix/'),
-    staleTime: 15_000,
-  }),
-  recommendation: (runId?: number | null) => queryOptions({
-    queryKey: ['goal-recommendation', runId ?? 'none'],
-    queryFn: () => request<GoalRecommendationRun>(`portfolio-construction/recommendations/${runId}/`),
-    enabled: Boolean(runId),
+  recommendationBatch: (batchId?: number | null) => queryOptions({
+    queryKey: ['recommendation-batch', batchId ?? 'none'],
+    queryFn: () => request<RecommendationBatch>(`portfolio-construction/recommendation-batches/${batchId}/`),
+    enabled: Boolean(batchId),
     refetchInterval: (query) => ['QUEUED', 'RUNNING'].includes(query.state.data?.status || '') ? 1_000 : false,
   }),
 }
