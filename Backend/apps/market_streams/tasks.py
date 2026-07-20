@@ -24,7 +24,8 @@ def check_warmup_timeouts():
     for instance in StrategyInstance.objects.filter(enabled=True,state="WARMING_UP").select_related("instrument"):
         last=instance.warmup_last_progress_at or instance.warmup_started_at or instance.effective_from or instance.updated_at
         if last and last>cutoff:continue
-        subscription=MarketDataSubscription.objects.filter(instrument=instance.instrument,timeframe=instance.timeframe).first()
+        subscription=MarketDataSubscription.objects.filter(gateway_session=instance.portfolio.gateway_session,
+            instrument=instance.instrument,timeframe=instance.timeframe).first()
         if not subscription:reason="no broker market-data subscription was created"
         elif subscription.state=="ERROR":reason=subscription.last_error or "both market-data providers are unusable"
         else:

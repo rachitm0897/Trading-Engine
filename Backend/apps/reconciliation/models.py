@@ -1,6 +1,9 @@
 from django.db import models
 
 class ReconciliationRun(models.Model):
+    gateway_session = models.ForeignKey(
+        "broker_gateway.BrokerGatewaySession",on_delete=models.PROTECT,related_name="reconciliation_runs",
+        null=True,blank=True)
     broker_account = models.ForeignKey(
         "accounts.BrokerAccount",
         on_delete=models.PROTECT,

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from gateway_service.modes import normalize_trading_mode, tws_port_for_mode
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "gateway-test-secret")
 DEBUG = False
@@ -16,12 +17,10 @@ DATABASES = {"default":{"ENGINE":"django.db.backends.sqlite3", "NAME":os.getenv(
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
 GATEWAY_SERVICE_TOKEN = os.getenv("GATEWAY_SERVICE_TOKEN", "test-token")
-if os.getenv("IBC_TRADING_MODE", "paper").lower() != "paper":
-    raise RuntimeError("Live trading is disabled; the Gateway supports paper trading only")
-IBC_TRADING_MODE = "paper"
+IBC_TRADING_MODE = normalize_trading_mode(os.getenv("IBC_TRADING_MODE", "paper"))
 IBKR_CLIENT_ID = int(os.getenv("IBKR_CLIENT_ID", "17"))
 BROKER_ADAPTER = os.getenv("BROKER_ADAPTER", "mock")
-TWS_PORT = 4002
+TWS_PORT = tws_port_for_mode(IBC_TRADING_MODE)
 BROKER_REFRESH_SECONDS = max(2, int(os.getenv("BROKER_REFRESH_SECONDS", "5")))
 GATEWAY_EVENT_RETENTION_DAYS = int(os.getenv("GATEWAY_EVENT_RETENTION_DAYS", "7"))
 GATEWAY_HEALTH_RETENTION_DAYS = int(os.getenv("GATEWAY_HEALTH_RETENTION_DAYS", "7"))

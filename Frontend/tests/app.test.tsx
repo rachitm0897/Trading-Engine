@@ -180,7 +180,7 @@ function apiPath(input: string) {
 beforeEach(() => {
   window.history.replaceState({}, '', '/')
   queryClient.clear()
-  usePreferencesStore.setState({selectedAccountId: null, selectedPortfolioId: null})
+  usePreferencesStore.setState({selectedSessionId: null, selectedAccountId: null, selectedPortfolioId: null})
   useWorkspacePreferences.getState().resetWorkspace()
   failDashboard = false
   failStrategyDelete = false
@@ -230,12 +230,12 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals())
 
-test('renders six bookmarkable primary routes and paper status', async () => {
+test('renders bookmarkable primary routes and paper status', async () => {
   render(<App />)
   expect(await screen.findByRole('heading', {name: 'Good overview, Primary paper'})).toBeInTheDocument()
   const nav = screen.getByRole('navigation', {name: 'Primary navigation'})
   const links = within(nav).getAllByRole('link')
-  expect(links.map((link) => link.textContent)).toEqual(['Dashboard', 'Strategies', 'Portfolio Builder', 'Portfolio', 'Orders & Activity', 'System'])
+  expect(links.map((link) => link.textContent)).toEqual(['Dashboard', 'Strategies', 'Portfolio Builder', 'Portfolio', 'Orders & Activity', 'IBKR Sessions', 'System'])
   expect(within(nav).getByRole('link', {name: 'Strategies'})).toHaveAttribute('href', '/strategies')
   expect(screen.getAllByText('PAPER').length).toBeGreaterThan(0)
 })

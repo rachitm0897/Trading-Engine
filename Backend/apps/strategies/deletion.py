@@ -305,12 +305,13 @@ def _refresh_input_requirements(requirement_ids):
             requirement.save(update_fields=["active_ref_count", "updated_at"])
 
 
-def _refresh_subscription(instrument_id, timeframe):
+def _refresh_subscription(instrument_id, timeframe,gateway_session_id=None):
     remaining = list(
         StrategyInstance.objects.filter(
             enabled=True,
             instrument_id=instrument_id,
             timeframe=timeframe,
+            portfolio__gateway_session_id=gateway_session_id,
         ).select_related("definition")
     )
     required = max(
@@ -319,7 +320,7 @@ def _refresh_subscription(instrument_id, timeframe):
     )
     history = required + int(getattr(settings, "WARMUP_SAFETY_BARS", 5)) if remaining else 0
     MarketDataSubscription.objects.filter(
-        instrument_id=instrument_id, timeframe=timeframe
+        gateway_session_id=gateway_session_id,instrument_id=instrument_id, timeframe=timeframe
     ).update(consumer_count=len(remaining), required_history_bars=history, updated_at=timezone.now())
 
     if settings.KAFKA_ENABLED:
@@ -329,7 +330,9 @@ def _refresh_subscription(instrument_id, timeframe):
                 from apps.market_streams.subscriptions import reconcile_market_subscription
 
                 instrument = Instrument.objects.select_related("broker_contract").get(pk=instrument_id)
-                reconcile_market_subscription(instrument, timeframe)
+                from apps.broker_gateway.models import BrokerGatewaySession
+                session=BrokerGatewaySession.objects.get(pk=gateway_session_id) if gateway_session_id else None
+                reconcile_market_subscription(instrument, timeframe,gateway_session=session)
             except Exception:
                 # The persisted consumer count remains the recovery source of truth.
                 logger.exception(
@@ -401,9 +404,10 @@ def _delete_mutable_records(instance, version_ids):
 
     instrument_id = instance.instrument_id
     timeframe = instance.timeframe
+    gateway_session_id=instance.portfolio.gateway_session_id
     instance.delete()
     _refresh_input_requirements(requirement_ids)
-    _refresh_subscription(instrument_id, timeframe)
+    _refresh_subscription(instrument_id, timeframe,gateway_session_id)
     return counts
 
 

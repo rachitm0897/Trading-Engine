@@ -11,7 +11,8 @@ The React/TypeScript operator application is a dark, information-dense trading t
 - `/portfolio-builder` — goal construction, instrument qualification, strategy assignment, combined preview, and guarded apply workflow.
 - `/portfolio` — holdings, cash, allocation, concentration, drift, and advanced flow/rebalance/optimization tools.
 - `/activity` — order blotter, responsive order inspector, executions, operational activity, and advanced manual ticket.
-- `/system` — Gateway/noVNC, streaming, reconciliation, provider status, risk/kill switch, and audit controls.
+- `/ibkr-sessions` — concurrent paper/live Gateway provisioning, login/2FA status, account selection, noVNC, reconnect, credentials, and deletion.
+- `/system` — aggregate gateway, streaming, reconciliation, provider status, risk/kill switch, and audit controls.
 
 All feature routes are lazy-loaded while the terminal shell remains mounted.
 
@@ -21,7 +22,7 @@ The desktop sidebar has expanded and compact modes. Below the mobile breakpoint 
 
 Workspace preferences are persisted by `src/stores/workspacePreferences.ts` under `finflock-workspace-v1`. They include sidebar mode, density, panel collapse state, right-rail preference, and per-chart controls. Mobile-drawer and fullscreen state are deliberately session-only. Invalid persisted values fall back to safe defaults.
 
-`src/stores/preferences.ts` and `src/stores/useSelection.ts` contain local selection preferences only. TanStack Query remains the owner of every server value, polling lifecycle, stale/error state, retry, and mutation invalidation; Zustand is not used as a server-data cache.
+`src/stores/preferences.ts` persists only selected session/account/default-portfolio IDs, while `src/stores/useSelection.ts` derives valid choices from server state. IBKR passwords remain component state and are cleared after successful submission. TanStack Query remains the owner of every server value, polling lifecycle, stale/error state, retry, and mutation invalidation; Zustand is not used as a server-data cache.
 
 ## Panels and charts
 
@@ -50,4 +51,4 @@ npm run build
 
 `npm test` runs Vitest and React Testing Library coverage for routes, workflows, responsive shell state, persisted panels, chart normalization, and safety controls. `npm run build` runs TypeScript project compilation before creating the Vite production bundle.
 
-Set `VITE_API_BASE_URL` to the public Backend `/api/v1` URL and `VITE_APP_BASE_PATH` to `/` locally or `/trading_eng_frontend/` on QFS. `VITE_GATEWAY_PUBLIC_URL` is used only for the noVNC operator link. Health remains `GET /healthz` when served by Nginx.
+Set `VITE_API_BASE_URL` to the public Backend `/api/v1` URL and `VITE_APP_BASE_PATH` to `/` locally or `/trading_eng_frontend/` on QFS. noVNC links are returned by the Backend session API and are never constructed from a Frontend gateway variable. Health remains `GET /healthz` when served by Nginx.

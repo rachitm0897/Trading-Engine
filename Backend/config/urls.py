@@ -11,6 +11,7 @@ from apps.market_data import views as market_data_views
 from apps.portfolio_optimization import views as optimization_views
 from apps.portfolio_construction import views as construction_views
 from apps.research import views as research_views
+from apps.broker_gateway import views as broker_session_views
 
 api_patterns = [
     path("system/", views.system), path("auth/session/",views.auth_session), path("gateway/", views.gateway), path("accounts/", views.accounts),
@@ -21,6 +22,11 @@ api_patterns = [
 ]
 urlpatterns = [path("healthz", views.health),path("readyz", views.readiness),path("metrics",streaming_views.prometheus_metrics)] + [path(f"api/v1/{p.pattern}", p.callback, p.default_args) for p in api_patterns]
 new_api = [
+    path("broker-sessions/",broker_session_views.sessions),
+    path("broker-sessions/<uuid:session_id>/",broker_session_views.sessions),
+    path("broker-sessions/<uuid:session_id>/reconnect/",broker_session_views.sessions,{"action":"reconnect"}),
+    path("broker-sessions/<uuid:session_id>/credentials/",broker_session_views.sessions,{"action":"credentials"}),
+    path("broker-sessions/<uuid:session_id>/accounts/",broker_session_views.sessions,{"action":"accounts"}),
     path("dashboard/summary/",analytics_views.dashboard_summary),path("portfolios/series/",analytics_views.portfolio_series),
     path("strategy-definitions/",strategy_views.definitions),path("strategy-definitions/<str:key>/",strategy_views.definitions),
     path("strategy-instances/",strategy_views.instances),path("strategy-instances/<int:instance_id>/",strategy_views.instances),

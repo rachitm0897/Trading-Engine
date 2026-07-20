@@ -114,8 +114,15 @@ def _parse_subscription_key(payload):
     key = str(payload.get("subscription_key") or "")
     if ":" not in key:
         raise ValueError("Market event is missing a canonical subscription_key")
-    instrument_id, timeframe = key.split(":", 1)
-    return int(instrument_id), timeframe
+    parts=key.split(":")
+    if len(parts)>=3:
+        return parts[-3],int(parts[-2]),parts[-1]
+    return None,int(parts[0]),parts[1]
+
+
+def _canonical_subscription_key(subscription):
+    prefix=f"{subscription.gateway_session_id}:" if subscription.gateway_session_id else ""
+    return f"{prefix}{subscription.instrument_id}:{subscription.timeframe}"
 
 
 def _event_time(value):
@@ -128,13 +135,13 @@ def _event_time(value):
 def publish_provider_event(payload, *, received_at=None):
     """Gate a provider event by canonical contract, active provider, and provider epoch before outbox publication."""
     received_at = received_at or timezone.now()
-    instrument_id, subscription_timeframe = _parse_subscription_key(payload)
+    session_id,instrument_id, subscription_timeframe = _parse_subscription_key(payload)
     provider = str(payload.get("provider") or ("FINNHUB" if str(payload.get("source", "")).startswith("finnhub") else "IBKR")).upper()
     _metric_increment("events_received",provider=provider)
     with transaction.atomic():
         subscription = MarketDataSubscription.objects.select_for_update(of=("self",)).select_related(
             "instrument__broker_contract",
-        ).filter(instrument_id=instrument_id, timeframe=subscription_timeframe).first()
+        ).filter(gateway_session_id=session_id,instrument_id=instrument_id, timeframe=subscription_timeframe).first()
         if not subscription:
             _metric_increment("events_dropped",provider=provider,reason="SUBSCRIPTION_MISSING")
             return {"accepted":False,"reason":"SUBSCRIPTION_MISSING"}
@@ -238,7 +245,7 @@ def _historical_payload(subscription, mapping, generation, candle, reason):
         f"FINNHUB:{mapping.provider_symbol}:{subscription.timeframe}:{candle.window_start.isoformat()}".encode()
     ).hexdigest()
     return {
-        "source_event_id": stable, "subscription_key": f"{subscription.instrument_id}:{subscription.timeframe}",
+        "source_event_id": stable, "subscription_key": _canonical_subscription_key(subscription),
         "instrument_id": subscription.instrument_id, "conid": subscription.conid,
         "symbol": subscription.instrument.symbol, "exchange": subscription.instrument.exchange,
         "currency": subscription.instrument.currency, "event_kind": "BAR", "timeframe": subscription.timeframe,
@@ -393,8 +400,8 @@ def begin_primary_probe(subscription_id, *, gateway=None):
         subscription.primary_probe_event_count = 0
         subscription.fallback_state = "RECOVERING"
         subscription.save()
-    client = gateway or GatewayClient()
-    canonical_key = f"{subscription.instrument_id}:{subscription.timeframe}"
+    client = gateway or GatewayClient(subscription.gateway_session,require_commands=True)
+    canonical_key = _canonical_subscription_key(subscription)
     runtime_key = f"{canonical_key}:probe:{generation}"
     payload = {
         "subscription_key": canonical_key, "gateway_subscription_key": runtime_key,

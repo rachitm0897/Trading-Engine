@@ -29,6 +29,27 @@ from .classification import hierarchy
 D = Decimal
 
 
+def effective_strategy_family_cap(policy, fallback_tier):
+    """Return the family cap used by generation for the recommendation tier."""
+    try:
+        tier = int(fallback_tier or 1)
+    except (TypeError, ValueError):
+        tier = 1
+    return D(1) if tier >= 3 else D(policy.strategy_family_cap)
+
+
+def effective_strategy_family_cap_for_run(run):
+    """Prefer the run's audited constraint, with support for older fallback runs."""
+    constraints = (run.optimizer_snapshot or {}).get("constraints") or {}
+    stored_cap = constraints.get("strategy_family_cap")
+    if stored_cap is not None:
+        return D(str(stored_cap))
+    return effective_strategy_family_cap(
+        run.policy,
+        (run.metrics or {}).get("fallback_tier", 1),
+    )
+
+
 def validate_recommendation_for_construction(run, *, check_expiry=True):
     if run.status != "COMPLETED":
         raise ValueError("Only a completed recommendation can be used for construction")
@@ -99,7 +120,7 @@ def validate_recommendation_for_construction(run, *, check_expiry=True):
         "sector": D(run.policy.sector_cap),
         "industry": D(run.policy.industry_cap),
         "sub_industry": D(run.policy.sub_industry_cap),
-        "family": D(run.policy.strategy_family_cap),
+        "family": effective_strategy_family_cap_for_run(run),
     }
     for group, values in group_weights.items():
         if any(value > caps[group] for value in values.values()):

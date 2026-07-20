@@ -9,7 +9,7 @@ from apps.core.views import method_guard, response
 def _portfolio(request):
     from apps.portfolios.models import TradingPortfolio
 
-    query = TradingPortfolio.objects.select_related("account")
+    query = TradingPortfolio.objects.select_related("account", "gateway_session")
     portfolio_id = request.GET.get("portfolio")
     return query.filter(pk=portfolio_id).first() if portfolio_id else query.order_by("pk").first()
 
@@ -80,13 +80,13 @@ def dashboard_summary(request):
     gateway = None
     gateway_error = None
     try:
-        gateway = GatewayClient().health()
+        gateway = GatewayClient.for_portfolio(portfolio).health() if portfolio else None
     except GatewayError as exc:
         gateway_error = str(exc)
 
     attention = []
     if not gateway or not gateway.get("connected"):
-        attention.append({"id": "gateway", "severity": "CRITICAL", "title": "IBKR Gateway is disconnected", "detail": gateway_error or "Reconnect the paper session and verify broker callbacks."})
+        attention.append({"id": "gateway", "severity": "CRITICAL", "title": "IBKR Gateway is disconnected", "detail": gateway_error or "Reconnect the selected session and verify broker callbacks."})
     if account and (not account.is_reconciled or material_breaks.exists()):
         attention.append({"id": "reconciliation", "severity": "CRITICAL" if material_breaks.exists() else "WARNING", "title": "Broker state is not reconciled", "detail": f"{material_breaks.count()} unresolved material break(s)."})
     if KillSwitch.objects.filter(enabled=True).exists() or (portfolio and (portfolio.kill_switch or portfolio.account.kill_switch)):
@@ -112,7 +112,7 @@ def dashboard_summary(request):
     } for item in AuditEvent.objects.order_by("-created_at")[:12]]
     reconciled = bool(account and account.is_reconciled and not material_breaks.exists())
     return response({
-        "mode":"PAPER",
+        "mode":portfolio.gateway_session.mode.upper() if portfolio and portfolio.gateway_session else "PAPER",
         "account": _account_row(account),
         "portfolio": _portfolio_row(portfolio),
         "gateway": gateway,

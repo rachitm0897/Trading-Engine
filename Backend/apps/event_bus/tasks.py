@@ -80,8 +80,13 @@ def check_stream_health():
         defaults={"status":lag_status,"value":lag_value})
     gateway_status="DEGRADED";gateway_value={"connected":False,"reconciled":False}
     try:
-        from apps.broker_gateway.client import GatewayClient
-        gateway_value=GatewayClient().health() or gateway_value
+        from apps.broker_gateway.models import BrokerGatewaySession
+        active=list(BrokerGatewaySession.objects.exclude(status__in=[BrokerGatewaySession.Status.STOPPING,
+            BrokerGatewaySession.Status.DELETED]).values("id","status","last_gateway_state"))
+        connected=[item for item in active if item["status"]==BrokerGatewaySession.Status.CONNECTED]
+        gateway_value={"connected":bool(connected),
+            "reconciled":bool(connected) and all(item["last_gateway_state"].get("reconciled") for item in connected),
+            "session_count":len(active)}
         gateway_status="HEALTHY" if gateway_value.get("connected") and gateway_value.get("reconciled") else "DEGRADED"
     except Exception as exc:
         gateway_value={**gateway_value,"error":str(exc)[:255]}

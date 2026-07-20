@@ -37,6 +37,9 @@ def create_instance(*, name, definition_key, portfolio, timeframe, parameters, t
     if timeframe not in definition.supported_timeframes:
         raise ValueError(f"Unsupported timeframe {timeframe}")
     parameters = plugin.validate_configuration(parameters, target_configuration)
+    if qualify and gateway is None:
+        from apps.broker_gateway.client import GatewayClient
+        gateway=GatewayClient.for_portfolio(portfolio,require_commands=True)
     instrument, contract, qualification = resolve_instrument(instrument_id=instrument_id, ticker=ticker, exchange=exchange,
         currency=currency, primary_exchange=primary_exchange, qualify=qualify, gateway=gateway)
     if instrument.asset_class not in definition.supported_asset_types:
@@ -153,7 +156,7 @@ def enable_instance(instance,gateway=None):
         register_inputs(instance)
     if settings.KAFKA_ENABLED or gateway is not None:
         from apps.market_streams.subscriptions import reconcile_market_subscription
-        reconcile_market_subscription(instance.instrument,instance.timeframe,gateway)
+        reconcile_market_subscription(instance.instrument,instance.timeframe,gateway,gateway_session=instance.portfolio.gateway_session)
     return instance
 
 
@@ -164,7 +167,7 @@ def pause_instance(instance,gateway=None):
         deactivate_inputs(instance)
     if settings.KAFKA_ENABLED or gateway is not None:
         from apps.market_streams.subscriptions import reconcile_market_subscription
-        reconcile_market_subscription(instance.instrument,instance.timeframe,gateway)
+        reconcile_market_subscription(instance.instrument,instance.timeframe,gateway,gateway_session=instance.portfolio.gateway_session)
     return instance
 
 

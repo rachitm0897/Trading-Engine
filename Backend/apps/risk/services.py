@@ -118,8 +118,14 @@ def evaluate_intent(intent, gateway_state=None):
     if not gateway_state.get("connected", False):
         add("gateway", "HELD", "Gateway is disconnected", 0)
         return "HELD", Decimal(0), checks
-    if str(gateway_state.get("mode", "paper")).lower() != "paper":
-        add("live_trading", "REJECTED", "Only paper broker sessions are supported", 0)
+    broker_mode=str(gateway_state.get("mode", "")).lower()
+    if not broker_mode and settings.BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED:
+        broker_mode="paper"
+    if broker_mode not in {"paper","live"}:
+        add("gateway_mode", "REJECTED", "Gateway must report paper or live mode", 0)
+        return "REJECTED", Decimal(0), checks
+    if broker_mode=="live" and not settings.ALLOW_LIVE_TRADING:
+        add("live_trading", "REJECTED", "Live order routing is disabled by deployment policy", 0)
         return "REJECTED", Decimal(0), checks
     account_breaks = ReconciliationBreak.objects.filter(
         run__broker_account=account, material=True, resolved=False

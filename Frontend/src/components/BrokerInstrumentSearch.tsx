@@ -4,6 +4,7 @@ import {Radar} from 'lucide-react'
 
 import {mutationOptions, request, withQuery} from '../api/client'
 import type {InstrumentResolution, InstrumentSearchResult} from '../api/types'
+import {usePreferencesStore} from '../stores/preferences'
 import {ErrorState, StatusBadge} from './ui'
 
 
@@ -19,6 +20,7 @@ export function BrokerInstrumentSearch({value, onValueChange, onContractSelected
   const [selected, setSelected] = useState<InstrumentSearchResult | null>(null)
   const [resolution, setResolution] = useState<InstrumentResolution | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const sessionId = usePreferencesStore((state) => state.selectedSessionId)
   const suggestionsId = useId()
   useEffect(() => {
     if (!value) {
@@ -31,8 +33,8 @@ export function BrokerInstrumentSearch({value, onValueChange, onContractSelected
     return () => window.clearTimeout(timer)
   }, [value])
   const search = useQuery({
-    queryKey: ['instrument-search', searchQuery],
-    queryFn: () => request<InstrumentSearchResult[]>(withQuery('instruments/search/', {query: searchQuery})),
+    queryKey: ['instrument-search', sessionId, searchQuery],
+    queryFn: () => request<InstrumentSearchResult[]>(withQuery('instruments/search/', {query: searchQuery, session_id: sessionId})),
     enabled: searchQuery.length > 0,
     staleTime: 60_000,
   })
@@ -40,7 +42,7 @@ export function BrokerInstrumentSearch({value, onValueChange, onContractSelected
     mutationFn: () => {
       if (!selected) throw new Error('Select an exact IBKR contract first.')
       return request<InstrumentResolution>('instruments/resolve/', mutationOptions('POST', {
-        ...selected, ticker: selected.symbol, qualify: true,
+        ...selected, ticker: selected.symbol, qualify: true, session_id: sessionId,
       }, true))
     },
     onSuccess: (data) => {setResolution(data); onResolved(data)},

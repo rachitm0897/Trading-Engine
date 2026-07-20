@@ -5,6 +5,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.csrf import ensure_csrf_cookie
 import json
+import hashlib
 import uuid
 from apps.core.idempotency import IdempotencyConflict
 
@@ -78,7 +79,7 @@ def system(request):
     from apps.reconciliation.models import ReconciliationBreak
     from apps.risk.models import KillSwitch
     is_admin = bool(getattr(request, "user", None) and request.user.is_authenticated and request.user.is_active and request.user.is_staff)
-    return response({"mode":"PAPER","execution_mode":settings.NEW_EXECUTION_MODE,
+    return response({"mode":"MULTI_SESSION","execution_mode":settings.NEW_EXECUTION_MODE,
         "allow_live_trading":settings.ALLOW_LIVE_TRADING,
         "is_admin":is_admin,"global_kill_switch": settings.GLOBAL_KILL_SWITCH or KillSwitch.objects.filter(scope="GLOBAL", enabled=True).exists(),
         "material_breaks": ReconciliationBreak.objects.filter(material=True, resolved=False).count(), "time": timezone.now().isoformat()})
@@ -136,18 +137,33 @@ def _order_row(order):
 @csrf_exempt
 def gateway(request):
     from apps.broker_gateway.client import GatewayClient, GatewayError
+    from apps.broker_gateway.models import BrokerGatewaySession
     invalid=method_guard(request,"GET","POST")
     if invalid:return invalid
     try:
-        if request.method == "POST": return response(GatewayClient().request("POST", "session/reconnect/", retries=0))
-        return response(GatewayClient().health())
+        if request.method == "POST":
+            payload=json.loads(request.body or b"{}")
+            session=BrokerGatewaySession.objects.get(pk=payload.get("session_id"))
+            return response(GatewayClient(session,require_commands=True).reconnect())
+        sessions=BrokerGatewaySession.objects.exclude(status__in=[BrokerGatewaySession.Status.STOPPING,
+            BrokerGatewaySession.Status.DELETED]).order_by("created_at")
+        rows=[{"id":str(item.pk),"mode":item.mode,"status":item.status,
+            "connected":item.status==item.Status.CONNECTED,"reconciled":bool(item.last_gateway_state.get("reconciled")),
+            "last_callback":item.last_gateway_state.get("last_callback")} for item in sessions]
+        connected_rows=[item for item in rows if item["connected"]]
+        return response({"connected":bool(connected_rows),"reconciled":bool(connected_rows) and all(
+            item["reconciled"] for item in connected_rows),"mode":"multi-session","sessions":rows})
+    except (BrokerGatewaySession.DoesNotExist,ValueError,TypeError) as exc:
+        return response(status=400,error={"code":"BROKER_SESSION_REQUIRED","message":str(exc) or "A valid session_id is required","details":{}})
     except GatewayError as exc: return response(status=503, error={"code":"GATEWAY_UNAVAILABLE", "message":str(exc), "details":{}})
 
 def accounts(request):
     invalid=method_guard(request,"GET")
     if invalid:return invalid
     from apps.accounts.models import BrokerAccount
-    return response(_serialize(BrokerAccount.objects.all(), ["account_id", "alias", "base_currency", "net_liquidation", "available_cash", "buying_power", "daily_pnl", "is_reconciled", "kill_switch", "updated_at"]))
+    query=BrokerAccount.objects.all()
+    if request.GET.get("session"):query=query.filter(gateway_sessions__session_id=request.GET["session"],gateway_sessions__available=True)
+    return response(_serialize(query.distinct(), ["account_id", "alias", "base_currency", "net_liquidation", "available_cash", "buying_power", "daily_pnl", "is_reconciled", "kill_switch", "updated_at"]))
 
 def instruments(request):
     invalid=method_guard(request,"GET")
@@ -162,6 +178,7 @@ def portfolios(request):
     rows=[]
     for item in TradingPortfolio.objects.select_related("account"):
         rows.append({"id":item.pk,"name":item.name,"account_id":item.account_id,"account":item.account.account_id,
+            "gateway_session_id":str(item.gateway_session_id) if item.gateway_session_id else None,
             "cash_buffer_pct":item.cash_buffer_pct,"margin_buffer_pct":item.margin_buffer_pct,
             "minimum_notional":item.minimum_notional,"minimum_quantity":item.minimum_quantity,
             "minimum_drift":item.minimum_drift,"kill_switch":item.kill_switch})
@@ -254,18 +271,21 @@ def orders(request, internal_id=None, action=None):
             validated=validate_order_payload(payload)
             side=validated["side"];order_type=validated["order_type"];tif=validated["time_in_force"]
             quantity=validated["quantity"];reference=validated["reference_price"] or validated["limit_price"] or validated["stop_price"]
-            portfolio=TradingPortfolio.objects.select_related("account").get(pk=payload["portfolio_id"]); instrument=Instrument.objects.get(pk=payload["instrument_id"])
+            portfolio=TradingPortfolio.objects.select_related("account","gateway_session").get(pk=payload["portfolio_id"]); instrument=Instrument.objects.get(pk=payload["instrument_id"])
             if not instrument.active or not instrument.tradable:raise ValueError("Instrument must be active and tradable")
             from apps.core.idempotency import canonical_request_hash, require_matching_request
             request_hash=canonical_request_hash("manual_order",payload)
+            route_id=str(portfolio.gateway_session_id) if portfolio.gateway_session_id else "static-development"
+            intent_key=f"manual:{route_id}:{hashlib.sha256(key.encode('utf-8')).hexdigest()}"
             retry_requested=request.headers.get("Idempotency-Retry","").strip().lower() in {"1","true","yes"}
             with transaction.atomic():
                 from apps.audit.models import OperationAttempt
-                intent,created=OrderIntent.objects.select_for_update().get_or_create(idempotency_key=key,defaults={
+                intent,created=OrderIntent.objects.select_for_update().get_or_create(idempotency_key=intent_key,defaults={
                     "request_hash":request_hash,
                     "portfolio":portfolio,"instrument":instrument,"side":side,"quantity":quantity,"order_type":order_type,
                     "limit_price":validated["limit_price"],"stop_price":validated["stop_price"],
-                    "reference_price":reference or None,"time_in_force":tif})
+                    "reference_price":reference or None,"time_in_force":tif,
+                    "mode":portfolio.gateway_session.mode.upper() if portfolio.gateway_session else "PAPER"})
                 if created:
                     OperationAttempt.objects.create(operation_type="MANUAL_ORDER",operation_id=str(intent.pk),
                         attempt_number=intent.attempt_count,request_hash=intent.request_hash)
@@ -288,8 +308,8 @@ def orders(request, internal_id=None, action=None):
                             "details":{"decision":"REJECTED"}})
                     elif intent.operation_status=="PENDING":
                         return response({"intent_id":intent.pk,"status":"PENDING"},status=202)
-            gateway=GatewayClient()
             try:
+                gateway=GatewayClient.for_portfolio(portfolio,require_commands=True)
                 state=gateway.health()
             except GatewayError as exc:
                 OrderIntent.objects.filter(pk=intent.pk).update(operation_status="FAILED",operation_error=str(exc)[:1000],retryable=True)
@@ -330,12 +350,13 @@ def orders(request, internal_id=None, action=None):
                 "gateway_command_id":command.get("command_id")},completed_at=timezone.now())
             return response({"internal_id":order.internal_id,"status":order.status,"decision":decision,
                 "approved_quantity":approved,"gateway_command":command},status=201)
-        order=Order.objects.select_related("intent").get(internal_id=internal_id); gateway=GatewayClient()
+        order=Order.objects.select_related("intent__portfolio__account","intent__portfolio__gateway_session").get(internal_id=internal_id)
         if action=="cancel":
             if order.status not in {"QUEUED","SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED","UNKNOWN"}: raise ValueError("Order cannot be cancelled in its current state")
             payload=json.loads(request.body or b"{}");operator_reason=str(payload.get("reason") or "")[:255]
             order=transition(order,"CANCEL_PENDING","operator",f"order:{order.internal_id}:cancel:{key}",operator_reason,
                 reason_code="OPERATOR_CANCEL_REQUEST",details={"operator_reason":operator_reason},operator_requested=True)
+            gateway=GatewayClient.for_order(order,require_commands=True)
             command=gateway.cancel_order(order.internal_id,key); return response({"internal_id":order.internal_id,"status":order.status,"gateway_command":command},status=202)
         payload=json.loads(request.body or b"{}")
         if order.status not in {"QUEUED","SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED"}: raise ValueError("Order cannot be modified in its current state")
@@ -358,6 +379,7 @@ def orders(request, internal_id=None, action=None):
         if "time_in_force" in allowed:
             allowed["time_in_force"]=str(allowed["time_in_force"]).upper()
             if allowed["time_in_force"] not in {"DAY","GTC"}:raise ValueError("time_in_force must be DAY or GTC")
+        gateway=GatewayClient.for_order(order,require_commands=True)
         command=gateway.modify_order(order.internal_id,allowed,key); return response({"internal_id":order.internal_id,"status":order.status,"gateway_command":command},status=202)
     except IdempotencyConflict as exc:
         return response(status=409,error={"code":"IDEMPOTENCY_CONFLICT","message":str(exc),"details":{}})

@@ -36,8 +36,17 @@ def _resolve_account(broker_account, broker_account_id, broker_positions, broker
     raise ValueError("Reconciliation requires exactly one broker account")
 
 
-def reconcile(trigger="manual", client=None, *, broker_account=None, broker_account_id=None):
-    client = client or GatewayClient()
+def reconcile(trigger="manual", client=None, *, broker_account=None, broker_account_id=None, gateway_session=None):
+    if client is None:
+        account_for_route=broker_account or (BrokerAccount.objects.get(account_id=str(broker_account_id)) if broker_account_id else None)
+        if account_for_route is None:raise ValueError("Reconciliation requires an explicit session or client")
+        mappings=account_for_route.gateway_sessions.filter(available=True).select_related("session")
+        if gateway_session is not None:mappings=mappings.filter(session=gateway_session)
+        mapping=mappings.first()
+        if mapping is None or mappings.count()!=1:raise ValueError("Reconciliation account does not resolve to exactly one gateway session")
+        client=GatewayClient(mapping.session)
+        gateway_session=mapping.session
+    gateway_session=gateway_session or getattr(client,"gateway_session",None)
     # Broker I/O is deliberately completed before the database transaction.
     health = client.health() or {}
     all_broker_positions = client.positions() or []
@@ -57,7 +66,7 @@ def reconcile(trigger="manual", client=None, *, broker_account=None, broker_acco
 
     with transaction.atomic():
         account = BrokerAccount.objects.select_for_update().get(pk=account.pk)
-        run = ReconciliationRun.objects.create(trigger=trigger, broker_account=account)
+        run = ReconciliationRun.objects.create(trigger=trigger, broker_account=account,gateway_session=gateway_session)
         if not health.get("connected") or not health.get("reconciled"):
             ReconciliationBreak.objects.create(
                 run=run,
@@ -72,15 +81,16 @@ def reconcile(trigger="manual", client=None, *, broker_account=None, broker_acco
         for row in broker_positions_rows:
             broker_positions[str(row.get("conid"))] += Decimal(str(row.get("quantity", 0)))
         internal_positions = defaultdict(Decimal)
+        position_query = PortfolioPosition.objects.filter(portfolio__account=account)
+        if gateway_session is not None:
+            position_query = position_query.filter(portfolio__gateway_session=gateway_session)
         contracts = {
             item.instrument_id: str(item.conid)
             for item in BrokerContract.objects.filter(
-                instrument_id__in=PortfolioPosition.objects.filter(
-                    portfolio__account=account
-                ).values("instrument_id")
+                instrument_id__in=position_query.values("instrument_id")
             )
         }
-        for row in PortfolioPosition.objects.filter(portfolio__account=account):
+        for row in position_query:
             if row.instrument_id in contracts:
                 internal_positions[contracts[row.instrument_id]] += row.quantity
         for conid in sorted(set(broker_positions) | set(internal_positions)):
@@ -102,16 +112,16 @@ def reconcile(trigger="manual", client=None, *, broker_account=None, broker_acco
                     material=True,
                 )
 
+        session_prefix = f"{gateway_session.pk}:" if gateway_session is not None else ""
         broker_execs = {
-            str(row.get("execution_id"))
+            f"{session_prefix}{row.get('execution_id')}"
             for row in broker_execution_rows
             if row.get("execution_id")
         }
-        internal_execs = set(
-            Fill.objects.filter(order__intent__portfolio__account=account).values_list(
-                "execution_id", flat=True
-            )
-        )
+        fill_query = Fill.objects.filter(order__intent__portfolio__account=account)
+        if gateway_session is not None:
+            fill_query = fill_query.filter(order__intent__portfolio__gateway_session=gateway_session)
+        internal_execs = set(fill_query.values_list("execution_id", flat=True))
         for execution_id in sorted(broker_execs - internal_execs):
             ReconciliationBreak.objects.create(
                 run=run,
@@ -135,6 +145,7 @@ def reconcile(trigger="manual", client=None, *, broker_account=None, broker_acco
             if not run.breaks.filter(category=category, material=True).exists():
                 ReconciliationBreak.objects.filter(
                     run__broker_account=account,
+                    run__gateway_session=gateway_session,
                     category=category,
                     material=True,
                     resolved=False,

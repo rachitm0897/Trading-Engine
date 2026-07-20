@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 import dj_database_url
 from corsheaders.defaults import default_headers
@@ -33,6 +34,8 @@ MIDDLEWARE = [
 ROOT_URLCONF = "config.urls"
 TEMPLATES = []
 WSGI_APPLICATION = "config.wsgi.application"
+ASGI_APPLICATION = "config.asgi.application"
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 DATABASES = {"default": dj_database_url.config(default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}", conn_max_age=60)}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
@@ -68,11 +71,27 @@ CELERY_BEAT_SCHEDULE = {
     "research-scoring": {"task": "apps.research.tasks.score_current_candidates", "schedule": 86400.0},
     "recommendation-cache": {"task": "apps.research.tasks.warm_recommendation_cache", "schedule": 86400.0},
 }
-IB_GATEWAY_SERVICE_URL = os.getenv("IB_GATEWAY_SERVICE_URL", "http://localhost:8080/api/v1")
-GATEWAY_SERVICE_TOKEN = os.getenv("GATEWAY_SERVICE_TOKEN", "test-token")
 ALLOW_LIVE_TRADING = os.getenv("ALLOW_LIVE_TRADING", "false").lower() == "true"
-if ALLOW_LIVE_TRADING:
-    raise RuntimeError("Live trading is disabled; this application supports paper trading only")
+BROKER_SESSION_ENCRYPTION_KEY = os.getenv("BROKER_SESSION_ENCRYPTION_KEY", "")
+BROKER_CREDENTIAL_TTL_SECONDS = int(os.getenv("BROKER_CREDENTIAL_TTL_SECONDS", "900"))
+BROKER_SESSION_START_TIMEOUT_SECONDS = float(os.getenv("BROKER_SESSION_START_TIMEOUT_SECONDS", "45"))
+BROKER_SESSION_HEALTH_TIMEOUT_SECONDS = float(os.getenv("BROKER_SESSION_HEALTH_TIMEOUT_SECONDS", "5"))
+NOVNC_ACCESS_TOKEN_TTL_SECONDS = int(os.getenv("NOVNC_ACCESS_TOKEN_TTL_SECONDS", "300"))
+NOVNC_PROXY_CONNECT_TIMEOUT_SECONDS = float(os.getenv("NOVNC_PROXY_CONNECT_TIMEOUT_SECONDS", "10"))
+NOVNC_PROXY_IDLE_TIMEOUT_SECONDS = float(os.getenv("NOVNC_PROXY_IDLE_TIMEOUT_SECONDS", "300"))
+NOVNC_PROXY_MAX_BODY_BYTES = int(os.getenv("NOVNC_PROXY_MAX_BODY_BYTES", str(10 * 1024 * 1024)))
+QCH_APP_ID = os.getenv("QCH_APP_ID", "")
+QCH_API_HOST = os.getenv("QCH_API_HOST", "").rstrip("/")
+QCH_SERVICE_TOKEN = os.getenv("QCH_SERVICE_TOKEN", "")
+QCH_REQUEST_TIMEOUT_SECONDS = float(os.getenv("QCH_REQUEST_TIMEOUT_SECONDS", "10"))
+QCH_SUBCONTAINER_NETWORK = os.getenv("QCH_SUBCONTAINER_NETWORK", "traefik")
+IBKR_GATEWAY_IMAGE = os.getenv("IBKR_GATEWAY_IMAGE", "")
+BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED = os.getenv(
+    "BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED",
+    "true" if any("pytest" in value.lower() for value in sys.argv) else "false",
+).lower() == "true"
+STATIC_DEVELOPMENT_IB_GATEWAY_URL = os.getenv("STATIC_DEVELOPMENT_IB_GATEWAY_URL", "http://localhost:8080/api/v1")
+STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN = os.getenv("STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN", "test-token")
 GLOBAL_KILL_SWITCH = os.getenv("GLOBAL_KILL_SWITCH", "false").lower() == "true"
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_CLIENT_ID = os.getenv("KAFKA_CLIENT_ID", "finflock-backend")

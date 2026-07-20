@@ -1,8 +1,8 @@
 # IB Gateway service
 
-One-port Django service for IB Gateway, IBC, noVNC, Nginx, Supervisor, and the sole `ib_async` connection owner. Nginx is the only public listener. The TWS sockets (`127.0.0.1:4001/4002`), VNC (`127.0.0.1:5900`), websockify (`127.0.0.1:6080`), and Gunicorn (`127.0.0.1:8001`) are never published.
+One-port Django service for one isolated IB Gateway session, IBC, noVNC, Nginx, Supervisor, and its sole `ib_async` connection owner. In managed deployments QCH places this image on a private network; the TWS sockets (`127.0.0.1:4001/4002`), VNC (`127.0.0.1:5900`), websockify (`127.0.0.1:6080`), Gunicorn (`127.0.0.1:8001`), and child HTTP port are never published.
 
-Local Compose uses `BROKER_ADAPTER=ib_async` and paper mode. Inject credentials through secrets/environment and complete IBKR Mobile 2FA through `/novnc/vnc.html` when requested. The worker publishes full broker snapshots every five seconds; the SQLite command/event buffer uses WAL mode and is not the financial source of truth. Automated tests still use the explicit mocked adapter and require no brokerage account.
+`IBC_TRADING_MODE` accepts only `paper` or `live` after case normalization. Paper connects on 4002 and live on 4001. QCH injects per-session credentials, `GATEWAY_SERVICE_TOKEN`, and `NOVNC_PASSWORD`; the Backend proxy supplies the protected noVNC browser path used for login and 2FA. The worker publishes full broker snapshots every five seconds; the SQLite command/event buffer uses WAL mode and is not the financial source of truth. Automated tests use the explicit mocked adapter and require no brokerage account.
 
 ```bash
 cp .env.example .env

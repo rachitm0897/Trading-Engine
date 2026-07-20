@@ -28,9 +28,9 @@ try {
     if ($_.Exception.Response.StatusCode.value__ -ne 401) { throw }
 }
 
-$gatewayToken = $env:GATEWAY_SERVICE_TOKEN
+$gatewayToken = $env:STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN
 if (-not $gatewayToken -and (Test-Path -LiteralPath ".env")) {
-    $tokenLine = Get-Content -LiteralPath ".env" | Where-Object { $_ -match '^GATEWAY_SERVICE_TOKEN=' } | Select-Object -First 1
+    $tokenLine = Get-Content -LiteralPath ".env" | Where-Object { $_ -match '^STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN=' } | Select-Object -First 1
     if ($tokenLine) { $gatewayToken = $tokenLine.Substring($tokenLine.IndexOf('=') + 1).Trim() }
 }
 if (-not $gatewayToken) { $gatewayToken = "local-service-token" }

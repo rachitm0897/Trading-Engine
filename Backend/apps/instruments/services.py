@@ -1,14 +1,28 @@
 from django.db import transaction
+from django.conf import settings
 from django.utils import timezone
-from apps.broker_gateway.client import GatewayClient
+from apps.broker_gateway.client import GatewayClient, GatewayRoute
 from apps.audit.models import OutboxEvent
 from .models import BrokerContract, Instrument
 
 
-def search_broker_instruments(query, gateway=None):
+def _gateway(gateway=None,gateway_session=None):
+    if gateway is not None:return gateway
+    if gateway_session is None:
+        if settings.BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED:
+            return GatewayClient(GatewayRoute(
+                session_id="static-development",
+                base_url=settings.STATIC_DEVELOPMENT_IB_GATEWAY_URL,
+                service_token=settings.STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN,
+            ))
+        raise ValueError("A broker gateway session is required")
+    return GatewayClient(gateway_session,require_commands=True)
+
+
+def search_broker_instruments(query, gateway=None, gateway_session=None):
     query=str(query or "").strip()
     if len(query)<1:raise ValueError("Instrument search query is required")
-    rows=(gateway or GatewayClient()).search_contracts(query)
+    rows=_gateway(gateway,gateway_session).search_contracts(query)
     results=[]
     for row in rows:
         conid=int(row.get("conid") or 0)
@@ -33,7 +47,8 @@ def publish_instrument_registry(contract):
 
 
 def resolve_instrument(*, instrument_id=None, ticker=None, asset_class="STK", exchange="SMART", currency="USD",
-                       primary_exchange=None, conid=None, local_symbol=None, description=None, qualify=True, gateway=None):
+                       primary_exchange=None, conid=None, local_symbol=None, description=None, qualify=True, gateway=None,
+                       gateway_session=None):
     """Resolve operator input to a canonical instrument and qualified IBKR contract."""
     selected_contract=BrokerContract.objects.select_related("instrument").filter(conid=int(conid)).first() if conid else None
     if selected_contract:
@@ -45,7 +60,7 @@ def resolve_instrument(*, instrument_id=None, ticker=None, asset_class="STK", ex
                      "local_symbol":local_symbol or selected_contract.local_symbol or selected_instrument.symbol,
                      "description":description or selected_contract.description}
             payload["conid"]=int(conid)
-            result=(gateway or GatewayClient()).qualify_contract_exact(payload,f"qualify:conid:{int(conid)}")
+            result=_gateway(gateway,gateway_session).qualify_contract_exact(payload,f"qualify:conid:{int(conid)}")
             if int(result.get("conid") or 0)!=int(conid):raise ValueError("IBKR qualified a different contract than the selected conId")
             selected_contract=record_qualified_contract(selected_instrument,result)
         publish_instrument_registry(selected_contract)
@@ -70,7 +85,7 @@ def resolve_instrument(*, instrument_id=None, ticker=None, asset_class="STK", ex
     contract = BrokerContract.objects.filter(instrument=instrument).first()
     if contract or not qualify:
         return instrument, contract, None
-    client=gateway or GatewayClient()
+    client=_gateway(gateway,gateway_session)
     payload={"symbol":instrument.symbol,"asset_class":instrument.asset_class,"exchange":instrument.exchange,
         "currency":instrument.currency,"primary_exchange":primary_exchange or instrument.primary_exchange,
         "local_symbol":local_symbol or "","description":description or ""}

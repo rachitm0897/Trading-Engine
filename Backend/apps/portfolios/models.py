@@ -3,6 +3,13 @@ from django.db import models
 class TradingPortfolio(models.Model):
     name = models.CharField(max_length=128)
     account = models.ForeignKey("accounts.BrokerAccount", on_delete=models.PROTECT, related_name="portfolios")
+    gateway_session = models.ForeignKey(
+        "broker_gateway.BrokerGatewaySession",
+        on_delete=models.PROTECT,
+        related_name="portfolios",
+        null=True,
+        blank=True,
+    )
     cash_buffer_pct = models.DecimalField(max_digits=8, decimal_places=6, default="0.02")
     margin_buffer_pct = models.DecimalField(max_digits=8, decimal_places=6, default="0.10")
     minimum_notional = models.DecimalField(max_digits=20, decimal_places=8, default="10")

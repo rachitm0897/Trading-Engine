@@ -5,6 +5,8 @@ import type {
   AllocationRun,
   AuditEvent,
   BrokerAccount,
+  BrokerGatewaySession,
+  BrokerSessionAccount,
   DashboardSummary,
   Execution,
   GatewayStatus,
@@ -37,6 +39,17 @@ import type {
 const POLL_INTERVAL = 15_000
 
 export const queries = {
+  brokerSessions: () => queryOptions({
+    queryKey: ['broker-sessions'],
+    queryFn: () => request<BrokerGatewaySession[]>('broker-sessions/'),
+    refetchInterval: 5_000,
+  }),
+  brokerSessionAccounts: (sessionId?: string | null) => queryOptions({
+    queryKey: ['broker-session-accounts', sessionId ?? 'none'],
+    queryFn: () => request<BrokerSessionAccount[]>(`broker-sessions/${sessionId}/accounts/`),
+    enabled: Boolean(sessionId),
+    refetchInterval: 5_000,
+  }),
   system: () => queryOptions({
     queryKey: ['system'],
     queryFn: () => request<SystemStatus>('system/'),

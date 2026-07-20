@@ -6,7 +6,7 @@ A paper-first execution platform that converts deterministic portfolio targets i
 
 - `Backend/` — Django, PostgreSQL, Redis, Celery, research, construction, allocation, risk, OMS, execution, and reconciliation.
 - `Frontend/` — React/TypeScript operator application served by Nginx.
-- `IB_gateway/` — the sole `ib_async` connection owner, plus IB Gateway/IBC and noVNC behind one public Nginx port.
+- `IB_gateway/` — the per-session `ib_async` connection owner and publishable child-container image, with IB Gateway/IBC and noVNC behind one private Nginx port.
 - `streaming/` — private Kafka contracts and PyFlink jobs; PostgreSQL remains the financial source of truth.
 
 Strategies, Kafka, Flink, and the frontend cannot access the TWS socket. Kafka uses a transactional PostgreSQL outbox; sizing, risk, OMS, Gateway, ledgers, kill switch, and reconciliation remain mandatory.
@@ -40,10 +40,10 @@ Local URLs:
 
 - Frontend: <http://localhost:5173>
 - Backend: <http://localhost:8000/api/v1/system/>
-- Gateway health: <http://localhost:8080/healthz>
-- noVNC: <http://localhost:8080/novnc/vnc.html>
+- Local/static gateway health: <http://localhost:8080/healthz>
+- Managed sessions and protected noVNC links: <http://localhost:5173/ibkr-sessions>
 
-Compose defaults to the real adapter in IBKR paper mode. Supply credentials in `.env` and use noVNC for login/2FA. No demo account, portfolio, instrument, or order data is created.
+Compose retains one explicitly local/static real-adapter gateway for legacy development flows. Production execution never uses it: the Backend provisions one QCH child container per IBKR session and resolves every broker call through the portfolio's stored session. The Sessions page requires QCH variables and a published `IBKR_GATEWAY_IMAGE`. No demo account, portfolio, instrument, or order data is created.
 
 ## Tests
 
@@ -57,14 +57,21 @@ docker compose config --quiet
 
 See [local development](docs/LOCAL_DEVELOPMENT.md), [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), [research universe](docs/RESEARCH_UNIVERSE.md), [backtesting](docs/BACKTESTING_PROTOCOL.md), [promotion](docs/STRATEGY_PROMOTION.md), and the [recommendation engine](docs/RECOMMENDATION_ENGINE.md).
 
-## QFS
+## QFS / QCH
 
-Supported public URLs are:
+The public applications are:
 
 - `https://qfsplatform.com/trading_eng_backend`
 - `https://qfsplatform.com/trading_eng_frontend`
-- `https://qfsplatform.com/trading_eng_gateway`
 
-Each application exposes one configurable `${PORT}`. See [QFS deployment](docs/QFS_DEPLOYMENT.md).
+Gateway children have no public route. The Backend's ASGI noVNC proxy is the only browser route to them. Build and publish the child image before deploying:
 
-> LIVE configuration is rejected at startup. Actionable recommendations are long-only. Intraday, income, event, selector, allocator, and overlay research contribute when point-in-time data is available; short and pair/basket execution remain disabled.
+```bash
+docker build -t ghcr.io/ORG/finflock-ibkr-gateway:TAG ./IB_gateway
+docker push ghcr.io/ORG/finflock-ibkr-gateway:TAG
+docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/ORG/finflock-ibkr-gateway:TAG
+```
+
+Set `IBKR_GATEWAY_IMAGE` to the resulting immutable `@sha256:` digest. See [QFS deployment](docs/QFS_DEPLOYMENT.md) and [IBKR sessions](docs/IBKR_SETUP.md).
+
+> Live gateway sessions are supported, but live orders still require the independent `ALLOW_LIVE_TRADING=true` deployment gate and all existing kill switches, reconciliation, confirmation, validation, and pre-trade risk controls. Actionable recommendations remain long-only; short and pair/basket execution remain disabled.
