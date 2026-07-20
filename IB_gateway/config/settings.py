@@ -1,7 +1,9 @@
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 from gateway_service.modes import normalize_trading_mode, tws_port_for_mode
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env", override=False)
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "gateway-test-secret")
 DEBUG = False
 ALLOWED_HOSTS = ["*"]

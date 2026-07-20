@@ -21,6 +21,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
+COPY .env.example .env
 RUN chmod +x entrypoint.sh start-ibgateway.sh /opt/ibc/scripts/*.sh && mkdir -p /var/log/supervisor
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --retries=5 CMD curl -fsS http://127.0.0.1:${PORT:-8080}/healthz || exit 1
