@@ -13,6 +13,7 @@
 }
 
 @media (max-width: 1024px) {
+  .session-start-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .app-shell, .app-shell.sidebar-compact { display: block; }
   .sidebar { position: fixed; left: 0; transform: translateX(-102%); width: min(280px, 88vw); box-shadow: var(--shadow-lg); transition: transform .2s ease; }
   .sidebar-compact .brand { justify-content: flex-start; padding: 0 .68rem; }
@@ -59,6 +60,7 @@
 }
 
 @media (max-width: 560px) {
+  .session-start-form, .replacement-credentials { grid-template-columns: 1fr; }
   .context-selectors label { grid-template-columns: 100px; }
   .context-selectors .icon-button { display: none; }
   .metric-grid, .metric-grid.compact, .form-grid.two-columns, .form-grid.three-columns, .form-grid.four-columns, .review-grid, .indicator-list, .configuration-list { grid-template-columns: 1fr; }

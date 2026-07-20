@@ -1,5 +1,5 @@
 import {useIsFetching, useQuery, useQueryClient} from '@tanstack/react-query'
-import {Activity, BookOpen, Bot, ChevronRight, Gauge, LayoutDashboard, Menu, PanelLeftClose, PanelLeftOpen, RefreshCw, ServerCog, Target, X} from 'lucide-react'
+import {Activity, BookOpen, Bot, ChevronRight, Gauge, LayoutDashboard, Menu, PanelLeftClose, PanelLeftOpen, RefreshCw, Server, ServerCog, Target, X} from 'lucide-react'
 import {NavLink, Outlet, useLocation} from 'react-router-dom'
 import {queries} from '../api/queries'
 import {ErrorState, StatusBadge} from '../components/ui'
@@ -16,6 +16,7 @@ const navigation = [
   ]},
   {label: 'Operations', items: [
     {to: '/activity', label: 'Orders & Activity', icon: Activity},
+    {to: '/ibkr-sessions', label: 'IBKR Sessions', icon: Server},
     {to: '/system', label: 'System', icon: ServerCog},
   ]},
 ]
@@ -35,8 +36,14 @@ export function AppShell() {
 
   const selectAccount = (accountId: number) => {
     selection.setSelectedAccount(accountId)
-    const nextPortfolio = selection.allPortfolios.find((item) => !item.account_id || item.account_id === accountId)
+    const nextPortfolio = selection.portfolios.find((item) => item.account_id === accountId)
     selection.setSelectedPortfolio(nextPortfolio?.id ?? null, accountId)
+  }
+
+  const selectSession = (sessionId: string) => {
+    selection.setSelectedSession(sessionId)
+    const nextPortfolio=selection.allPortfolios.find((item) => item.gateway_session_id===sessionId)
+    selection.setSelectedPortfolio(nextPortfolio?.id ?? null,nextPortfolio?.account_id ?? null)
   }
 
   return (
@@ -45,12 +52,13 @@ export function AppShell() {
       <aside className={`sidebar ${mobileNavigationOpen ? 'sidebar-open' : ''}`}>
         <div className="brand"><div className="brand-mark"><Gauge /></div><div className="brand-copy"><strong>Finflock</strong><span>Execution terminal</span></div><button className="icon-button sidebar-mode-toggle" title={sidebarMode === 'expanded' ? 'Use compact sidebar' : 'Use expanded sidebar'} aria-label={sidebarMode === 'expanded' ? 'Use compact sidebar' : 'Use expanded sidebar'} onClick={() => setSidebarMode(sidebarMode === 'expanded' ? 'compact' : 'expanded')}>{sidebarMode === 'expanded' ? <PanelLeftClose /> : <PanelLeftOpen />}</button><button className="icon-button sidebar-close" aria-label="Close navigation" onClick={() => setMobileNavigationOpen(false)}><X /></button></div>
         <nav aria-label="Primary navigation">{navigation.map((group) => <section className="nav-group" key={group.label}><span className="nav-group-label">{group.label}</span>{group.items.map(({to, label, icon: Icon}) => <NavLink key={to} to={to} title={sidebarMode === 'compact' ? label : undefined} aria-label={label} onClick={() => setMobileNavigationOpen(false)} className={({isActive}) => isActive ? 'active' : ''}><Icon /><span>{label}</span><ChevronRight /></NavLink>)}</section>)}</nav>
-        <div className="safety-note"><StatusBadge status={system.data?.mode || 'PAPER'} /><p>Paper-first. No direct TWS access.</p></div>
+        <div className="safety-note"><StatusBadge status={system.data?.mode || 'MULTI_SESSION'} /><p>Session-routed. No direct TWS access.</p></div>
       </aside>
       <div className="app-main">
         <header className="app-topbar">
           <div className="topbar-title"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setMobileNavigationOpen(true)}><Menu /></button><div><span>FINFLOCK / WORKSPACE</span><strong>{page}</strong></div></div>
           <div className="context-selectors">
+            <label><span>Session</span><select aria-label="Selected session" value={selection.selectedSessionId ?? ''} disabled={!selection.sessions.length} onChange={(event) => selectSession(event.target.value)}><option value="" disabled>No sessions</option>{selection.sessions.map((session) => <option key={session.id} value={session.id}>{session.display_name}</option>)}</select></label>
             <label><span>Account</span><select aria-label="Selected account" value={selection.selectedAccountId ?? ''} disabled={!selection.accounts.length} onChange={(event) => selectAccount(Number(event.target.value))}><option value="" disabled>No accounts</option>{selection.accounts.map((account) => <option key={account.id} value={account.id}>{account.alias || account.account_id}</option>)}</select></label>
             <label><span>Portfolio</span><select aria-label="Selected portfolio" value={selection.selectedPortfolioId ?? ''} disabled={!selection.portfolios.length} onChange={(event) => {const id = Number(event.target.value); const portfolio = selection.portfolios.find((item) => item.id === id); selection.setSelectedPortfolio(id, portfolio?.account_id)}}><option value="" disabled>No portfolios</option>{selection.portfolios.map((portfolio) => <option key={portfolio.id} value={portfolio.id}>{portfolio.name}</option>)}</select></label>
             <StatusBadge status={system.isError ? 'DEGRADED' : system.data?.mode || 'PAPER'} />

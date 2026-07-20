@@ -32,6 +32,39 @@ export interface GatewayStatus {
   worker?: string
 }
 
+export type BrokerSessionMode = 'paper' | 'live'
+export type BrokerSessionStatus = 'CREATING' | 'STARTING' | 'WAITING_FOR_LOGIN' | 'WAITING_FOR_2FA' | 'CONNECTED' | 'DISCONNECTED' | 'LOGIN_FAILED' | 'ERROR' | 'STOPPING' | 'DELETED'
+
+export interface BrokerSessionAccount extends BrokerAccount {
+  available: boolean
+  last_seen_at: string
+  default_portfolio_id: number | null
+}
+
+export interface BrokerGatewaySession {
+  id: string
+  display_name: string
+  username_hint: string
+  mode: BrokerSessionMode
+  status: BrokerSessionStatus
+  connected: boolean
+  commands_enabled: boolean
+  container_status: string
+  account_count: number
+  last_error: string
+  last_gateway_state: JsonRecord
+  created_at: string
+  updated_at: string
+  provisioned_at: string | null
+  connected_at: string | null
+  last_checked_at: string | null
+  deleted_at: string | null
+  needs_novnc: boolean
+  novnc_url: string | null
+  accounts?: BrokerSessionAccount[]
+  default_portfolio_id?: number | null
+}
+
 export interface BrokerAccount {
   id: number
   account_id: string
@@ -51,6 +84,7 @@ export interface Portfolio {
   name: string
   account_id?: number
   account?: string
+  gateway_session_id?: string | null
   cash_buffer_pct: DecimalValue
   margin_buffer_pct: DecimalValue
   minimum_notional: DecimalValue
