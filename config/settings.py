@@ -36,7 +36,8 @@ TEMPLATES = []
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-DATABASES = {"default": dj_database_url.config(default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}", conn_max_age=60)}
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'db.sqlite3'}")
+DATABASES = {"default": dj_database_url.parse(DATABASE_URL, conn_max_age=60)}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
 CORS_ALLOWED_ORIGINS = [x.strip() for x in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if x.strip()]
@@ -44,6 +45,7 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = (*default_headers, "idempotency-key")
 CSRF_TRUSTED_ORIGINS = [x.strip() for x in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if x.strip()]
 REST_FRAMEWORK = {"DEFAULT_AUTHENTICATION_CLASSES": [], "DEFAULT_PERMISSION_CLASSES": []}
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/1")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
 CELERY_BEAT_SCHEDULE = {
@@ -74,6 +76,7 @@ CELERY_BEAT_SCHEDULE = {
 ALLOW_LIVE_TRADING = os.getenv("ALLOW_LIVE_TRADING", "false").lower() == "true"
 BROKER_SESSION_ENCRYPTION_KEY = os.getenv("BROKER_SESSION_ENCRYPTION_KEY", "")
 BROKER_CREDENTIAL_TTL_SECONDS = int(os.getenv("BROKER_CREDENTIAL_TTL_SECONDS", "900"))
+BROKER_SESSION_CREATING_STALE_SECONDS = int(os.getenv("BROKER_SESSION_CREATING_STALE_SECONDS", "60"))
 BROKER_SESSION_START_TIMEOUT_SECONDS = float(os.getenv("BROKER_SESSION_START_TIMEOUT_SECONDS", "45"))
 BROKER_SESSION_HEALTH_TIMEOUT_SECONDS = float(os.getenv("BROKER_SESSION_HEALTH_TIMEOUT_SECONDS", "5"))
 NOVNC_ACCESS_TOKEN_TTL_SECONDS = int(os.getenv("NOVNC_ACCESS_TOKEN_TTL_SECONDS", "300"))
@@ -155,7 +158,7 @@ RECOMMENDATION_SNAPSHOT_MAX_AGE_HOURS = RECOMMENDATION_CONFIG.snapshot_max_age_h
 RESEARCH_MAX_PARALLEL_DATA_TASKS = RECOMMENDATION_CONFIG.maximum_parallel_data_tasks
 RESEARCH_MAX_PARALLEL_BACKTEST_TASKS = RECOMMENDATION_CONFIG.maximum_parallel_backtest_tasks
 RESEARCH_BUNDLE_PATH = os.getenv(
-    "RESEARCH_BUNDLE_PATH", str(BASE_DIR.parent / "Trading_Engine_Stock_Strategy_Universe_JSON")
+    "RESEARCH_BUNDLE_PATH", str(BASE_DIR / "research_bundle")
 )
 RESEARCH_ARTIFACT_ROOT = str(RECOMMENDATION_CONFIG.artifact_root)
 RESEARCH_DAILY_PROVIDER = os.getenv("RESEARCH_DAILY_PROVIDER", "FINNHUB").upper()

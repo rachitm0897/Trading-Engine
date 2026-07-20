@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.db import connection
-from django.http import JsonResponse
+from django.http import HttpResponseRedirect, JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -21,11 +21,31 @@ def method_guard(request, *allowed):
 def health(request):
     invalid=method_guard(request,"GET")
     if invalid:return invalid
-    try:
-        with connection.cursor() as cursor: cursor.execute("SELECT 1")
-        return response({"status": "healthy", "database": "connected", "time": timezone.now().isoformat()})
-    except Exception as exc:
-        return response(status=503, error={"code": "DATABASE_UNAVAILABLE", "message": str(exc), "details": {}})
+    return response({"status": "healthy", "process": "running", "time": timezone.now().isoformat()})
+
+
+def dashboard_alias(request):
+    invalid = method_guard(request, "GET")
+    if invalid:
+        return invalid
+    return HttpResponseRedirect(f"{settings.APP_BASE_PATH}/api/v1/dashboard/summary/")
+
+
+def broker_deployment_configuration():
+    if settings.BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED:
+        return {"ready": True, "missing": [], "invalid": []}
+    required = {
+        "BROKER_SESSION_ENCRYPTION_KEY": settings.BROKER_SESSION_ENCRYPTION_KEY,
+        "IBKR_GATEWAY_IMAGE": settings.IBKR_GATEWAY_IMAGE,
+        "QCH_APP_ID": settings.QCH_APP_ID,
+        "QCH_API_HOST": settings.QCH_API_HOST,
+        "QCH_SERVICE_TOKEN": settings.QCH_SERVICE_TOKEN,
+    }
+    missing = sorted(key for key, value in required.items() if not str(value or "").strip())
+    invalid = []
+    if settings.IBKR_GATEWAY_IMAGE and "@sha256:" not in settings.IBKR_GATEWAY_IMAGE:
+        invalid.append("IBKR_GATEWAY_IMAGE")
+    return {"ready": not missing and not invalid, "missing": missing, "invalid": invalid}
 
 
 def readiness(request):
@@ -36,8 +56,15 @@ def readiness(request):
     try:
         with connection.cursor() as cursor:
             cursor.execute("SELECT 1")
+        deployment = broker_deployment_configuration()
+        if not deployment["ready"]:
+            return response(status=503, error={
+                "code": "DEPLOYMENT_CONFIGURATION_INCOMPLETE",
+                "message": "Broker-session deployment configuration is incomplete",
+                "details": deployment,
+            })
         if not settings.RECOMMENDATION_SYSTEM_ENABLED:
-            return response({"status": "ready", "recommendation_system": "disabled"})
+            return response({"status": "ready", "recommendation_system": "disabled", "deployment": deployment})
         from apps.portfolio_construction.rules import MAXIMUM_RISK
         from apps.research.models import BacktestProtocolVersion, RecommendationCacheSnapshot
         from apps.research.services.strategy_registry import REGISTRY
@@ -66,7 +93,7 @@ def readiness(request):
                 "message": "Bootstrap and cache warming must complete before recommendation traffic is enabled",
                 "details": details,
             })
-        return response({"status": "ready", **details})
+        return response({"status": "ready", "deployment": deployment, **details})
     except Exception as exc:
         return response(status=503, error={
             "code": "RECOMMENDATION_SYSTEM_NOT_READY", "message": str(exc), "details": {},
@@ -81,6 +108,7 @@ def system(request):
     is_admin = bool(getattr(request, "user", None) and request.user.is_authenticated and request.user.is_active and request.user.is_staff)
     return response({"mode":"MULTI_SESSION","execution_mode":settings.NEW_EXECUTION_MODE,
         "allow_live_trading":settings.ALLOW_LIVE_TRADING,
+        "broker_deployment":broker_deployment_configuration(),
         "is_admin":is_admin,"global_kill_switch": settings.GLOBAL_KILL_SWITCH or KillSwitch.objects.filter(scope="GLOBAL", enabled=True).exists(),
         "material_breaks": ReconciliationBreak.objects.filter(material=True, resolved=False).count(), "time": timezone.now().isoformat()})
 
@@ -144,7 +172,7 @@ def gateway(request):
         if request.method == "POST":
             payload=json.loads(request.body or b"{}")
             session=BrokerGatewaySession.objects.get(pk=payload.get("session_id"))
-            return response(GatewayClient(session,require_commands=True).reconnect())
+            return response(GatewayClient(session,purpose="reconnect").reconnect())
         sessions=BrokerGatewaySession.objects.exclude(status__in=[BrokerGatewaySession.Status.STOPPING,
             BrokerGatewaySession.Status.DELETED]).order_by("created_at")
         rows=[{"id":str(item.pk),"mode":item.mode,"status":item.status,

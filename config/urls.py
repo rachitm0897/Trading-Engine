@@ -20,7 +20,7 @@ api_patterns = [
     path("orders/", views.orders), path("orders/<str:internal_id>/detail/", views.orders, {"action":"detail"}), path("orders/<str:internal_id>/", views.orders), path("orders/<str:internal_id>/cancel/", views.orders, {"action":"cancel"}), path("executions/", views.executions), path("reconciliation/", views.reconciliation),
     path("risk/", views.risk), path("audit/", views.audit),
 ]
-urlpatterns = [path("healthz", views.health),path("readyz", views.readiness),path("metrics",streaming_views.prometheus_metrics)] + [path(f"api/v1/{p.pattern}", p.callback, p.default_args) for p in api_patterns]
+urlpatterns = [path("healthz", views.health),path("readyz", views.readiness),path("dashboard", views.dashboard_alias),path("metrics",streaming_views.prometheus_metrics)] + [path(f"api/v1/{p.pattern}", p.callback, p.default_args) for p in api_patterns]
 new_api = [
     path("broker-sessions/",broker_session_views.sessions),
     path("broker-sessions/<uuid:session_id>/",broker_session_views.sessions),
@@ -88,5 +88,5 @@ new_api = [
 urlpatterns += [path("api/v1/" + str(p.pattern),p.callback,p.default_args) for p in new_api]
 if settings.APP_BASE_PATH:
     prefix = settings.APP_BASE_PATH.strip("/") + "/"
-    urlpatterns += [path(prefix + "healthz", views.health),path(prefix + "readyz", views.readiness),path(prefix + "metrics",streaming_views.prometheus_metrics)] + [path(prefix + f"api/v1/{p.pattern}", p.callback, p.default_args) for p in api_patterns]
+    urlpatterns += [path(prefix + "healthz", views.health),path(prefix + "readyz", views.readiness),path(prefix + "dashboard", views.dashboard_alias),path(prefix + "metrics",streaming_views.prometheus_metrics)] + [path(prefix + f"api/v1/{p.pattern}", p.callback, p.default_args) for p in api_patterns]
     urlpatterns += [path(prefix + "api/v1/" + str(p.pattern),p.callback,p.default_args) for p in new_api]

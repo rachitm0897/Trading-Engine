@@ -23,17 +23,42 @@ HOP_HEADERS = {
 }
 
 
+def _normalized_prefix(value):
+    value = "/" + str(value or "").strip("/") if str(value or "").strip("/") else ""
+    return value if not value or re.fullmatch(r"/[A-Za-z0-9._~/-]+", value) else ""
+
+
+def _headers(scope):
+    return {key.lower(): value for key, value in scope.get("headers", [])}
+
+
+def _external_prefix(scope):
+    configured = _normalized_prefix(settings.APP_BASE_PATH)
+    forwarded = _headers(scope).get(b"x-forwarded-prefix", b"").decode("latin-1", "replace").split(",", 1)[0]
+    return configured or _normalized_prefix(forwarded)
+
+
 def _route(scope):
     path = scope.get("path", "")
-    prefix = settings.APP_BASE_PATH.rstrip("/")
-    routed = path[len(prefix):] if prefix and path.startswith(prefix + "/") else path
+    routed = path
+    prefixes = {_normalized_prefix(settings.APP_BASE_PATH), _external_prefix(scope)} - {""}
+    for prefix in sorted(prefixes, key=len, reverse=True):
+        if routed == prefix:
+            routed = "/"
+            break
+        if routed.startswith(prefix + "/"):
+            routed = routed[len(prefix):]
+            break
     match = re.match(
         r"^/api/v1/broker-sessions/(?P<session>[0-9a-fA-F-]{36})/novnc(?:/(?P<asset>.*))?$",
         routed,
     )
     if not match:
         return None
-    return match.group("session"), (match.group("asset") or ""), path[: len(path) - len(match.group("asset") or "")].rstrip("/")
+    session_id = match.group("session")
+    asset = match.group("asset") or ""
+    public_base = f"{_external_prefix(scope)}/api/v1/broker-sessions/{session_id}/novnc"
+    return session_id, asset, public_base
 
 
 @sync_to_async(thread_sensitive=True)
@@ -42,15 +67,19 @@ def _load_session(session_id):
         session = BrokerGatewaySession.objects.get(pk=session_id)
     except (BrokerGatewaySession.DoesNotExist, ValueError):
         return None
-    if session.status in {session.Status.STOPPING, session.Status.DELETED} or session.deleted_at:
+    if session.status not in {
+        session.Status.STARTING,
+        session.Status.WAITING_FOR_LOGIN,
+        session.Status.WAITING_FOR_2FA,
+        session.Status.CONNECTED,
+        session.Status.DISCONNECTED,
+        session.Status.LOGIN_FAILED,
+        session.Status.ERROR,
+    } or session.deleted_at:
         return None
     if not CONTAINER_NAME_RE.fullmatch(session.child_container_name or ""):
         return None
     return session
-
-
-def _headers(scope):
-    return {key.lower(): value for key, value in scope.get("headers", [])}
 
 
 def _query(scope):
@@ -86,14 +115,21 @@ async def _send_response(send, status, body=b"", headers=None):
     await send({"type": "http.response.body", "body": body})
 
 
-def _connect_page():
-    return b"""<!doctype html><meta charset=utf-8><title>Opening noVNC</title>
+def _connect_page(base_path):
+    authorize_url = f"{base_path}/authorize/"
+    vnc_url = f"{base_path}/vnc.html"
+    websocket_path = f"{base_path.lstrip('/')}/websockify"
+    values = json.dumps({"authorize": authorize_url, "vnc": vnc_url, "websockify": websocket_path})
+    return f"""<!doctype html><meta charset=utf-8><title>Opening noVNC</title>
 <body><p>Authorizing the private noVNC session&hellip;</p><script>
-(async()=>{const p=new URLSearchParams(location.hash.slice(1));const token=p.get('access_token');
-const path=p.get('path');if(!token)throw new Error('Missing access token');
-const r=await fetch('../authorize/',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})});
-if(!r.ok)throw new Error('noVNC authorization failed');location.replace('../vnc.html?autoconnect=1&resize=scale&path='+encodeURIComponent(path));
-})().catch(e=>{document.body.textContent=e.message});</script></body>"""
+const routes={values};
+(async()=>{{const p=new URLSearchParams(location.hash.slice(1));const token=p.get('access_token');
+if(!token)throw new Error('Missing access token');
+const r=await fetch(routes.authorize,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{token}})}});
+if(!r.ok)throw new Error('noVNC authorization failed');
+const q=new URLSearchParams({{autoconnect:'1',resize:'scale',path:routes.websockify}});
+location.replace(routes.vnc+'?'+q.toString());
+}})().catch(e=>{{document.body.textContent=e.message}});</script></body>""".encode("utf-8")
 
 
 async def _read_body(receive):
@@ -125,7 +161,7 @@ async def proxy_http(scope, receive, send, route):
     if session is None:
         return await _send_response(send, 404, b"Broker session not found")
     if asset.rstrip("/") == "connect":
-        return await _send_response(send, 200, _connect_page(), [(b"content-type", b"text/html; charset=utf-8"),
+        return await _send_response(send, 200, _connect_page(base_path), [(b"content-type", b"text/html; charset=utf-8"),
             (b"cache-control", b"no-store")])
     if asset.rstrip("/") == "authorize":
         if scope.get("method") != "POST":

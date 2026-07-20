@@ -12,7 +12,11 @@ python manage.py runserver 8000
 pytest
 ```
 
-Health: `GET /healthz`. APIs use `/api/v1/` and return the documented `{ok,data,error,meta}` envelope. `APP_BASE_PATH` may be empty or a QFS prefix. The application is paper-only and fails startup if live mode is requested.
+Process liveness is `GET /healthz`; deployment/database/recommendation readiness is `GET /readyz`. APIs use `/api/v1/` and return the documented `{ok,data,error,meta}` envelope. `APP_BASE_PATH` may be empty locally or `/trading_eng_backend` on QFS. Managed sessions accept only `paper` and `live`; live order execution still requires the independent `ALLOW_LIVE_TRADING` gate and every existing safety control.
+
+`docker build -t trading-engine-backend .` works from this directory. Runtime Kafka schemas and the canonical research bundle are packaged below `Backend`, so the production image does not depend on its repository parent. The QFS container listens on `${PORT:-8000}` and runs Django ASGI, Celery workers, and Celery Beat under Supervisor. PostgreSQL, Redis, Kafka, and Flink URLs must reference external services in production.
+
+Managed broker sessions use QCH private children at `http://<container-name>:8080/api/v1`; they never use the public standalone Gateway. QCH access variables belong only on this application. See [`docs/QFS_DEPLOYMENT.md`](../docs/QFS_DEPLOYMENT.md).
 
 Database startup uses normal Django migrations only. See [`docs/DATABASE_UPGRADES.md`](../docs/DATABASE_UPGRADES.md) before upgrading an existing installation.
 
