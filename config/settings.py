@@ -3,10 +3,12 @@ import sys
 from pathlib import Path
 import dj_database_url
 from corsheaders.defaults import default_headers
+from dotenv import load_dotenv
 
 from apps.research.configuration import RecommendationSystemConfiguration
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env", override=False)
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "test-only-secret")
 DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
 ALLOWED_HOSTS = [x.strip() for x in os.getenv("ALLOWED_HOSTS", "*").split(",") if x.strip()]
