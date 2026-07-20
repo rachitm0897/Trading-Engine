@@ -8,23 +8,29 @@ from apps.strategies.plugins import get_plugin
 from .models import MarketDataSubscription
 
 
-def _requirements(instrument,timeframe):
-    instances=list(StrategyInstance.objects.filter(enabled=True,instrument=instrument,timeframe=timeframe).select_related("definition"))
+def _requirements(instrument,timeframe,gateway_session=None):
+    query=StrategyInstance.objects.filter(enabled=True,instrument=instrument,timeframe=timeframe)
+    if gateway_session is not None:query=query.filter(portfolio__gateway_session=gateway_session)
+    instances=list(query.select_related("definition"))
     required=max((get_plugin(item.definition).warmup_bars(item.parameters) for item in instances),default=0)
     return instances,required+int(getattr(settings,"WARMUP_SAFETY_BARS",5)) if instances else 0
 
 
-def reconcile_market_subscription(instrument,timeframe,gateway=None,force=False,connection_generation=None):
+def reconcile_market_subscription(instrument,timeframe,gateway=None,force=False,connection_generation=None,gateway_session=None):
     contract=getattr(instrument,"broker_contract",None)
     if not contract:raise ValueError("Instrument does not have a qualified IBKR contract")
-    instances,history=_requirements(instrument,timeframe);count=len(instances)
-    client=gateway or GatewayClient()
+    gateway_session=gateway_session or getattr(gateway,"gateway_session",None)
+    instances,history=_requirements(instrument,timeframe,gateway_session);count=len(instances)
+    if gateway is None:
+        if gateway_session is None:raise ValueError("A broker gateway session is required for market-data subscription routing")
+        client=GatewayClient(gateway_session,require_commands=True)
+    else:client=gateway
     generation=connection_generation
     if count and generation is None:
         health=client.health();generation=str(health.get("connection_generation") or "")
     action=None;payload=None;command_key=None
     with transaction.atomic():
-        subscription,_=MarketDataSubscription.objects.select_for_update().get_or_create(instrument=instrument,timeframe=timeframe,
+        subscription,_=MarketDataSubscription.objects.select_for_update().get_or_create(gateway_session=gateway_session,instrument=instrument,timeframe=timeframe,
             defaults={"conid":contract.conid,"consumer_count":count,"required_history_bars":history})
         subscription.conid=contract.conid;subscription.consumer_count=count;subscription.required_history_bars=history
         if count:
@@ -38,15 +44,17 @@ def reconcile_market_subscription(instrument,timeframe,gateway=None,force=False,
             subscription.state="SUBSCRIBING";subscription.requested_at=timezone.now()
             subscription.gateway_connection_generation=generation
             subscription.save()
-            payload={"subscription_key":f"{instrument.pk}:{timeframe}","instrument_id":instrument.pk,"conid":contract.conid,
+            session_key=str(gateway_session.pk) if gateway_session is not None else "explicit"
+            payload={"subscription_key":f"{session_key}:{instrument.pk}:{timeframe}","instrument_id":instrument.pk,"conid":contract.conid,
                 "symbol":instrument.symbol,"asset_class":instrument.asset_class,"exchange":instrument.exchange,
                 "currency":instrument.currency,"timeframe":timeframe,"historical_bars":history,
                 "provider":"IBKR","provider_generation":str(subscription.provider_generation)}
-            command_key=f"market-subscribe:{subscription.pk}:{subscription.request_id}";action="subscribe"
+            command_key=f"market-subscribe:{session_key}:{subscription.pk}:{subscription.request_id}";action="subscribe"
         elif subscription.state!="INACTIVE" or subscription.consumer_count:
             subscription.request_id=uuid.uuid4();subscription.state="CANCELLING";subscription.requested_at=timezone.now();subscription.save()
-            payload={"subscription_key":f"{instrument.pk}:{timeframe}"}
-            command_key=f"market-cancel:{subscription.pk}:{subscription.request_id}";action="cancel"
+            session_key=str(gateway_session.pk) if gateway_session is not None else "explicit"
+            payload={"subscription_key":f"{session_key}:{instrument.pk}:{timeframe}"}
+            command_key=f"market-cancel:{session_key}:{subscription.pk}:{subscription.request_id}";action="cancel"
         else:
             subscription.save(update_fields=["conid","consumer_count","required_history_bars","updated_at"])
             return subscription
@@ -63,18 +71,30 @@ def reconcile_market_subscription(instrument,timeframe,gateway=None,force=False,
     return MarketDataSubscription.objects.get(pk=subscription_id)
 
 
-def restore_market_subscriptions(gateway=None):
-    client=gateway or GatewayClient();health=client.health()
+def restore_market_subscriptions(gateway=None,gateway_session=None):
+    if gateway is None and gateway_session is None:
+        from apps.broker_gateway.models import BrokerGatewaySession
+        total=0
+        for session in BrokerGatewaySession.objects.filter(status=BrokerGatewaySession.Status.CONNECTED,commands_enabled=True):
+            total+=restore_market_subscriptions(gateway_session=session)
+        return total
+    gateway_session=gateway_session or getattr(gateway,"gateway_session",None)
+    client=gateway or GatewayClient(gateway_session);health=client.health()
     if not health.get("connected"):return 0
     generation=str(health.get("connection_generation") or "");restored=0
-    pairs=set(StrategyInstance.objects.filter(enabled=True).values_list("instrument_id","timeframe"))
-    pairs.update(MarketDataSubscription.objects.values_list("instrument_id","timeframe"))
+    instances=StrategyInstance.objects.filter(enabled=True)
+    subscriptions=MarketDataSubscription.objects.all()
+    if gateway_session is not None:
+        instances=instances.filter(portfolio__gateway_session=gateway_session)
+        subscriptions=subscriptions.filter(gateway_session=gateway_session)
+    pairs=set(instances.values_list("instrument_id","timeframe"))
+    pairs.update(subscriptions.values_list("instrument_id","timeframe"))
     from apps.instruments.models import Instrument
     for instrument_id,timeframe in pairs:
         instrument=Instrument.objects.select_related("broker_contract").get(pk=instrument_id)
-        current=MarketDataSubscription.objects.filter(instrument=instrument,timeframe=timeframe).first()
+        current=MarketDataSubscription.objects.filter(gateway_session=gateway_session,instrument=instrument,timeframe=timeframe).first()
         if current and current.active_provider=="FINNHUB" and current.consumer_count:
             continue
         force=bool(current and current.consumer_count and current.gateway_connection_generation!=generation)
-        reconcile_market_subscription(instrument,timeframe,client,force=force,connection_generation=generation);restored+=int(force)
+        reconcile_market_subscription(instrument,timeframe,client,force=force,connection_generation=generation,gateway_session=gateway_session);restored+=int(force)
     return restored

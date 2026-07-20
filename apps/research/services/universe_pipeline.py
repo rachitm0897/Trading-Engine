@@ -6,7 +6,6 @@ from django.conf import settings
 from django.db.models import Count, Max, Min, Q
 from django.utils import timezone
 
-from apps.broker_gateway.client import GatewayClient
 from apps.instruments.models import BrokerContract
 
 from ..enums import MappingStatus
@@ -89,7 +88,8 @@ def qualify_member_background(member, *, gateway=None):
         raise ValueError("Member could not be mapped to a canonical instrument")
     if BrokerContract.objects.filter(instrument_id=member.instrument_id, qualified_at__isnull=False).exists():
         return member
-    client = gateway or GatewayClient()
+    if gateway is None:raise ValueError("An explicit broker gateway session client is required for contract qualification")
+    client = gateway
     candidate = _exact_contract_candidate(member, client.search_contracts(member.source_symbol))
     if not candidate:
         member.mapping_notes = "IBKR qualification was ambiguous or returned no exact identity"

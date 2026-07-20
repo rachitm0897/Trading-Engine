@@ -86,7 +86,7 @@ def desired_finnhub_subscriptions():
         instrument__provider_mappings__provider="FINNHUB",
         instrument__provider_mappings__status="VERIFIED",
     ).select_related("instrument__broker_contract").values(
-        "id", "instrument_id", "conid", "timeframe", "provider_generation", "fallback_reason",
+        "id", "gateway_session_id", "instrument_id", "conid", "timeframe", "provider_generation", "fallback_reason",
         "instrument__symbol", "instrument__exchange", "instrument__currency",
         "instrument__provider_mappings__provider_symbol",
     )
@@ -150,7 +150,8 @@ class FinnhubRealtimeWorker:
     def _publish_ready(self):
         for bar in self.aggregator.flush_ready(datetime.now(timezone.utc)):
             for subscription in self.desired.get(bar.provider_symbol, []):
-                subscription_key = f"{subscription['instrument_id']}:{subscription['timeframe']}"
+                prefix=f"{subscription['gateway_session_id']}:" if subscription.get("gateway_session_id") else ""
+                subscription_key = f"{prefix}{subscription['instrument_id']}:{subscription['timeframe']}"
                 stable = hashlib.sha256(
                     f"FINNHUB:{bar.provider_symbol}:{subscription_key}:{bar.window_start.isoformat()}".encode()
                 ).hexdigest()

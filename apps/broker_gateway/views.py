@@ -1,0 +1,224 @@
+import json
+from datetime import timedelta
+from urllib.parse import quote
+
+from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
+
+from apps.core.views import method_guard, response
+
+from .client import GatewayClient, GatewayError
+from .crypto import (
+    encrypt_secret,
+    generate_novnc_password,
+    generate_service_token,
+    issue_novnc_access_token,
+    mask_username,
+)
+from .models import BrokerGatewaySession, BrokerGatewaySessionSecret, normalize_broker_mode
+from .qch import QCHBrokerClient, QCHError
+from .services import container_name_for, delete_session, temporary_secret_expiry
+from .tasks import provision_broker_session
+
+
+def _payload(request):
+    value = json.loads(request.body or b"{}")
+    if not isinstance(value, dict):
+        raise ValueError("Request body must be a JSON object")
+    return value
+
+
+def _bounded(value, field, maximum, *, required=True):
+    result = str(value or "").strip()
+    if required and not result:
+        raise ValueError(f"{field} is required")
+    if len(result) > maximum:
+        raise ValueError(f"{field} cannot exceed {maximum} characters")
+    return result
+
+
+def _public_novnc_url(request, session):
+    if not session.child_container_name or session.status in {session.Status.STOPPING, session.Status.DELETED}:
+        return None
+    token, _ = issue_novnc_access_token(session.pk)
+    base = str(getattr(settings, "PUBLIC_BASE_URL", "") or "").rstrip("/")
+    if not base:
+        base = request.build_absolute_uri("/").rstrip("/")
+    prefix = settings.APP_BASE_PATH.rstrip("/")
+    proxy_path = f"{prefix}/api/v1/broker-sessions/{session.pk}/novnc"
+    public_suffix = proxy_path
+    if prefix and base.endswith(prefix):
+        public_suffix = proxy_path[len(prefix):]
+    websocket_path = f"{proxy_path.lstrip('/')}/websockify"
+    fragment = f"access_token={quote(token)}&path={quote(websocket_path, safe='')}"
+    return f"{base}{public_suffix}/connect/#{fragment}"
+
+
+def _account_rows(session):
+    rows = []
+    mappings = session.session_accounts.select_related("broker_account").order_by("broker_account__account_id")
+    for mapping in mappings:
+        account = mapping.broker_account
+        portfolio = session.portfolios.filter(account=account).order_by("pk").first()
+        rows.append({
+            "id": account.pk,
+            "account_id": account.account_id,
+            "alias": mapping.broker_alias or account.alias,
+            "base_currency": account.base_currency,
+            "net_liquidation": account.net_liquidation,
+            "available_cash": account.available_cash,
+            "buying_power": account.buying_power,
+            "daily_pnl": account.daily_pnl,
+            "is_reconciled": account.is_reconciled,
+            "kill_switch": account.kill_switch,
+            "updated_at": account.updated_at,
+            "available": mapping.available,
+            "last_seen_at": mapping.last_seen_at,
+            "default_portfolio_id": portfolio.pk if portfolio else None,
+        })
+    return rows
+
+
+def serialize_session(request, session, *, include_accounts=False):
+    accounts = _account_rows(session) if include_accounts else None
+    result = {
+        "id": str(session.pk),
+        "display_name": session.display_name,
+        "username_hint": session.username_hint,
+        "mode": session.mode,
+        "status": session.status,
+        "connected": session.status == session.Status.CONNECTED,
+        "commands_enabled": session.commands_enabled,
+        "container_status": session.last_qch_state.get("status", "") if session.last_qch_state else "",
+        "account_count": session.session_accounts.filter(available=True).count(),
+        "last_error": session.last_error,
+        "last_gateway_state": session.last_gateway_state,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "provisioned_at": session.provisioned_at,
+        "connected_at": session.connected_at,
+        "last_checked_at": session.last_checked_at,
+        "deleted_at": session.deleted_at,
+        "needs_novnc": session.mode == session.Mode.LIVE and session.status != session.Status.CONNECTED,
+        "novnc_url": _public_novnc_url(request, session),
+    }
+    if include_accounts:
+        result["accounts"] = accounts
+        result["default_portfolio_id"] = next(
+            (item["default_portfolio_id"] for item in accounts if item["available"] and item["default_portfolio_id"]), None
+        )
+    return result
+
+
+@csrf_exempt
+def sessions(request, session_id=None, action=None):
+    if session_id is None:
+        invalid = method_guard(request, "GET", "POST")
+    elif action in {"reconnect", "credentials"}:
+        invalid = method_guard(request, "POST")
+    elif action == "accounts":
+        invalid = method_guard(request, "GET")
+    else:
+        invalid = method_guard(request, "GET", "DELETE")
+    if invalid:
+        return invalid
+    try:
+        if session_id is None and request.method == "GET":
+            queryset = BrokerGatewaySession.objects.all().order_by("-created_at")
+            if request.GET.get("include_deleted", "false").lower() != "true":
+                queryset = queryset.exclude(status=BrokerGatewaySession.Status.DELETED)
+            return response([serialize_session(request, item) for item in queryset])
+        if session_id is None:
+            payload = _payload(request)
+            display_name = _bounded(payload.get("display_name") or "IBKR session", "display_name", 128)
+            username = _bounded(payload.get("username"), "username", 128)
+            password = _bounded(payload.get("password"), "password", 512)
+            mode = normalize_broker_mode(payload.get("mode"))
+            gateway_token = generate_service_token()
+            novnc_password = generate_novnc_password()
+            with transaction.atomic():
+                session = BrokerGatewaySession(
+                    display_name=display_name,
+                    username_hint=mask_username(username),
+                    mode=mode,
+                    encrypted_gateway_token=encrypt_secret(gateway_token),
+                    encrypted_novnc_password=encrypt_secret(novnc_password),
+                    child_container_name="pending",
+                )
+                session.child_container_name = container_name_for(session.pk)
+                session.full_clean()
+                session.save()
+                BrokerGatewaySessionSecret.objects.create(
+                    session=session,
+                    encrypted_username=encrypt_secret(username),
+                    encrypted_password=encrypt_secret(password),
+                    expires_at=temporary_secret_expiry(),
+                )
+                transaction.on_commit(lambda: provision_broker_session.delay(str(session.pk)))
+            return response(serialize_session(request, session, include_accounts=True), status=202)
+
+        session = BrokerGatewaySession.objects.get(pk=session_id)
+        if action == "accounts":
+            return response(_account_rows(session))
+        if action == "reconnect":
+            command = GatewayClient(session, require_commands=True).reconnect()
+            BrokerGatewaySession.objects.filter(pk=session.pk).update(
+                status=BrokerGatewaySession.Status.STARTING, last_error="", last_checked_at=timezone.now()
+            )
+            session.refresh_from_db()
+            return response({"session": serialize_session(request, session), "gateway_command": command}, status=202)
+        if action == "credentials":
+            payload = _payload(request)
+            username = _bounded(payload.get("username"), "username", 128)
+            password = _bounded(payload.get("password"), "password", 512)
+            qch = QCHBrokerClient()
+            if session.child_container_id:
+                qch.delete_container(session.child_container_id)
+            with transaction.atomic():
+                session = BrokerGatewaySession.objects.select_for_update().get(pk=session.pk)
+                if session.status in {session.Status.STOPPING, session.Status.DELETED}:
+                    raise ValueError("Deleted or stopping sessions cannot accept credentials")
+                BrokerGatewaySessionSecret.objects.update_or_create(
+                    session=session,
+                    defaults={
+                        "encrypted_username": encrypt_secret(username),
+                        "encrypted_password": encrypt_secret(password),
+                        "expires_at": temporary_secret_expiry(),
+                    },
+                )
+                session.username_hint = mask_username(username)
+                session.status = session.Status.CREATING
+                session.commands_enabled = False
+                session.child_container_id = ""
+                session.last_qch_state = {}
+                session.last_gateway_state = {}
+                session.last_error = ""
+                session.deleted_at = None
+                session.lifecycle_version += 1
+                session.save(update_fields=[
+                    "username_hint", "status", "commands_enabled", "child_container_id", "last_qch_state",
+                    "last_gateway_state", "last_error", "deleted_at", "lifecycle_version", "updated_at",
+                ])
+                transaction.on_commit(lambda: provision_broker_session.delay(str(session.pk)))
+            return response(serialize_session(request, session, include_accounts=True), status=202)
+        if request.method == "DELETE":
+            session, removed = delete_session(session.pk)
+            return response({
+                "session": serialize_session(request, session, include_accounts=True),
+                "container_deleted": removed,
+                "warning": "The gateway container and monitoring stopped and bound strategies were paused. Existing IBKR orders were not automatically cancelled.",
+            })
+        return response(serialize_session(request, session, include_accounts=True))
+    except BrokerGatewaySession.DoesNotExist:
+        return response(status=404, error={"code": "BROKER_SESSION_NOT_FOUND", "message": "Broker session was not found", "details": {}})
+    except json.JSONDecodeError:
+        return response(status=400, error={"code": "INVALID_JSON", "message": "Request body must be valid JSON", "details": {}})
+    except (ValueError, ValidationError) as exc:
+        return response(status=400, error={"code": "BROKER_SESSION_INVALID", "message": str(exc), "details": {}})
+    except QCHError as exc:
+        return response(status=503, error={"code": "QCH_UNAVAILABLE", "message": str(exc), "details": {}})
+    except GatewayError as exc:
+        return response(status=503, error={"code": "BROKER_SESSION_UNAVAILABLE", "message": str(exc), "details": {}})

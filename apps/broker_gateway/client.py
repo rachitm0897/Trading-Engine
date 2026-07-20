@@ -1,81 +1,235 @@
-import time
+from dataclasses import dataclass
 import hashlib
 import json
 import time
-import requests
-from django.conf import settings
 
-class GatewayError(RuntimeError): pass
+import requests
+
+from .crypto import decrypt_secret
+
+
+class GatewayError(RuntimeError):
+    pass
+
+
+class GatewayRouteError(GatewayError):
+    pass
+
+
+class GatewaySessionUnavailable(GatewayRouteError):
+    pass
+
+
+class GatewayTransportError(GatewayError):
+    pass
+
+
+@dataclass(frozen=True)
+class GatewayRoute:
+    session_id: str
+    base_url: str
+    service_token: str
+
+    def __post_init__(self):
+        if not self.session_id or not self.base_url or not self.service_token:
+            raise GatewayRouteError("A gateway route requires session identity, URL, and service token")
+
+
+def route_for_session(gateway_session, *, require_commands=False):
+    from .models import BrokerGatewaySession
+
+    if gateway_session is None:
+        raise GatewayRouteError("A broker gateway session is required")
+    if gateway_session.deleted_at or gateway_session.status in {
+        BrokerGatewaySession.Status.STOPPING,
+        BrokerGatewaySession.Status.DELETED,
+    }:
+        raise GatewaySessionUnavailable("The broker gateway session has been deleted or is stopping")
+    if require_commands and not gateway_session.commands_enabled:
+        raise GatewaySessionUnavailable("New broker commands are disabled for this session")
+    if not gateway_session.internal_base_url or not gateway_session.encrypted_gateway_token:
+        raise GatewaySessionUnavailable("The broker gateway session has not been provisioned")
+    return GatewayRoute(
+        session_id=str(gateway_session.pk),
+        base_url=gateway_session.internal_base_url,
+        service_token=decrypt_secret(gateway_session.encrypted_gateway_token),
+    )
+
 
 class GatewayClient:
-    def __init__(self, base_url=None, token=None, session=None):
-        self.base_url = (base_url or settings.IB_GATEWAY_SERVICE_URL).rstrip("/")
-        self.token = token or settings.GATEWAY_SERVICE_TOKEN
-        self.session = session or requests.Session()
+    """Authenticated client bound to one immutable broker-session route.
 
-    def request(self, method, path, *, idempotency_key=None, retries=2, **kwargs):
+    A URL plus token is accepted as an explicit route for isolated tests and local
+    tooling. Production callers pass a BrokerGatewaySession or GatewayRoute.
+    """
+
+    def __init__(self, route, token=None, *, http_session=None, require_commands=False):
+        self.gateway_session = None
+        if isinstance(route, GatewayRoute):
+            resolved = route
+        elif isinstance(route, str) and token:
+            resolved = GatewayRoute(
+                session_id=f"explicit-{hashlib.sha256(route.encode()).hexdigest()[:12]}",
+                base_url=route,
+                service_token=token,
+            )
+        elif hasattr(route, "internal_base_url"):
+            self.gateway_session = route
+            resolved = route_for_session(route, require_commands=require_commands)
+        else:
+            raise GatewayRouteError("GatewayClient requires a broker session or explicit GatewayRoute")
+        self.route = resolved
+        self.base_url = resolved.base_url.rstrip("/")
+        self.token = resolved.service_token
+        self.http = http_session or requests.Session()
+
+    @classmethod
+    def for_portfolio(cls, portfolio, *, require_commands=False, http_session=None):
+        gateway_session = getattr(portfolio, "gateway_session", None)
+        if gateway_session is None:
+            from django.conf import settings
+            if settings.BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED:
+                return cls(GatewayRoute(
+                    session_id="static-development",
+                    base_url=settings.STATIC_DEVELOPMENT_IB_GATEWAY_URL,
+                    service_token=settings.STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN,
+                ),http_session=http_session)
+            raise GatewaySessionUnavailable("Portfolio is not bound to an IBKR gateway session")
+        mapping_exists = gateway_session.session_accounts.filter(broker_account_id=portfolio.account_id, available=True).exists()
+        if not mapping_exists:
+            raise GatewaySessionUnavailable("Portfolio account is not available through its bound gateway session")
+        return cls(gateway_session, require_commands=require_commands, http_session=http_session)
+
+    @classmethod
+    def for_order(cls, order, *, require_commands=True, http_session=None):
+        portfolio = order.intent.portfolio
+        return cls.for_portfolio(portfolio, require_commands=require_commands, http_session=http_session)
+
+    def _session_key(self, key):
+        return f"session:{self.route.session_id}:{key}"[:255]
+
+    def request(self, method, path, *, idempotency_key=None, retries=2, timeout=10, **kwargs):
         headers = {"Authorization": f"Bearer {self.token}", **kwargs.pop("headers", {})}
         if idempotency_key:
-            headers["Idempotency-Key"] = idempotency_key
+            headers["Idempotency-Key"] = self._session_key(idempotency_key)
         safe = method.upper() == "GET"
         for attempt in range(retries + 1):
             try:
-                response = self.session.request(method, f"{self.base_url}/{path.lstrip('/')}", headers=headers, timeout=10, **kwargs)
+                response = self.http.request(
+                    method,
+                    f"{self.base_url}/{path.lstrip('/')}",
+                    headers=headers,
+                    timeout=timeout,
+                    **kwargs,
+                )
                 if response.status_code >= 500 and safe and attempt < retries:
-                    time.sleep(0.05 * (2 ** attempt)); continue
+                    time.sleep(0.05 * (2 ** attempt))
+                    continue
                 response.raise_for_status()
                 body = response.json()
-                if not body.get("ok", False): raise GatewayError(str(body.get("error")))
+                if not body.get("ok", False):
+                    error = body.get("error") or {}
+                    raise GatewayError(str(error.get("message") if isinstance(error, dict) else error))
                 return body.get("data")
             except requests.RequestException as exc:
-                if not safe or attempt >= retries: raise GatewayError(str(exc)) from exc
+                if not safe or attempt >= retries:
+                    raise GatewayTransportError("Broker gateway request failed") from exc
                 time.sleep(0.05 * (2 ** attempt))
 
-    def health(self): return self.request("GET", "health/")
-    def positions(self): return self.request("GET", "positions/")
-    def executions(self): return self.request("GET", "executions/")
-    def accounts(self): return self.request("GET", "accounts/")
-    def account_summary(self): return self.request("GET", "account-summary/")
-    def open_orders(self): return self.request("GET", "open-orders/")
-    def completed_orders(self): return self.request("GET", "completed-orders/")
-    def command(self, command_id): return self.request("GET", f"commands/{int(command_id)}/")
+    def health(self):
+        return self.request("GET", "health/")
+
+    def session_state(self):
+        return self.request("GET", "session/")
+
+    def reconnect(self):
+        return self.request("POST", "session/reconnect/", json={}, idempotency_key=f"reconnect:{int(time.time())}", retries=0)
+
+    def positions(self):
+        return self.request("GET", "positions/")
+
+    def executions(self):
+        return self.request("GET", "executions/")
+
+    def accounts(self):
+        return self.request("GET", "accounts/")
+
+    def account_summary(self):
+        return self.request("GET", "account-summary/")
+
+    def open_orders(self):
+        return self.request("GET", "open-orders/")
+
+    def completed_orders(self):
+        return self.request("GET", "completed-orders/")
+
+    def command(self, command_id):
+        return self.request("GET", f"commands/{int(command_id)}/")
+
     def wait_for_command(self, queued, timeout=20):
-        command_id=int(queued["command_id"]);deadline=time.monotonic()+timeout
-        current=queued
-        while current.get("status") not in {"COMPLETED","FAILED","UNKNOWN"} and time.monotonic()<deadline:
-            time.sleep(0.1);current=self.command(command_id)
-        # Enqueue responses intentionally contain only the command id and status.  When an
-        # idempotency key replays an already-terminal command, load its persisted result
-        # before returning instead of treating the absent result as an empty success.
-        if current.get("status") in {"COMPLETED","FAILED","UNKNOWN"} and "result" not in current:
-            current=self.command(command_id)
-        if current.get("status") in {"FAILED","UNKNOWN"}:raise GatewayError(current.get("last_error") or f"Gateway command {command_id} failed")
-        if current.get("status")!="COMPLETED":raise GatewayError(f"Gateway command {command_id} timed out")
+        command_id = int(queued["command_id"])
+        deadline = time.monotonic() + timeout
+        current = queued
+        while current.get("status") not in {"COMPLETED", "FAILED", "UNKNOWN"} and time.monotonic() < deadline:
+            time.sleep(0.1)
+            current = self.command(command_id)
+        if current.get("status") in {"COMPLETED", "FAILED", "UNKNOWN"} and "result" not in current:
+            current = self.command(command_id)
+        if current.get("status") in {"FAILED", "UNKNOWN"}:
+            raise GatewayError(current.get("last_error") or f"Gateway command {command_id} failed")
+        if current.get("status") != "COMPLETED":
+            raise GatewayError(f"Gateway command {command_id} timed out")
         return current.get("result") or {}
+
     def search_contracts(self, query):
-        query=str(query).strip();digest=hashlib.sha256(query.casefold().encode()).hexdigest()[:32]
-        queued=self.request("POST", "contracts/search/", json={"query":query},idempotency_key=f"contract-search:{digest}",retries=0)
-        return self.wait_for_command(queued).get("results",[])
-    def events(self, after=0): return self.request("GET", f"events/?after={int(after)}")
-    def ack_events(self, sequence): return self.request("POST", "events/ack/", json={"sequence":int(sequence)}, idempotency_key=f"events-ack:{int(sequence)}", retries=0)
-    def place_order(self, payload, key): return self.request("POST", "orders/", json=payload, idempotency_key=key, retries=0)
-    def modify_order(self, internal_id, payload, key): return self.request("PATCH", f"orders/{internal_id}/", json=payload, idempotency_key=key, retries=0)
-    def cancel_order(self, internal_id, key): return self.request("POST", f"orders/{internal_id}/cancel/", json={}, idempotency_key=key, retries=0)
-    def qualify_contract(self, payload, key): return self.request("POST", "contracts/qualify/", json=payload, idempotency_key=key, retries=0)
+        query = str(query).strip()
+        digest = hashlib.sha256(query.casefold().encode()).hexdigest()[:32]
+        queued = self.request(
+            "POST", "contracts/search/", json={"query": query}, idempotency_key=f"contract-search:{digest}", retries=0
+        )
+        return self.wait_for_command(queued).get("results", [])
+
+    def events(self, after=0):
+        return self.request("GET", f"events/?after={int(after)}")
+
+    def ack_events(self, sequence):
+        return self.request(
+            "POST", "events/ack/", json={"sequence": int(sequence)}, idempotency_key=f"events-ack:{int(sequence)}", retries=0
+        )
+
+    def place_order(self, payload, key):
+        return self.request("POST", "orders/", json=payload, idempotency_key=key, retries=0)
+
+    def modify_order(self, internal_id, payload, key):
+        return self.request("PATCH", f"orders/{internal_id}/", json=payload, idempotency_key=key, retries=0)
+
+    def cancel_order(self, internal_id, key):
+        return self.request("POST", f"orders/{internal_id}/cancel/", json={}, idempotency_key=key, retries=0)
+
+    def qualify_contract(self, payload, key):
+        return self.request("POST", "contracts/qualify/", json=payload, idempotency_key=key, retries=0)
+
     def qualify_contract_exact(self, payload, key):
-        queued=self.qualify_contract(payload,key)
-        return self.wait_for_command(queued)
+        return self.wait_for_command(self.qualify_contract(payload, key))
+
     def historical_bars(self, payload, timeout=60):
-        canonical=json.dumps(payload,sort_keys=True,separators=(",",":"),default=str)
-        digest=hashlib.sha256(canonical.encode()).hexdigest()[:40]
-        queued=self.request("POST","market-data/history/",json=payload,
-                            idempotency_key=f"historical-data:{digest}",retries=0)
-        return self.wait_for_command(queued,timeout=timeout)
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        digest = hashlib.sha256(canonical.encode()).hexdigest()[:40]
+        queued = self.request(
+            "POST", "market-data/history/", json=payload, idempotency_key=f"historical-data:{digest}", retries=0
+        )
+        return self.wait_for_command(queued, timeout=timeout)
+
     def historical_schedule(self, payload, timeout=30):
-        canonical=json.dumps(payload,sort_keys=True,separators=(",",":"),default=str)
-        digest=hashlib.sha256(canonical.encode()).hexdigest()[:40]
-        queued=self.request("POST","market-data/schedule/",json=payload,
-                            idempotency_key=f"historical-schedule:{digest}",retries=0)
-        return self.wait_for_command(queued,timeout=timeout)
-    def subscribe_market_data(self,payload,key):return self.request("POST","market-data/subscriptions/",json=payload,idempotency_key=key,retries=0)
-    def cancel_market_data(self,payload,key):return self.request("POST","market-data/subscriptions/cancel/",json=payload,idempotency_key=key,retries=0)
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        digest = hashlib.sha256(canonical.encode()).hexdigest()[:40]
+        queued = self.request(
+            "POST", "market-data/schedule/", json=payload, idempotency_key=f"historical-schedule:{digest}", retries=0
+        )
+        return self.wait_for_command(queued, timeout=timeout)
+
+    def subscribe_market_data(self, payload, key):
+        return self.request("POST", "market-data/subscriptions/", json=payload, idempotency_key=key, retries=0)
+
+    def cancel_market_data(self, payload, key):
+        return self.request("POST", "market-data/subscriptions/cancel/", json=payload, idempotency_key=key, retries=0)

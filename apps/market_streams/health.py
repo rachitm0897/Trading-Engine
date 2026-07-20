@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db.models import BooleanField, Exists, OuterRef, Subquery, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from .models import IndicatorValue, MarketBar, MarketDataSubscription
 
@@ -7,7 +8,10 @@ from .models import IndicatorValue, MarketBar, MarketDataSubscription
 def annotate_stream_health(queryset):
     from apps.strategies.models import StrategyInputBinding, StrategyRun
     subscription=MarketDataSubscription.objects.filter(
+        gateway_session_id=OuterRef("portfolio__gateway_session_id"),instrument_id=OuterRef("instrument_id"),timeframe=OuterRef("timeframe"))
+    legacy_subscription=MarketDataSubscription.objects.filter(gateway_session__isnull=True,
         instrument_id=OuterRef("instrument_id"),timeframe=OuterRef("timeframe"))
+    def scoped(field):return Coalesce(Subquery(subscription.values(field)[:1]),Subquery(legacy_subscription.values(field)[:1]))
     canonical=MarketBar.objects.filter(
         instrument_id=OuterRef("instrument_id"),interval=OuterRef("timeframe")).order_by("-produced_at","-version")
     final_bar=MarketBar.objects.filter(
@@ -20,14 +24,14 @@ def annotate_stream_health(queryset):
         requirement__input_type="INDICATOR")
     return queryset.annotate(
         _stream_annotated=Value(True,output_field=BooleanField()),
-        _stream_subscription_state=Subquery(subscription.values("state")[:1]),
-        _stream_subscription_conid=Subquery(subscription.values("conid")[:1]),
-        _stream_last_raw_event=Subquery(subscription.values("last_event_at")[:1]),
-        _stream_subscription_error=Subquery(subscription.values("last_error")[:1]),
-        _stream_active_provider=Subquery(subscription.values("active_provider")[:1]),
-        _stream_fallback_state=Subquery(subscription.values("fallback_state")[:1]),
-        _stream_fallback_reason=Subquery(subscription.values("fallback_reason")[:1]),
-        _stream_provider_generation=Subquery(subscription.values("provider_generation")[:1]),
+        _stream_subscription_state=scoped("state"),
+        _stream_subscription_conid=scoped("conid"),
+        _stream_last_raw_event=scoped("last_event_at"),
+        _stream_subscription_error=scoped("last_error"),
+        _stream_active_provider=scoped("active_provider"),
+        _stream_fallback_state=scoped("fallback_state"),
+        _stream_fallback_reason=scoped("fallback_reason"),
+        _stream_provider_generation=scoped("provider_generation"),
         _stream_last_canonical_event=Subquery(canonical.values("produced_at")[:1]),
         _stream_last_final_bar=Subquery(final_bar.values("window_end")[:1]),
         _stream_last_indicator=Subquery(indicator.values("event_time")[:1]),
@@ -54,7 +58,8 @@ def strategy_stream_status(instance):
         run_at=instance._stream_last_strategy_run
         requires_indicator=instance._stream_requires_indicator
     else:
-        subscription=MarketDataSubscription.objects.filter(instrument=instance.instrument,timeframe=instance.timeframe).first()
+        subscription=MarketDataSubscription.objects.filter(gateway_session=instance.portfolio.gateway_session,
+            instrument=instance.instrument,timeframe=instance.timeframe).first()
         canonical=MarketBar.objects.filter(instrument=instance.instrument,interval=instance.timeframe).order_by("-produced_at","-version").first()
         final_bar=MarketBar.objects.filter(instrument=instance.instrument,interval=instance.timeframe,is_final=True).order_by("-window_end","-version").first()
         indicator=IndicatorValue.objects.filter(instrument=instance.instrument,timeframe=instance.timeframe,is_final=True).order_by("-event_time","-id").first()

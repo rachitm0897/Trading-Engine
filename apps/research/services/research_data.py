@@ -6,7 +6,6 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 
-from apps.broker_gateway.client import GatewayClient
 from apps.instruments.models import BrokerContract, InstrumentProviderMapping
 from apps.market_data.models import InstrumentPriceHistory
 from apps.market_data.providers.finnhub import FinnhubClient
@@ -212,7 +211,8 @@ def validate_research_history(instrument, *, minimum_bars=756, as_of_date=None,
 
 
 def _gateway_rows(instrument, contract, *, years, gateway=None):
-    response=(gateway or GatewayClient()).historical_bars({
+    if gateway is None:raise ValueError("An explicit broker gateway session client is required for IBKR research data")
+    response=gateway.historical_bars({
         "conid":contract.conid,"symbol":instrument.symbol,"exchange":instrument.exchange,
         "currency":instrument.currency,"bar_size":"1 day","duration":f"{years} Y",
         "what_to_show":"ADJUSTED_LAST","use_rth":True,"end_time":"",
@@ -339,7 +339,8 @@ def refresh_intraday_history(instrument, *, frequency="1h", days=90, finnhub=Non
         contract = BrokerContract.objects.filter(instrument=instrument, qualified_at__isnull=False).first()
         if not contract:
             raise ValueError(f"{instrument.symbol} has no Finnhub intraday data or exact qualified IBKR fallback") from exc
-        client = gateway or GatewayClient()
+        if gateway is None:raise ValueError("An explicit broker gateway session client is required for IBKR research data")
+        client = gateway
         requested_days = max(1, min(int(days), (now.date() - start.date()).days + 1))
         payload = {
             "conid": contract.conid, "symbol": instrument.symbol, "exchange": instrument.exchange,

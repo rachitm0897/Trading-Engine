@@ -15,7 +15,7 @@ from apps.portfolios.models import PortfolioPosition, TradingPortfolio
 from apps.market_streams.models import MarketDataSubscription
 from apps.core.idempotency import canonical_request_hash
 from .client import GatewayClient
-from .models import BrokerPositionSnapshot, BrokerSyncCursor
+from .models import BrokerPositionSnapshot, BrokerSessionAccount, BrokerSyncCursor
 
 TERMINAL={"FILLED","CANCELLED","REJECTED","EXPIRED"}
 STATUS_MAP={
@@ -29,9 +29,18 @@ def dec(value, default="0"):
     try: return Decimal(str(value if value not in (None,"") else default).replace(",",""))
     except (InvalidOperation,ValueError): return Decimal(default)
 
-def ensure_account(account_id):
+def ensure_account(account_id, gateway_session=None):
     account,_=BrokerAccount.objects.get_or_create(account_id=account_id or "UNKNOWN",defaults={"alias":f"IBKR {account_id or 'UNKNOWN'}"})
-    portfolio,_=TradingPortfolio.objects.get_or_create(account=account,name=f"IBKR {account.account_id}")
+    if gateway_session is not None:
+        BrokerSessionAccount.objects.update_or_create(
+            session=gateway_session,broker_account=account,defaults={"available":True})
+        portfolio=TradingPortfolio.objects.filter(account=account,gateway_session=gateway_session).order_by("pk").first()
+        if portfolio is None:
+            portfolio=TradingPortfolio.objects.create(
+                account=account,gateway_session=gateway_session,
+                name=f"{gateway_session.display_name} · {account.account_id}"[:128])
+    else:
+        portfolio,_=TradingPortfolio.objects.get_or_create(account=account,name=f"IBKR {account.account_id}")
     return account,portfolio
 
 def ensure_instrument(row):
@@ -57,18 +66,18 @@ def ensure_instrument(row):
         publish_instrument_registry(contract)
     return instrument
 
-def sync_accounts(rows):
+def sync_accounts(rows, gateway_session=None):
     for row in rows:
         account_id=row if isinstance(row,str) else row.get("account_id") or row.get("account")
-        if account_id: ensure_account(account_id)
+        if account_id: ensure_account(account_id,gateway_session)
 
-def sync_account_summary(rows):
+def sync_account_summary(rows, gateway_session=None):
     grouped={}
     for row in rows:
         account_id=row.get("account"); tag=row.get("tag")
         if account_id and tag: grouped.setdefault(account_id,{})[tag]=row
     for account_id,values in grouped.items():
-        account,_=ensure_account(account_id)
+        account,_=ensure_account(account_id,gateway_session)
         def value(*tags):
             for tag in tags:
                 if tag in values: return dec(values[tag].get("value"))
@@ -83,20 +92,23 @@ def sync_account_summary(rows):
         from apps.risk.models import CapitalReservation
         CapitalReservation.objects.filter(account=account,status="CONSUMED").update(status="RELEASED",released_at=timezone.now())
 
-def _position_snapshot_key(account_id, rows, snapshot_key=None):
+def _position_snapshot_key(account_id, rows, snapshot_key=None, gateway_session=None):
+    session_key=str(gateway_session.pk) if gateway_session is not None else ""
     if snapshot_key:
-        return str(snapshot_key)[:160]
+        return (f"{session_key}:{snapshot_key}" if session_key else str(snapshot_key))[:160]
     body = json.dumps({"account": account_id, "positions": rows}, sort_keys=True, default=str, separators=(",", ":"))
-    return f"positions:{account_id}:{hashlib.sha256(body.encode()).hexdigest()}"[:160]
+    prefix=f"{session_key}:" if session_key else ""
+    return f"positions:{prefix}{account_id}:{hashlib.sha256(body.encode()).hexdigest()}"[:160]
 
 
-def _sync_account_positions(account_id, rows, *, complete, snapshot_key):
-    account, default_portfolio = ensure_account(account_id)
-    key = _position_snapshot_key(account.account_id, rows, snapshot_key)
+def _sync_account_positions(account_id, rows, *, complete, snapshot_key, gateway_session=None):
+    account, default_portfolio = ensure_account(account_id,gateway_session)
+    key = _position_snapshot_key(account.account_id, rows, snapshot_key,gateway_session)
     snapshot, _ = BrokerPositionSnapshot.objects.get_or_create(
         snapshot_key=key,
         defaults={
             "broker_account": account,
+            "session": gateway_session,
             "complete": bool(complete),
             "row_count": len(rows),
             "positions": rows,
@@ -142,7 +154,9 @@ def _sync_account_positions(account_id, rows, *, complete, snapshot_key):
                     )
                 positions_by_instrument[instrument.pk] = (instrument, row)
 
-            portfolios = list(TradingPortfolio.objects.select_for_update().filter(account=account))
+            portfolios_query=TradingPortfolio.objects.select_for_update().filter(account=account)
+            if gateway_session is not None:portfolios_query=portfolios_query.filter(gateway_session=gateway_session)
+            portfolios = list(portfolios_query)
             if not portfolios:
                 portfolios = [default_portfolio]
             authoritative_ids = set(positions_by_instrument)
@@ -173,7 +187,7 @@ def _sync_account_positions(account_id, rows, *, complete, snapshot_key):
         raise
 
 
-def sync_positions(rows, *, account_id=None, complete=False, snapshot_key=None):
+def sync_positions(rows, *, account_id=None, complete=False, snapshot_key=None, gateway_session=None):
     grouped = {}
     if account_id:
         grouped[str(account_id)] = []
@@ -191,24 +205,41 @@ def sync_positions(rows, *, account_id=None, complete=False, snapshot_key=None):
                 account_rows,
                 complete=bool(complete),
                 snapshot_key=account_key,
+                gateway_session=gateway_session,
             )
         )
     return snapshots
 
-def _external_order(row, instrument, portfolio):
+def _session_prefix(gateway_session):
+    return str(gateway_session.pk) if gateway_session is not None else "legacy"
+
+
+def _order_query(gateway_session):
+    query=Order.objects.all()
+    return query.filter(intent__portfolio__gateway_session=gateway_session) if gateway_session is not None else query
+
+
+def _subscription_identity(key):
+    parts=str(key or "").split(":")
+    if len(parts)<2:return None,None
+    return parts[-2],parts[-1]
+
+
+def _external_order(row, instrument, portfolio, gateway_session=None):
     identity=row.get("permanent_id") or row.get("broker_order_id")
-    internal=(row.get("internal_id") or f"IBKR-{portfolio.account.account_id}-{identity}")[:64]
+    session_key=_session_prefix(gateway_session)
+    internal=(row.get("internal_id") or f"IBKR-{session_key[:12]}-{portfolio.account.account_id}-{identity}")[:64]
     intent_payload={"portfolio_id":portfolio.pk,"instrument_id":instrument.pk,
         "side":"BUY" if row.get("side") in {"BUY","BOT"} else "SELL","quantity":dec(row.get("quantity")),
         "order_type":row.get("order_type") or "MKT","limit_price":row.get("limit_price"),
         "stop_price":row.get("stop_price"),"time_in_force":row.get("time_in_force") or "DAY"}
-    intent,_=OrderIntent.objects.get_or_create(idempotency_key=f"broker-import:{portfolio.account.account_id}:{identity}",
+    intent,_=OrderIntent.objects.get_or_create(idempotency_key=f"broker-import:{session_key}:{portfolio.account.account_id}:{identity}"[:128],
         defaults={"request_hash":canonical_request_hash("broker_order_import",intent_payload),"portfolio":portfolio,
         "instrument":instrument,"side":intent_payload["side"],"quantity":intent_payload["quantity"],
         "order_type":intent_payload["order_type"],"limit_price":intent_payload["limit_price"],
         "stop_price":intent_payload["stop_price"],"time_in_force":intent_payload["time_in_force"]})
     order,created=Order.objects.get_or_create(intent=intent,defaults={"internal_id":internal,"quantity":intent.quantity,"status":"ACKNOWLEDGED","broker_order_id":str(row.get("broker_order_id") or ""),"broker_permanent_id":str(row.get("permanent_id") or "")})
-    if created: OrderStatusHistory.objects.create(order=order,from_status="",to_status="ACKNOWLEDGED",source="broker_import",reason="Discovered at IBKR",event_key=f"broker-import:{portfolio.account.account_id}:{identity}:ack")
+    if created: OrderStatusHistory.objects.create(order=order,from_status="",to_status="ACKNOWLEDGED",source="broker_import",reason="Discovered at IBKR",event_key=f"broker-import:{session_key}:{portfolio.account.account_id}:{identity}:ack"[:128])
     return order
 
 def _broker_reason(row):
@@ -233,78 +264,84 @@ def _record_broker_status(order,row,event_key,source="ibkr",target_override=None
             settle_order_reservation(order,target)
     return history
 
-def sync_orders(rows, snapshot):
+def sync_orders(rows, snapshot, gateway_session=None):
     for row in rows:
-        _,portfolio=ensure_account(row.get("account")); instrument=ensure_instrument(row)
+        _,portfolio=ensure_account(row.get("account"),gateway_session); instrument=ensure_instrument(row)
+        query=_order_query(gateway_session)
         order=None
-        if row.get("internal_id"): order=Order.objects.filter(internal_id=row["internal_id"]).first()
-        if not order and row.get("permanent_id"): order=Order.objects.filter(broker_permanent_id=str(row["permanent_id"])).first()
-        if not order and row.get("broker_order_id"): order=Order.objects.filter(broker_order_id=str(row["broker_order_id"])).first()
-        order=order or _external_order(row,instrument,portfolio)
+        if row.get("internal_id"): order=query.filter(internal_id=row["internal_id"]).first()
+        if not order and row.get("permanent_id"): order=query.filter(broker_permanent_id=str(row["permanent_id"])).first()
+        if not order and row.get("broker_order_id"): order=query.filter(broker_order_id=str(row["broker_order_id"])).first()
+        order=order or _external_order(row,instrument,portfolio,gateway_session)
         order.broker_order_id=str(row.get("broker_order_id") or order.broker_order_id)
         order.broker_permanent_id=str(row.get("permanent_id") or order.broker_permanent_id)
         order.quantity=max(order.quantity,dec(row.get("quantity")))
         order.save(update_fields=["broker_order_id","broker_permanent_id","quantity","updated_at"])
         identity=json.dumps([snapshot,order.internal_id,row.get("status"),row.get("filled_quantity"),row.get("error_code"),
             row.get("error_message"),row.get("why_held"),row.get("occurred_at")],default=str,separators=(",",":"))
-        _record_broker_status(order,row,f"broker-snapshot:{hashlib.sha256(identity.encode()).hexdigest()}")
+        _record_broker_status(order,row,f"broker-snapshot:{_session_prefix(gateway_session)}:{hashlib.sha256(identity.encode()).hexdigest()}"[:128])
 
-def sync_order_event(row):
+def sync_order_event(row, gateway_session=None):
+    query=_order_query(gateway_session)
     order=None
-    if row.get("internal_id"):order=Order.objects.filter(internal_id=row["internal_id"]).first()
-    if not order and row.get("permanent_id"):order=Order.objects.filter(broker_permanent_id=str(row["permanent_id"])).first()
-    if not order and row.get("broker_order_id"):order=Order.objects.filter(broker_order_id=str(row["broker_order_id"])).first()
+    if row.get("internal_id"):order=query.filter(internal_id=row["internal_id"]).first()
+    if not order and row.get("permanent_id"):order=query.filter(broker_permanent_id=str(row["permanent_id"])).first()
+    if not order and row.get("broker_order_id"):order=query.filter(broker_order_id=str(row["broker_order_id"])).first()
     if not order:
-        _,portfolio=ensure_account(row.get("account"));instrument=ensure_instrument(row)
-        order=_external_order({**row,"status":row.get("broker_status")},instrument,portfolio)
+        _,portfolio=ensure_account(row.get("account"),gateway_session);instrument=ensure_instrument(row)
+        order=_external_order({**row,"status":row.get("broker_status")},instrument,portfolio,gateway_session)
     order.broker_order_id=str(row.get("broker_order_id") or order.broker_order_id)
     order.broker_permanent_id=str(row.get("permanent_id") or order.broker_permanent_id)
     order.save(update_fields=["broker_order_id","broker_permanent_id","updated_at"])
     source_id=str(row.get("source_event_id") or "")
     if not source_id:
         source_id=hashlib.sha256(json.dumps(row,sort_keys=True,default=str).encode()).hexdigest()
-    return _record_broker_status(order,row,f"broker-order:{source_id}")
+    event_key=(f"broker-order:{gateway_session.pk}:{source_id}" if gateway_session is not None
+        else f"broker-order:{source_id}")
+    return _record_broker_status(order,row,event_key[:128])
 
-def record_gateway_command_failure(payload):
+def record_gateway_command_failure(payload, gateway_session=None):
     command_payload=payload.get("payload") or {};internal_id=str(command_payload.get("internal_id") or "")
-    order=Order.objects.filter(internal_id=internal_id).first()
+    order=_order_query(gateway_session).filter(internal_id=internal_id).first()
     if not order:return
     command_type=str(payload.get("command_type") or "");target={"PLACE_ORDER":"BROKER_BLOCKED",
         "MODIFY_ORDER":"UNKNOWN","CANCEL_ORDER":"UNKNOWN"}.get(command_type)
     row={"broker_status":"GatewayCommandFailed","error_code":"GATEWAY_COMMAND_FAILED",
         "error_message":str(payload.get("error") or "Gateway order command failed"),
         "operator_requested":command_type=="CANCEL_ORDER","occurred_at":payload.get("occurred_at")}
-    _record_broker_status(order,row,f"gateway-command:{payload.get('command_id')}:{command_type}",source="gateway",
+    _record_broker_status(order,row,f"gateway-command:{_session_prefix(gateway_session)}:{payload.get('command_id')}:{command_type}",source="gateway",
         target_override=target)
 
-def sync_executions(rows):
+def sync_executions(rows, gateway_session=None):
     for row in rows:
-        if not row.get("execution_id") or Fill.objects.filter(execution_id=row["execution_id"]).exists(): continue
-        _,portfolio=ensure_account(row.get("account")); instrument=ensure_instrument(row)
+        execution_id=f"{_session_prefix(gateway_session)}:{row.get('execution_id')}" if gateway_session is not None else row.get("execution_id")
+        if not row.get("execution_id") or Fill.objects.filter(execution_id=execution_id).exists(): continue
+        _,portfolio=ensure_account(row.get("account"),gateway_session); instrument=ensure_instrument(row)
+        query=_order_query(gateway_session)
         order=None
-        if row.get("permanent_id"): order=Order.objects.filter(broker_permanent_id=str(row["permanent_id"])).first()
-        if not order and row.get("broker_order_id"): order=Order.objects.filter(broker_order_id=str(row["broker_order_id"])).first()
+        if row.get("permanent_id"): order=query.filter(broker_permanent_id=str(row["permanent_id"])).first()
+        if not order and row.get("broker_order_id"): order=query.filter(broker_order_id=str(row["broker_order_id"])).first()
         if not order:
             synthetic={**row,"internal_id":"","quantity":row.get("quantity"),"order_type":"MKT","time_in_force":"DAY","status":"Submitted"}
-            order=_external_order(synthetic,instrument,portfolio)
+            order=_external_order(synthetic,instrument,portfolio,gateway_session)
         if order.status in {"CREATED","RISK_APPROVED","QUEUED","BROKER_BLOCKED","SUBMITTED","UNKNOWN"}:
             OrderStatusHistory.objects.get_or_create(event_key=f"broker-execution-ready:{order.internal_id}",defaults={"order":order,"from_status":order.status,"to_status":"ACKNOWLEDGED","source":"broker_sync","reason":"Execution received from IBKR"})
             order.status="ACKNOWLEDGED"; order.quantity=max(order.quantity,order.filled_quantity+dec(row.get("quantity"))); order.save(update_fields=["status","quantity","updated_at"])
         executed_at=parse_datetime(row.get("executed_at") or "") or timezone.now()
-        apply_execution(order,{**row,"quantity":str(dec(row.get("quantity"))),"price":str(dec(row.get("price"))),"commission":str(dec(row.get("commission"))),"executed_at":executed_at})
+        apply_execution(order,{**row,"execution_id":execution_id,"quantity":str(dec(row.get("quantity"))),"price":str(dec(row.get("price"))),"commission":str(dec(row.get("commission"))),"executed_at":executed_at})
 
-def process_snapshot(event):
+def process_snapshot(event, gateway_session=None):
     event_type=event.get("event_type","");payload=event.get("payload",{})
     if event_type=="command.qualify.completed":
         ensure_instrument(payload);return
     if event_type=="broker.order":
-        sync_order_event(payload);return
+        sync_order_event(payload,gateway_session);return
     if event_type=="market.error":
         key=str(payload.get("subscription_key") or "");reason=f"IBKR error {payload.get('error_code')}: {payload.get('error_message')}"[:2000]
         if ":" in key:
-            instrument_id,timeframe=key.split(":",1)
+            instrument_id,timeframe=_subscription_identity(key)
             subscription=MarketDataSubscription.objects.select_related("instrument__broker_contract").filter(
-                instrument_id=instrument_id,timeframe=timeframe).first()
+                gateway_session=gateway_session,instrument_id=instrument_id,timeframe=timeframe).first()
             if subscription:
                 event_generation=str(payload.get("provider_generation") or "")
                 if subscription.active_provider in {"FINNHUB","NONE"}:
@@ -328,8 +365,8 @@ def process_snapshot(event):
     if event_type in {"command.subscribe_market_data.completed","command.cancel_market_data.completed"}:
         key=str(payload.get("subscription_key") or "")
         if ":" in key:
-            instrument_id,timeframe=key.split(":",1)
-            subscription=MarketDataSubscription.objects.filter(instrument_id=instrument_id,timeframe=timeframe).first()
+            instrument_id,timeframe=_subscription_identity(key)
+            subscription=MarketDataSubscription.objects.filter(gateway_session=gateway_session,instrument_id=instrument_id,timeframe=timeframe).first()
             if not subscription:return
             if event_type=="command.cancel_market_data.completed":
                 if subscription.state=="CANCELLING" or subscription.consumer_count==0:
@@ -346,9 +383,9 @@ def process_snapshot(event):
     if event_type=="command.failed" and payload.get("command_type") in {"SUBSCRIBE_MARKET_DATA","CANCEL_MARKET_DATA"}:
         command_payload=payload.get("payload") or {};key=str(command_payload.get("subscription_key") or "")
         if ":" in key:
-            instrument_id,timeframe=key.split(":",1);reason=str(payload.get("error") or "Gateway market-data command failed")[:2000]
+            instrument_id,timeframe=_subscription_identity(key);reason=str(payload.get("error") or "Gateway market-data command failed")[:2000]
             subscription=MarketDataSubscription.objects.select_related("instrument__broker_contract").filter(
-                instrument_id=instrument_id,timeframe=timeframe).first()
+                gateway_session=gateway_session,instrument_id=instrument_id,timeframe=timeframe).first()
             if subscription and command_payload.get("probe"):
                 MarketDataSubscription.objects.filter(pk=subscription.pk).update(
                     primary_probe_generation=None,primary_probe_started_at=None,primary_probe_event_count=0,
@@ -362,41 +399,43 @@ def process_snapshot(event):
                 handle_ibkr_failure(subscription,message=reason,historical=True)
         return
     if event_type=="command.failed" and payload.get("command_type") in {"PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER"}:
-        record_gateway_command_failure(payload);return
+        record_gateway_command_failure(payload,gateway_session);return
     if event_type=="session.disconnected":
         reason=str(payload.get("error") or "IBKR connection lost")
         occurred=payload.get("occurred_at")
-        for order in Order.objects.filter(status__in=["SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED","CANCEL_PENDING"]):
+        orders=_order_query(gateway_session).filter(status__in=["SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED","CANCEL_PENDING"])
+        for order in orders:
             _record_broker_status(order,{"broker_status":"Unknown","error_code":"CONNECTION_LOST",
                 "error_message":reason,"occurred_at":occurred},f"broker-disconnect:{event.get('id')}:{order.internal_id}")
         from apps.market_data.fallback import handle_ibkr_failure
-        for subscription in MarketDataSubscription.objects.filter(consumer_count__gt=0,active_provider="IBKR").select_related(
+        for subscription in MarketDataSubscription.objects.filter(gateway_session=gateway_session,consumer_count__gt=0,active_provider="IBKR").select_related(
                 "instrument__broker_contract"):
             handle_ibkr_failure(subscription,"1100",reason,historical=False)
         return
     rows=payload.get("value",[])
-    if event_type=="snapshot.accounts": sync_accounts(rows)
-    elif event_type=="snapshot.account_summary": sync_account_summary(rows)
+    if event_type=="snapshot.accounts": sync_accounts(rows,gateway_session)
+    elif event_type=="snapshot.account_summary": sync_account_summary(rows,gateway_session)
     elif event_type=="snapshot.positions":
         sync_positions(
             rows,
             account_id=payload.get("account"),
             complete=payload.get("complete") is True,
             snapshot_key=payload.get("snapshot_id") or f"gateway-event:{event.get('id')}",
+            gateway_session=gateway_session,
         )
-    elif event_type=="snapshot.open_orders": sync_orders(rows,"open")
-    elif event_type=="snapshot.completed_orders": sync_orders(rows,"completed")
-    elif event_type=="snapshot.executions": sync_executions(rows)
+    elif event_type=="snapshot.open_orders": sync_orders(rows,"open",gateway_session)
+    elif event_type=="snapshot.completed_orders": sync_orders(rows,"completed",gateway_session)
+    elif event_type=="snapshot.executions": sync_executions(rows,gateway_session)
 
-def sync_events(client=None):
-    client=client or GatewayClient()
-    cursor,_=BrokerSyncCursor.objects.get_or_create(name="gateway-events")
+def sync_events(client, gateway_session=None):
+    gateway_session=gateway_session or getattr(client,"gateway_session",None)
+    cursor,_=BrokerSyncCursor.objects.get_or_create(session=gateway_session,name="gateway-events")
     events=client.events(cursor.last_sequence) or []
     for event in events:
         if event["id"] <= cursor.last_sequence:
             continue
         try:
-            process_snapshot(event)
+            process_snapshot(event,gateway_session)
         except Exception as exc:
             BrokerSyncCursor.objects.filter(pk=cursor.pk).update(last_error=str(exc)[:1000])
             raise

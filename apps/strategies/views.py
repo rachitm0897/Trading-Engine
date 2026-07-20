@@ -353,10 +353,12 @@ def resolve(request):
     if invalid:return invalid
     try:
         payload=json.loads(request.body or b"{}") if request.method=="POST" else request.GET
+        from apps.broker_gateway.models import BrokerGatewaySession
+        gateway_session=BrokerGatewaySession.objects.get(pk=payload.get("session_id")) if payload.get("session_id") else None
         instrument,contract,command=resolve_instrument(instrument_id=payload.get("instrument_id"),ticker=payload.get("ticker"),
             asset_class=payload.get("asset_class","STK"),exchange=payload.get("exchange","SMART"),currency=payload.get("currency","USD"),
             primary_exchange=payload.get("primary_exchange"),conid=payload.get("conid"),local_symbol=payload.get("local_symbol"),
-            description=payload.get("description"),qualify=bool(payload.get("qualify",request.method=="POST")))
+            description=payload.get("description"),qualify=bool(payload.get("qualify",request.method=="POST")),gateway_session=gateway_session)
         return response({"instrument_id":instrument.pk,"symbol":instrument.symbol,"asset_class":instrument.asset_class,
             "exchange":instrument.exchange,"currency":instrument.currency,"conid":contract.conid if contract else None,
             "primary_exchange":contract.primary_exchange if contract else None,"qualification_command":command})
@@ -366,5 +368,9 @@ def resolve(request):
 def search_instruments(request):
     invalid=method_guard(request,"GET")
     if invalid:return invalid
-    try:return response(search_broker_instruments(request.GET.get("query")))
+    try:
+        from apps.broker_gateway.models import BrokerGatewaySession
+        raw_session=request.GET.get("session_id")
+        session=BrokerGatewaySession.objects.get(pk=raw_session) if raw_session else None
+        return response(search_broker_instruments(request.GET.get("query"),gateway_session=session))
     except Exception as exc:return response(status=502,error={"code":"INSTRUMENT_SEARCH_FAILED","message":str(exc),"details":{}})

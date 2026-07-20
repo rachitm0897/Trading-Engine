@@ -5,6 +5,9 @@ import uuid
 class MarketDataSubscription(models.Model):
     STATES=[(x,x) for x in ["PENDING","SUBSCRIBING","ACTIVE","DEGRADED","ERROR","CANCELLING","INACTIVE"]]
     instrument=models.ForeignKey("instruments.Instrument",on_delete=models.PROTECT,related_name="market_subscriptions")
+    gateway_session=models.ForeignKey(
+        "broker_gateway.BrokerGatewaySession",on_delete=models.PROTECT,related_name="market_subscriptions",
+        null=True,blank=True)
     conid=models.BigIntegerField()
     timeframe=models.CharField(max_length=16)
     state=models.CharField(max_length=24,choices=STATES,default="PENDING")
@@ -33,7 +36,7 @@ class MarketDataSubscription(models.Model):
     updated_at=models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints=[models.UniqueConstraint(fields=["instrument","timeframe"],name="unique_market_data_subscription")]
+        constraints=[models.UniqueConstraint(fields=["gateway_session","instrument","timeframe"],name="unique_session_market_subscription")]
         indexes=[models.Index(fields=["state","updated_at"],name="market_sub_state_idx")]
 
 

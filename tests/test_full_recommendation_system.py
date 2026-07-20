@@ -22,6 +22,7 @@ from apps.research.engines.base import ResearchProtocolContext
 from apps.research.models import (
     GoalRecommendationRun,
     GICSTaxonomyNode,
+    InstrumentEligibilitySnapshot,
     InstrumentFeatureSnapshot,
     RecommendationCacheSnapshot,
     ResearchFundamentalFact,
@@ -31,6 +32,11 @@ from apps.research.models import (
     ResearchUniverseMember,
 )
 from apps.research.services.bundle_import import import_bundle
+from apps.research.services.acceptance import (
+    effective_strategy_family_cap,
+    effective_strategy_family_cap_for_run,
+    validate_recommendation_for_construction,
+)
 from apps.research.services.point_in_time_data import point_in_time_facts, refresh_fundamentals
 from apps.research.services.recommendation_batch import (
     _locked_goal_results,
@@ -388,13 +394,27 @@ def test_plan_batch_attaches_all_goals_once_without_orders_rebalances_or_instanc
     dataset, _ = import_bundle(BUNDLE, activate=True)
     universe = dataset.universes.get(key="US_LARGE_CAP_GICS")
     protocol = dataset.protocols.get(active=True)
-    implementation = ResearchStrategyImplementation.objects.get(
+    implementation_candidates = ResearchStrategyImplementation.objects.filter(
         research_strategy__dataset_version=dataset,
-        research_strategy__research_id="TR_001_SMA_020_100",
-    )
+        role=StrategyRole.EXECUTION,
+        exact_semantic_match=True,
+        executable_strategy_definition__isnull=False,
+    ).select_related("research_strategy").order_by("research_strategy__research_id")
+    implementations = []
+    strategy_family_counts = {}
+    for candidate in implementation_candidates:
+        family = candidate.research_strategy.family
+        if strategy_family_counts.get(family, 0) >= 2:
+            continue
+        strategy_family_counts[family] = strategy_family_counts.get(family, 0) + 1
+        implementations.append(candidate)
+        if len(implementations) == 5:
+            break
+    assert len(implementations) == 5
     members = list(ResearchUniverseMember.objects.filter(universe=universe).select_related("instrument")[:5])
     rows = []
     for index, member in enumerate(members):
+        implementation = implementations[index]
         BrokerContract.objects.create(
             instrument=member.instrument, conid=9_800_000 + index, primary_exchange="NASDAQ",
             local_symbol=member.source_symbol, qualified_at=timezone.now(),
@@ -444,6 +464,9 @@ def test_plan_batch_attaches_all_goals_once_without_orders_rebalances_or_instanc
     assert len(sleeves) == 5
     assert all(item.strategy_share == 1 and item.stock_weight <= rules["maximum_stock_weight"] for item in sleeves)
     assert Decimal(str(accepted.metrics["cash_weight"])) >= rules["minimum_cash_weight"]
+    assert Decimal(accepted.optimizer_snapshot["constraints"]["strategy_family_cap"]) == accepted.policy.strategy_family_cap
+    InstrumentEligibilitySnapshot.objects.filter(universe_member__in=members).update(builder_eligible=True)
+    validate_recommendation_for_construction(accepted)
     assignments = GoalStrategyAssignment.objects.filter(goal_instrument_selection__goal_allocation=goal, enabled=True)
     assert assignments.count() == len(sleeves)
     assert all(item.strategy_share == 1 and item.create_instance for item in assignments)
@@ -475,6 +498,28 @@ def test_plan_batch_attaches_all_goals_once_without_orders_rebalances_or_instanc
     assert latest_run.goal_allocation_id is None and latest_run.acceptance.goal_id is None
     historical = client.get(f"/api/v1/portfolio-construction/recommendation-batches/{regenerated.pk}/")
     assert historical.status_code == 200 and historical.json()["data"]["goals"][0]["goal_name"] == "Fast goal"
+
+
+def test_family_cap_is_enforced_for_full_models_and_relaxed_for_audited_fallbacks():
+    policy = SimpleNamespace(strategy_family_cap=Decimal("0.40"))
+    assert effective_strategy_family_cap(policy, 1) == Decimal("0.40")
+    assert effective_strategy_family_cap(policy, 2) == Decimal("0.40")
+    assert effective_strategy_family_cap(policy, 3) == Decimal("1")
+    assert effective_strategy_family_cap(policy, 5) == Decimal("1")
+
+    old_fallback_run = SimpleNamespace(
+        policy=policy,
+        optimizer_snapshot={},
+        metrics={"fallback_tier": 4},
+    )
+    assert effective_strategy_family_cap_for_run(old_fallback_run) == Decimal("1")
+
+    audited_run = SimpleNamespace(
+        policy=policy,
+        optimizer_snapshot={"constraints": {"strategy_family_cap": "0.55"}},
+        metrics={"fallback_tier": 4},
+    )
+    assert effective_strategy_family_cap_for_run(audited_run) == Decimal("0.55")
 
 
 def test_plan_recommendation_unexpected_failure_is_a_readable_json_envelope(client):

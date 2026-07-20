@@ -158,7 +158,8 @@ def test_history_bulk_upsert_preserves_corrections_without_duplicate_rows():
         def __init__(self,close):self.close=close
         def daily_candles(self,symbol,start_date,end_date):
             return [{"trading_date":date(2026,1,2),"open":"10","high":"12","low":"9",
-                "close":self.close,"adjusted_close":self.close,"volume":"100"}]
+                "close":self.close,"adjusted_close":self.close,"volume":"100",
+                "provider_timestamp":"2026-01-02T00:00:00Z"}]
     first=fetch_daily_history(instrument,date(2026,1,1),date(2026,1,3),client=Client("10"))
     corrected=fetch_daily_history(instrument,date(2026,1,1),date(2026,1,3),client=Client("11"))
     row=InstrumentPriceHistory.objects.get(instrument=instrument,trading_date=date(2026,1,2))

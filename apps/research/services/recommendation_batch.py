@@ -24,6 +24,7 @@ from ..models import (
     ResearchDatasetVersion,
 )
 from .eligibility import calculate_member_eligibility
+from .acceptance import effective_strategy_family_cap
 from .recommendation_cache import best_cached_recommendation
 from .recommendations import _policy_for_goal
 from .optimizer import optimize_sleeves
@@ -86,7 +87,7 @@ def _row_lookup(cache):
     return {row["universe_member_id"]: row for row in [*(cache.selected_stocks or []), *(cache.candidate_pool or [])] if row.get("universe_member_id")}
 
 
-def _goal_weights(rows, goal, policy, rules, *, recommended_cash=None):
+def _goal_weights(rows, goal, policy, rules, *, strategy_family_cap, recommended_cash=None):
     if not rows:
         return [], 1.0, {"expected_return": 0.0, "expected_volatility": 0.0, "iterations": 0}
     minimum_cash = max(
@@ -125,7 +126,7 @@ def _goal_weights(rows, goal, policy, rules, *, recommended_cash=None):
         "minimum_cash": float(minimum_cash),
         "per_stock_cap": float(min(D(policy.per_stock_cap), D(rules["maximum_stock_weight"]))),
         "sector_cap": float(policy.sector_cap), "industry_cap": float(policy.industry_cap),
-        "sub_industry_cap": float(policy.sub_industry_cap), "strategy_family_cap": 1.0,
+        "sub_industry_cap": float(policy.sub_industry_cap), "strategy_family_cap": float(strategy_family_cap),
         "minimum_sectors": min(3, len(sectors)), "maximum_turnover": float(policy.maximum_turnover),
         "risk_aversion": 6 - goal.risk_level, "recommendation_penalty": 2.0,
     }, current_weights=current)
@@ -134,13 +135,18 @@ def _goal_weights(rows, goal, policy, rules, *, recommended_cash=None):
 
 def _create_goal_run(goal, batch, cache, selected_members, *, substitutions, failures):
     policy, rules = _policy_for_goal(goal)
+    strategy_family_cap = effective_strategy_family_cap(policy, cache.fallback_tier)
     run = GoalRecommendationRun.objects.create(
         goal_allocation=goal, requested_plan_version=batch.requested_plan_version, policy=policy,
         dataset_version=batch.dataset, protocol_version=batch.protocol, as_of_date=cache.as_of_date,
         status="RUNNING", idempotency_key=f"batch:{batch.pk}:goal:{goal.pk}",
         request_hash=canonical_request_hash("batch_goal_recommendation", {"batch": batch.pk, "goal": goal.pk, "cache": cache.pk}),
         input_snapshot={"goal": _goal_snapshot(goal), "cache_snapshot_id": cache.pk},
-        candidate_snapshot=cache.candidate_pool, optimizer_snapshot={"allocator": cache.allocator_strategy_id, "overlays": cache.overlay_strategy_ids},
+        candidate_snapshot=cache.candidate_pool, optimizer_snapshot={
+            "allocator": cache.allocator_strategy_id,
+            "overlays": cache.overlay_strategy_ids,
+            "constraints": {"strategy_family_cap": str(strategy_family_cap)},
+        },
         stress_test_snapshot={"fallback_tier": cache.fallback_tier}, expires_at=timezone.now() + timedelta(hours=settings.RECOMMENDATION_SNAPSHOT_MAX_AGE_HOURS),
         started_at=timezone.now(),
     )
@@ -149,7 +155,8 @@ def _create_goal_run(goal, batch, cache, selected_members, *, substitutions, fai
     else:
         lookup=_row_lookup(cache);rows=[lookup[member.pk] for member in selected_members if member.pk in lookup]
         weights,cash,optimizer=_goal_weights(
-            rows,goal,policy,rules,recommended_cash=(cache.expected_metrics or {}).get("cash_weight"),
+            rows,goal,policy,rules,strategy_family_cap=strategy_family_cap,
+            recommended_cash=(cache.expected_metrics or {}).get("cash_weight"),
         )
     weighted_rows = [(row, weight) for row, weight in zip(rows, weights) if float(weight) > 1e-10]
     rows = [row for row, _ in weighted_rows]; weights = [weight for _, weight in weighted_rows]
@@ -175,6 +182,14 @@ def _create_goal_run(goal, batch, cache, selected_members, *, substitutions, fai
                  "cash_weight":cash,"sleeve_count":len(rows),"fallback_tier":cache.fallback_tier,
                  "qualification_substitutions":list(substitutions),"qualification_failures":list(failures)}
     run.warnings=[{"code":"FALLBACK_TIER","message":f"Recommendation availability tier {cache.fallback_tier}"}] if cache.fallback_tier>1 else []
+    if goal.timeframe_bucket != "NOW" and strategy_family_cap > D(policy.strategy_family_cap):
+        run.warnings.append({
+            "code": "FALLBACK_FAMILY_CAP_RELAXED",
+            "message": (
+                f"Fallback tier {cache.fallback_tier} permits strategy-family concentration up to "
+                f"{strategy_family_cap}."
+            ),
+        })
     run.status="COMPLETED";run.completed_at=timezone.now();run.save()
     return run,rows,weights,cash
 
@@ -219,7 +234,12 @@ def _locked_goal_results(batch):
 
 def run_recommendation_batch(batch_or_id, *, gateway=None, actor="recommendation-system"):
     batch_id=batch_or_id.pk if isinstance(batch_or_id,RecommendationBatchRun) else batch_or_id
-    batch=RecommendationBatchRun.objects.select_related("plan").get(pk=batch_id)
+    batch=RecommendationBatchRun.objects.select_related(
+        "plan__portfolio__account", "plan__portfolio__gateway_session"
+    ).get(pk=batch_id)
+    if gateway is None and batch.plan.portfolio.gateway_session_id:
+        from apps.broker_gateway.client import GatewayClient
+        gateway=GatewayClient.for_portfolio(batch.plan.portfolio,require_commands=True)
     if batch.status=="COMPLETED":return batch
     batch.status="RUNNING";batch.started_at=timezone.now();batch.save(update_fields=["status","started_at"])
     try:

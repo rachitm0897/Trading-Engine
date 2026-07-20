@@ -36,8 +36,13 @@ def fetch_daily_history(instrument, start_date, end_date, *, purpose="HISTORY", 
         existing_dates = set(InstrumentPriceHistory.objects.filter(
             instrument=instrument, provider="FINNHUB", trading_date__in=dates,
         ).values_list("trading_date", flat=True))
+        price_fields = ("trading_date", "open", "high", "low", "close", "adjusted_close", "volume")
         records = [InstrumentPriceHistory(
-            instrument=instrument, provider="FINNHUB", quality_status="COMPLETE", fetched_at=now, **row,
+            instrument=instrument,
+            provider="FINNHUB",
+            quality_status="COMPLETE",
+            fetched_at=now,
+            **{field: row[field] for field in price_fields},
         ) for row in rows_by_date.values()]
         with transaction.atomic():
             InstrumentPriceHistory.objects.bulk_create(
