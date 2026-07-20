@@ -1,7 +1,12 @@
 FROM python:3.12-slim
 ARG IBC_VERSION=3.23.0
 ARG IB_GATEWAY_INSTALLER_URL=https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/ibgateway-stable-standalone-linux-x64.sh
-ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PORT=8080 \
+    APP_BASE_PATH=/trading_eng_gateway \
+    PUBLIC_BASE_URL=https://qfsplatform.com/trading_eng_gateway
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl unzip nginx supervisor xvfb fluxbox x11vnc novnc websockify default-jre tini gettext-base procps \
     libxrender1 libxtst6 libxi6 libfreetype6 libgtk-3-0 libasound2 libnss3 libxss1 && rm -rf /var/lib/apt/lists/*

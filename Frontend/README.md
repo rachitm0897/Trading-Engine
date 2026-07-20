@@ -51,4 +51,6 @@ npm run build
 
 `npm test` runs Vitest and React Testing Library coverage for routes, workflows, responsive shell state, persisted panels, chart normalization, and safety controls. `npm run build` runs TypeScript project compilation before creating the Vite production bundle.
 
-Set `VITE_API_BASE_URL` to the public Backend `/api/v1` URL and `VITE_APP_BASE_PATH` to `/` locally or `/trading_eng_frontend/` on QFS. noVNC links are returned by the Backend session API and are never constructed from a Frontend gateway variable. Health remains `GET /healthz` when served by Nginx.
+The production Docker build defaults to `VITE_APP_BASE_PATH=/trading_eng_frontend/`; all entry assets and lazy chunks are emitted below that path. At container start, `BACKEND_API_URL` generates `runtime-config.js`, defaulting to `https://qfsplatform.com/trading_eng_backend/api/v1`. Local Vite may override `VITE_API_BASE_URL` and `VITE_APP_BASE_PATH`; no hidden QFS build arguments are required.
+
+Run `docker build -t trading-engine-frontend .` from this directory. Nginx listens on `${PORT:-5173}`, serves every direct route refresh through the SPA shell, and does not depend on `http://backend:8000` or another Docker DNS name. noVNC links come from the Backend session API and never use a Frontend gateway setting. Both unprefixed internal and `/trading_eng_frontend/healthz` probes work.

@@ -232,6 +232,7 @@ def test_deployment_readiness_requires_all_20_warm_cache_profiles(client):
     assert ready.json()["data"] == {
         "status": "ready", "universe_members": 500, "strategy_implementations": 97,
         "current_cache_profiles": 20, "required_cache_profiles": 20, "missing_cache_profiles": [],
+        "deployment": {"ready": True, "missing": [], "invalid": []},
     }
 
 

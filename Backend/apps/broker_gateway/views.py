@@ -48,13 +48,10 @@ def _public_novnc_url(request, session):
     if not base:
         base = request.build_absolute_uri("/").rstrip("/")
     prefix = settings.APP_BASE_PATH.rstrip("/")
-    proxy_path = f"{prefix}/api/v1/broker-sessions/{session.pk}/novnc"
-    public_suffix = proxy_path
-    if prefix and base.endswith(prefix):
-        public_suffix = proxy_path[len(prefix):]
-    websocket_path = f"{proxy_path.lstrip('/')}/websockify"
-    fragment = f"access_token={quote(token)}&path={quote(websocket_path, safe='')}"
-    return f"{base}{public_suffix}/connect/#{fragment}"
+    api_path = f"/api/v1/broker-sessions/{session.pk}/novnc"
+    public_root = base if not prefix or base.endswith(prefix) else f"{base}{prefix}"
+    fragment = f"access_token={quote(token)}"
+    return f"{public_root}{api_path}/connect/#{fragment}"
 
 
 def _account_rows(session):
@@ -164,7 +161,7 @@ def sessions(request, session_id=None, action=None):
         if action == "accounts":
             return response(_account_rows(session))
         if action == "reconnect":
-            command = GatewayClient(session, require_commands=True).reconnect()
+            command = GatewayClient(session, purpose="reconnect").reconnect()
             BrokerGatewaySession.objects.filter(pk=session.pk).update(
                 status=BrokerGatewaySession.Status.STARTING, last_error="", last_checked_at=timezone.now()
             )
@@ -174,9 +171,11 @@ def sessions(request, session_id=None, action=None):
             payload = _payload(request)
             username = _bounded(payload.get("username"), "username", 128)
             password = _bounded(payload.get("password"), "password", 512)
+            if session.status in {session.Status.STOPPING, session.Status.DELETED}:
+                raise ValueError("Deleted or stopping sessions cannot accept credentials")
             qch = QCHBrokerClient()
-            if session.child_container_id:
-                qch.delete_container(session.child_container_id)
+            if session.child_container_name:
+                qch.delete_container(session.child_container_name)
             with transaction.atomic():
                 session = BrokerGatewaySession.objects.select_for_update().get(pk=session.pk)
                 if session.status in {session.Status.STOPPING, session.Status.DELETED}:
@@ -192,14 +191,13 @@ def sessions(request, session_id=None, action=None):
                 session.username_hint = mask_username(username)
                 session.status = session.Status.CREATING
                 session.commands_enabled = False
-                session.child_container_id = ""
                 session.last_qch_state = {}
                 session.last_gateway_state = {}
                 session.last_error = ""
                 session.deleted_at = None
                 session.lifecycle_version += 1
                 session.save(update_fields=[
-                    "username_hint", "status", "commands_enabled", "child_container_id", "last_qch_state",
+                    "username_hint", "status", "commands_enabled", "last_qch_state",
                     "last_gateway_state", "last_error", "deleted_at", "lifecycle_version", "updated_at",
                 ])
                 transaction.on_commit(lambda: provision_broker_session.delay(str(session.pk)))

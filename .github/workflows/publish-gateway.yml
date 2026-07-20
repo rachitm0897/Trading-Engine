@@ -1,0 +1,43 @@
+name: Publish immutable IB Gateway image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "IB_gateway/**"
+      - ".github/workflows/publish-gateway.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./IB_gateway
+          file: ./IB_gateway/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/trading-engine-ib-gateway:${{ github.sha }}
+      - name: Record immutable image reference
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/trading-engine-ib-gateway
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          printf '%s@%s\n' "$IMAGE" "$DIGEST" | tee gateway-image.txt
+          printf '### Immutable gateway image\n\n`%s@%s`\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gateway-image-${{ github.sha }}
+          path: gateway-image.txt

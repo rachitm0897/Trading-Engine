@@ -25,7 +25,7 @@ python manage.py warm_recommendation_cache
 
 The scheduled data, feature, experiment, and scoring tasks must run before Tier 1 caches are expected. Finalists are exactly IBKR-qualified with deterministic substitutions. Missing optional data moves through explicit stale/full, price-only, baseline, and validated-snapshot fallbacks; the system never invents data, scores, contracts, or SHADOW evidence.
 
-`GET /healthz` is the process/database liveness probe. `GET /readyz` is the recommendation deployment gate and returns ready only after the active 500-member universe, 97-entry registry, and all 20 valid timeframe/risk cache profiles are current. Route recommendation traffic only after `/readyz` returns 200.
+`GET /healthz` is process liveness. `GET /readyz` separately checks the database, non-secret QCH/broker-session deployment configuration, digest-pinned child image, and recommendation readiness; it returns ready only after the active 500-member universe, 97-entry registry, and all 20 valid timeframe/risk cache profiles are current.
 
 ## Local start
 
@@ -57,21 +57,26 @@ docker compose config --quiet
 
 See [local development](docs/LOCAL_DEVELOPMENT.md), [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), [research universe](docs/RESEARCH_UNIVERSE.md), [backtesting](docs/BACKTESTING_PROTOCOL.md), [promotion](docs/STRATEGY_PROMOTION.md), and the [recommendation engine](docs/RECOMMENDATION_ENGINE.md).
 
-## QFS / QCH
+## QFS / QCH production
 
-The public applications are:
+Enter `https://github.com/rachitm0897/trading-engine` into QFS three times:
 
-- `https://qfsplatform.com/trading_eng_backend`
-- `https://qfsplatform.com/trading_eng_frontend`
+| Application | QFS root / Docker context | Dockerfile | Public path |
+| --- | --- | --- | --- |
+| Backend | `Backend` | `Dockerfile` | `/trading_eng_backend` |
+| Frontend | `Frontend` | `Dockerfile` | `/trading_eng_frontend` |
+| Standalone Gateway | `IB_gateway` | `Dockerfile` | `/trading_eng_gateway` |
 
-Gateway children have no public route. The Backend's ASGI noVNC proxy is the only browser route to them. Build and publish the child image before deploying:
+No repository-root build, `deploy` directory, Compose stack, or hidden frontend build argument is required. PostgreSQL, Redis, Kafka, and Flink remain external. Only the Backend receives `QCH_APP_ID`, `QCH_API_HOST`, and `QCH_SERVICE_TOKEN` and provisions one private child Gateway per managed session. The public standalone Gateway is manual/diagnostic and is never a shared managed-session route.
+
+Build and publish the child image before enabling managed sessions:
 
 ```bash
-docker build -t ghcr.io/ORG/finflock-ibkr-gateway:TAG ./IB_gateway
-docker push ghcr.io/ORG/finflock-ibkr-gateway:TAG
-docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/ORG/finflock-ibkr-gateway:TAG
+docker build -t ghcr.io/OWNER/trading-engine-ib-gateway:GIT_COMMIT_SHA ./IB_gateway
+docker push ghcr.io/OWNER/trading-engine-ib-gateway:GIT_COMMIT_SHA
+docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/OWNER/trading-engine-ib-gateway:GIT_COMMIT_SHA
 ```
 
-Set `IBKR_GATEWAY_IMAGE` to the resulting immutable `@sha256:` digest. See [QFS deployment](docs/QFS_DEPLOYMENT.md) and [IBKR sessions](docs/IBKR_SETUP.md).
+Set `IBKR_GATEWAY_IMAGE` to `ghcr.io/OWNER/trading-engine-ib-gateway@sha256:<digest>`. The GHCR package must be public or the QCH host must have registry authentication. See the exact app settings, routes, storage, WebSocket requirements, smoke commands, and QCH limitations in [QFS deployment](docs/QFS_DEPLOYMENT.md).
 
 > Live gateway sessions are supported, but live orders still require the independent `ALLOW_LIVE_TRADING=true` deployment gate and all existing kill switches, reconciliation, confirmation, validation, and pre-trade risk controls. Actionable recommendations remain long-only; short and pair/basket execution remain disabled.

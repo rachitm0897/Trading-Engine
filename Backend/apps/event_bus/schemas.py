@@ -3,7 +3,7 @@ from decimal import Decimal
 from pathlib import Path
 from jsonschema import Draft202012Validator
 
-SCHEMA_ROOT = Path(__file__).resolve().parents[3] / "streaming" / "kafka" / "schemas"
+SCHEMA_ROOT = Path(__file__).resolve().parents[2] / "assets" / "kafka" / "schemas"
 
 
 def decimal_safe(value):

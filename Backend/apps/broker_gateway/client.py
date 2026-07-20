@@ -35,7 +35,7 @@ class GatewayRoute:
             raise GatewayRouteError("A gateway route requires session identity, URL, and service token")
 
 
-def route_for_session(gateway_session, *, require_commands=False):
+def route_for_session(gateway_session, *, purpose="read"):
     from .models import BrokerGatewaySession
 
     if gateway_session is None:
@@ -45,8 +45,24 @@ def route_for_session(gateway_session, *, require_commands=False):
         BrokerGatewaySession.Status.DELETED,
     }:
         raise GatewaySessionUnavailable("The broker gateway session has been deleted or is stopping")
-    if require_commands and not gateway_session.commands_enabled:
-        raise GatewaySessionUnavailable("New broker commands are disabled for this session")
+    if purpose == "command":
+        connected = (
+            gateway_session.status == BrokerGatewaySession.Status.CONNECTED
+            and gateway_session.commands_enabled
+            and bool((gateway_session.last_gateway_state or {}).get("connected"))
+        )
+        if not connected:
+            raise GatewaySessionUnavailable("Trading commands require a connected and valid broker gateway session")
+    elif purpose == "reconnect" and gateway_session.status not in {
+        BrokerGatewaySession.Status.STARTING,
+        BrokerGatewaySession.Status.WAITING_FOR_LOGIN,
+        BrokerGatewaySession.Status.WAITING_FOR_2FA,
+        BrokerGatewaySession.Status.CONNECTED,
+        BrokerGatewaySession.Status.DISCONNECTED,
+        BrokerGatewaySession.Status.LOGIN_FAILED,
+        BrokerGatewaySession.Status.ERROR,
+    }:
+        raise GatewaySessionUnavailable("This broker gateway session is not eligible for reconnect")
     if not gateway_session.internal_base_url or not gateway_session.encrypted_gateway_token:
         raise GatewaySessionUnavailable("The broker gateway session has not been provisioned")
     return GatewayRoute(
@@ -63,8 +79,9 @@ class GatewayClient:
     tooling. Production callers pass a BrokerGatewaySession or GatewayRoute.
     """
 
-    def __init__(self, route, token=None, *, http_session=None, require_commands=False):
+    def __init__(self, route, token=None, *, http_session=None, require_commands=False, purpose=None):
         self.gateway_session = None
+        self.purpose = purpose or ("command" if require_commands else "read")
         if isinstance(route, GatewayRoute):
             resolved = route
         elif isinstance(route, str) and token:
@@ -75,13 +92,17 @@ class GatewayClient:
             )
         elif hasattr(route, "internal_base_url"):
             self.gateway_session = route
-            resolved = route_for_session(route, require_commands=require_commands)
+            resolved = route_for_session(route, purpose=self.purpose)
         else:
             raise GatewayRouteError("GatewayClient requires a broker session or explicit GatewayRoute")
         self.route = resolved
         self.base_url = resolved.base_url.rstrip("/")
         self.token = resolved.service_token
         self.http = http_session or requests.Session()
+
+    def _require_session_purpose(self, purpose):
+        if self.gateway_session is not None:
+            route_for_session(self.gateway_session, purpose=purpose)
 
     @classmethod
     def for_portfolio(cls, portfolio, *, require_commands=False, http_session=None):
@@ -143,6 +164,7 @@ class GatewayClient:
         return self.request("GET", "session/")
 
     def reconnect(self):
+        self._require_session_purpose("reconnect")
         return self.request("POST", "session/reconnect/", json={}, idempotency_key=f"reconnect:{int(time.time())}", retries=0)
 
     def positions(self):
@@ -182,6 +204,7 @@ class GatewayClient:
         return current.get("result") or {}
 
     def search_contracts(self, query):
+        self._require_session_purpose("command")
         query = str(query).strip()
         digest = hashlib.sha256(query.casefold().encode()).hexdigest()[:32]
         queued = self.request(
@@ -198,21 +221,26 @@ class GatewayClient:
         )
 
     def place_order(self, payload, key):
+        self._require_session_purpose("command")
         return self.request("POST", "orders/", json=payload, idempotency_key=key, retries=0)
 
     def modify_order(self, internal_id, payload, key):
+        self._require_session_purpose("command")
         return self.request("PATCH", f"orders/{internal_id}/", json=payload, idempotency_key=key, retries=0)
 
     def cancel_order(self, internal_id, key):
+        self._require_session_purpose("command")
         return self.request("POST", f"orders/{internal_id}/cancel/", json={}, idempotency_key=key, retries=0)
 
     def qualify_contract(self, payload, key):
+        self._require_session_purpose("command")
         return self.request("POST", "contracts/qualify/", json=payload, idempotency_key=key, retries=0)
 
     def qualify_contract_exact(self, payload, key):
         return self.wait_for_command(self.qualify_contract(payload, key))
 
     def historical_bars(self, payload, timeout=60):
+        self._require_session_purpose("command")
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         digest = hashlib.sha256(canonical.encode()).hexdigest()[:40]
         queued = self.request(
@@ -221,6 +249,7 @@ class GatewayClient:
         return self.wait_for_command(queued, timeout=timeout)
 
     def historical_schedule(self, payload, timeout=30):
+        self._require_session_purpose("command")
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         digest = hashlib.sha256(canonical.encode()).hexdigest()[:40]
         queued = self.request(
@@ -229,7 +258,9 @@ class GatewayClient:
         return self.wait_for_command(queued, timeout=timeout)
 
     def subscribe_market_data(self, payload, key):
+        self._require_session_purpose("command")
         return self.request("POST", "market-data/subscriptions/", json=payload, idempotency_key=key, retries=0)
 
     def cancel_market_data(self, payload, key):
+        self._require_session_purpose("command")
         return self.request("POST", "market-data/subscriptions/cancel/", json=payload, idempotency_key=key, retries=0)

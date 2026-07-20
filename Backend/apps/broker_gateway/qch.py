@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+import os
+from urllib.parse import quote
 
 import requests
 from django.conf import settings
@@ -28,12 +30,20 @@ class QCHContainer:
 
 
 class QCHBrokerClient:
-    """Client for QCH's app-scoped sub-container broker endpoints."""
+    """Client for QCH's app-scoped Sub-container Broker API."""
 
     def __init__(self, *, api_host=None, app_id=None, service_token=None, http_session=None, timeout=None):
-        self.api_host = str(api_host or settings.QCH_API_HOST).rstrip("/")
-        self.app_id = str(app_id or settings.QCH_APP_ID).strip()
-        self.service_token = str(service_token or settings.QCH_SERVICE_TOKEN).strip()
+        # Read the process environment for every new client so a rotated,
+        # process-injected service token is never copied into application state.
+        self.api_host = str(
+            api_host if api_host is not None else os.getenv("QCH_API_HOST", settings.QCH_API_HOST)
+        ).rstrip("/")
+        self.app_id = str(
+            app_id if app_id is not None else os.getenv("QCH_APP_ID", settings.QCH_APP_ID)
+        ).strip()
+        self.service_token = str(
+            service_token if service_token is not None else os.getenv("QCH_SERVICE_TOKEN", settings.QCH_SERVICE_TOKEN)
+        ).strip()
         if not self.api_host or not self.app_id or not self.service_token:
             raise QCHError("QCH_API_HOST, QCH_APP_ID, and QCH_SERVICE_TOKEN are required")
         self.http = http_session or requests.Session()
@@ -41,7 +51,7 @@ class QCHBrokerClient:
 
     @property
     def collection_url(self):
-        return f"{self.api_host}/api/v1/apps/{self.app_id}/subcontainers"
+        return f"{self.api_host}/api/apps/{quote(self.app_id, safe='')}/containers"
 
     @property
     def headers(self):
@@ -81,31 +91,46 @@ class QCHBrokerClient:
             raise QCHError(
                 f"QCH sub-container request failed with HTTP {response.status_code}",
                 status_code=response.status_code,
-                retryable=response.status_code >= 500,
+                retryable=response.status_code in {408, 425, 429} or response.status_code >= 500,
             )
         return self._body(response)
 
     def list_containers(self):
         body = self._request("GET", self.collection_url)
-        rows = body.get("items", body.get("containers", [])) if isinstance(body, dict) else body
+        if isinstance(body, dict):
+            rows = body.get("items", body.get("containers"))
+            if rows is None and (body.get("name") or body.get("container_name")):
+                rows = [body]
+        else:
+            rows = body
         return [self._container(row) for row in (rows or [])]
 
     def find_by_name(self, name):
         return next((item for item in self.list_containers() if item.name == name), None)
 
-    def create_container(self, *, name, image, command, environment, network):
-        payload = {
-            "name": name,
-            "image": image,
-            "command": command,
-            "environment": environment,
-            "network": network,
-        }
-        return self._container(self._request("POST", self.collection_url, json=payload))
-
-    def delete_container(self, container_id):
+    def create_container(self, *, name, image, command=None, env=None, network=None):
+        payload = {"name": name, "image": image}
+        if command is not None:
+            payload["command"] = command
+        if env is not None:
+            payload["env"] = env
+        if network is not None:
+            payload["network"] = network
         try:
-            self._request("DELETE", f"{self.collection_url}/{container_id}")
+            body = self._request("POST", self.collection_url, json=payload)
+        except QCHConflict:
+            existing = self.find_by_name(name)
+            if existing is None:
+                raise
+            return existing
+        if isinstance(body, dict) and isinstance(body.get("container"), dict):
+            body = body["container"]
+        return self._container(body)
+
+    def delete_container(self, container_name):
+        try:
+            encoded_name = quote(str(container_name), safe="")
+            self._request("DELETE", f"{self.collection_url}/{encoded_name}")
         except QCHNotFound:
             return False
         return True

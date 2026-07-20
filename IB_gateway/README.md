@@ -12,6 +12,8 @@ pytest
 ```
 
 `GET /healthz` is public for infrastructure probes. Every `/api/v1/*` route requires `Authorization: Bearer <GATEWAY_SERVICE_TOKEN>`. Order-changing requests should also send `Idempotency-Key`.
+
+Run `docker build -t trading-engine-gateway .` from this directory. As the standalone public QFS app it defaults to `/trading_eng_gateway`, exposes only `${PORT:-8080}`, and provides prefixed root, health, API, noVNC asset, and websockify routes. Persist `/data` and `/home/ibgateway/Jts`. This standalone app is manual/diagnostic only: private managed Backend sessions always use distinct QCH child containers pulled from the registry digest in `IBKR_GATEWAY_IMAGE`.
 # Bounded research history
 
 `POST /api/v1/market-data/history/` is an authenticated, durable, read-only broker command. It requires an exact positive conId and supports `1 min`, `5 mins`, `15 mins`, `1 hour`, and `1 day` bars with `TRADES` or `ADJUSTED_LAST`. Intraday duration is bounded to 90 days and daily duration to ten years.
