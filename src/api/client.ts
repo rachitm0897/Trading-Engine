@@ -1,6 +1,6 @@
 import type {ApiEnvelope} from './types'
 
-const configuredBase = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+const configuredBase = window.__TRADING_ENGINE_CONFIG__?.apiBaseUrl || import.meta.env.VITE_API_BASE_URL || '/api/v1'
 export const API_BASE_URL = configuredBase.replace(/\/$/, '')
 
 export class ApiError extends Error {
