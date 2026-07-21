@@ -43,7 +43,7 @@ def broker_settings(settings, monkeypatch):
     settings.NOVNC_ACCESS_TOKEN_TTL_SECONDS = 300
     settings.NOVNC_PROXY_CONNECT_TIMEOUT_SECONDS = 1
     settings.NOVNC_PROXY_MAX_BODY_BYTES = 1024 * 1024
-    settings.IBKR_GATEWAY_IMAGE = "registry.example/ibkr@sha256:abc"
+    settings.IBKR_GATEWAY_IMAGE = "registry.example/ibkr@sha256:" + ("a" * 64)
     settings.QCH_SUBCONTAINER_NETWORK = "traefik"
     settings.QCH_API_HOST = "https://qch.example"
     settings.QCH_APP_ID = "app-1"
@@ -80,6 +80,16 @@ def add_secret(session, username="ib-user", password="ib-password"):
         encrypted_password=encrypt_secret(password),
         expires_at=timezone.now() + timedelta(minutes=5),
     )
+
+
+def disable_managed_gateway(settings, monkeypatch):
+    settings.IBKR_GATEWAY_IMAGE = ""
+    settings.QCH_API_HOST = ""
+    settings.QCH_APP_ID = ""
+    settings.QCH_SERVICE_TOKEN = ""
+    monkeypatch.setenv("QCH_API_HOST", "")
+    monkeypatch.setenv("QCH_APP_ID", "")
+    monkeypatch.setenv("QCH_SERVICE_TOKEN", "")
 
 
 @responses.activate
@@ -130,6 +140,35 @@ def test_creation_accepts_only_paper_live_encrypts_credentials_and_returns_no_se
     secret = BrokerGatewaySessionSecret.objects.first()
     assert secret.encrypted_username != "plain-user" and decrypt_secret(secret.encrypted_username) == "plain-user"
     assert len(queued) == 2
+
+
+def test_creation_preflight_returns_503_without_records_secrets_or_task(
+    client, settings, monkeypatch, django_capture_on_commit_callbacks
+):
+    disable_managed_gateway(settings, monkeypatch)
+    queued = []
+    monkeypatch.setattr("apps.broker_gateway.views.provision_broker_session.delay", lambda value: queued.append(value))
+    monkeypatch.setattr(
+        "apps.broker_gateway.views.generate_service_token",
+        lambda: (_ for _ in ()).throw(AssertionError("secret generation must not run")),
+    )
+    with django_capture_on_commit_callbacks(execute=True):
+        result = client.post("/api/v1/broker-sessions/", data=json.dumps({
+            "display_name": "Unavailable", "username": "plain-user", "password": "plain-password", "mode": "paper",
+        }), content_type="application/json")
+    assert result.status_code == 503
+    assert result.json()["error"] == {
+        "code": "BROKER_GATEWAY_NOT_CONFIGURED",
+        "message": "Managed IB Gateway is unavailable because QCH configuration is incomplete.",
+        "details": {
+            "missing": ["IBKR_GATEWAY_IMAGE", "QCH_API_HOST", "QCH_APP_ID", "QCH_SERVICE_TOKEN"],
+            "invalid": [],
+        },
+    }
+    assert BrokerGatewaySession.objects.count() == 0
+    assert BrokerGatewaySessionSecret.objects.count() == 0
+    assert queued == []
+    assert "plain-user" not in result.content.decode() and "plain-password" not in result.content.decode()
 
 
 @responses.activate
@@ -283,6 +322,64 @@ def test_stale_creating_session_is_requeued_and_expired_credentials_are_final(mo
     assert expired.status == BrokerGatewaySession.Status.LOGIN_FAILED
     assert expired.commands_enabled is False
     assert not BrokerGatewaySessionSecret.objects.filter(session=expired).exists()
+
+
+def test_monitoring_is_disabled_without_qch_and_preserves_existing_sessions_and_secrets(monkeypatch, settings):
+    connected = make_session("Existing", status=BrokerGatewaySession.Status.CONNECTED)
+    creating = make_session("Pending", status=BrokerGatewaySession.Status.CREATING)
+    secret = add_secret(creating)
+    BrokerGatewaySessionSecret.objects.filter(pk=secret.pk).update(
+        expires_at=timezone.now() - timedelta(minutes=1)
+    )
+    disable_managed_gateway(settings, monkeypatch)
+    monkeypatch.setattr(
+        "apps.broker_gateway.tasks.inspect_gateway_session",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("monitor must not inspect sessions")),
+    )
+    monkeypatch.setattr(
+        "apps.broker_gateway.tasks.provision_broker_session.delay",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("monitor must not schedule provisioning")),
+    )
+
+    result = monitor_broker_sessions()
+
+    assert result["status"] == "disabled"
+    assert result["reason"] == "BROKER_GATEWAY_NOT_CONFIGURED"
+    assert result["broker_deployment"]["missing"] == [
+        "IBKR_GATEWAY_IMAGE", "QCH_API_HOST", "QCH_APP_ID", "QCH_SERVICE_TOKEN",
+    ]
+    connected.refresh_from_db()
+    creating.refresh_from_db()
+    assert connected.status == BrokerGatewaySession.Status.CONNECTED
+    assert creating.status == BrokerGatewaySession.Status.CREATING
+    assert BrokerGatewaySessionSecret.objects.filter(session=creating).exists()
+
+
+def test_qch_dependent_existing_session_actions_return_configuration_error_without_mutation(
+    client, settings, monkeypatch
+):
+    session = make_session("Existing", status=BrokerGatewaySession.Status.CONNECTED)
+    original_version = session.lifecycle_version
+    disable_managed_gateway(settings, monkeypatch)
+    monkeypatch.setattr(
+        "apps.broker_gateway.views.QCHBrokerClient",
+        lambda: (_ for _ in ()).throw(AssertionError("QCH client must not be created")),
+    )
+
+    credentials = client.post(
+        f"/api/v1/broker-sessions/{session.pk}/credentials/",
+        data=json.dumps({"username": "new-user", "password": "new-password"}),
+        content_type="application/json",
+    )
+    deleted = client.delete(f"/api/v1/broker-sessions/{session.pk}/")
+
+    assert credentials.status_code == 503 and deleted.status_code == 503
+    assert credentials.json()["error"]["code"] == "BROKER_GATEWAY_NOT_CONFIGURED"
+    assert deleted.json()["error"]["code"] == "BROKER_GATEWAY_NOT_CONFIGURED"
+    session.refresh_from_db()
+    assert session.status == BrokerGatewaySession.Status.CONNECTED
+    assert session.lifecycle_version == original_version
+    assert not BrokerGatewaySessionSecret.objects.filter(session=session).exists()
 
 
 class AccountsGateway:

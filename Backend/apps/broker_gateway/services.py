@@ -11,6 +11,7 @@ from apps.accounts.models import BrokerAccount
 from apps.portfolios.models import TradingPortfolio
 
 from .client import GatewayClient, GatewayError
+from .configuration import require_managed_broker_deployment
 from .crypto import decrypt_secret
 from .models import (
     BrokerGatewaySession,
@@ -143,6 +144,7 @@ def synchronize_accounts(session, client, account_rows=None, summary_rows=None):
 
 
 def inspect_gateway_session(session, *, qch_client=None, container=None, synchronize=True):
+    require_managed_broker_deployment()
     qch = qch_client or QCHBrokerClient()
     if container is None:
         container = qch.find_by_name(session.child_container_name)
@@ -226,9 +228,8 @@ def inspect_gateway_session(session, *, qch_client=None, container=None, synchro
 
 
 def provision_session(session_id, *, qch_client=None, sleep=time.sleep):
+    require_managed_broker_deployment()
     try:
-        if not settings.IBKR_GATEWAY_IMAGE:
-            raise ValueError("IBKR_GATEWAY_IMAGE is required to provision broker sessions")
         qch = qch_client or QCHBrokerClient()
         session = BrokerGatewaySession.objects.get(pk=session_id)
         if session.status in {session.Status.STOPPING, session.Status.DELETED}:
@@ -287,6 +288,7 @@ def provision_session(session_id, *, qch_client=None, sleep=time.sleep):
 
 
 def delete_session(session_id, *, qch_client=None):
+    require_managed_broker_deployment()
     with transaction.atomic():
         session = BrokerGatewaySession.objects.select_for_update().get(pk=session_id)
         if session.status == session.Status.DELETED:

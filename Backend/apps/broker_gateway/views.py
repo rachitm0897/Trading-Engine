@@ -11,6 +11,11 @@ from django.views.decorators.csrf import csrf_exempt
 from apps.core.views import method_guard, response
 
 from .client import GatewayClient, GatewayError
+from .configuration import (
+    ManagedBrokerGatewayUnavailable,
+    managed_broker_deployment_configuration,
+    managed_broker_unavailable_error,
+)
 from .crypto import (
     encrypt_secret,
     generate_novnc_password,
@@ -38,6 +43,13 @@ def _bounded(value, field, maximum, *, required=True):
     if len(result) > maximum:
         raise ValueError(f"{field} cannot exceed {maximum} characters")
     return result
+
+
+def _managed_broker_preflight():
+    configuration = managed_broker_deployment_configuration()
+    if configuration["available"]:
+        return None
+    return response(status=503, error=managed_broker_unavailable_error(configuration))
 
 
 def _public_novnc_url(request, session):
@@ -129,6 +141,9 @@ def sessions(request, session_id=None, action=None):
                 queryset = queryset.exclude(status=BrokerGatewaySession.Status.DELETED)
             return response([serialize_session(request, item) for item in queryset])
         if session_id is None:
+            unavailable = _managed_broker_preflight()
+            if unavailable:
+                return unavailable
             payload = _payload(request)
             display_name = _bounded(payload.get("display_name") or "IBKR session", "display_name", 128)
             username = _bounded(payload.get("username"), "username", 128)
@@ -168,6 +183,9 @@ def sessions(request, session_id=None, action=None):
             session.refresh_from_db()
             return response({"session": serialize_session(request, session), "gateway_command": command}, status=202)
         if action == "credentials":
+            unavailable = _managed_broker_preflight()
+            if unavailable:
+                return unavailable
             payload = _payload(request)
             username = _bounded(payload.get("username"), "username", 128)
             password = _bounded(payload.get("password"), "password", 512)
@@ -203,6 +221,9 @@ def sessions(request, session_id=None, action=None):
                 transaction.on_commit(lambda: provision_broker_session.delay(str(session.pk)))
             return response(serialize_session(request, session, include_accounts=True), status=202)
         if request.method == "DELETE":
+            unavailable = _managed_broker_preflight()
+            if unavailable:
+                return unavailable
             session, removed = delete_session(session.pk)
             return response({
                 "session": serialize_session(request, session, include_accounts=True),
@@ -216,6 +237,8 @@ def sessions(request, session_id=None, action=None):
         return response(status=400, error={"code": "INVALID_JSON", "message": "Request body must be valid JSON", "details": {}})
     except (ValueError, ValidationError) as exc:
         return response(status=400, error={"code": "BROKER_SESSION_INVALID", "message": str(exc), "details": {}})
+    except ManagedBrokerGatewayUnavailable as exc:
+        return response(status=503, error=managed_broker_unavailable_error(exc.configuration))
     except QCHError as exc:
         return response(status=503, error={"code": "QCH_UNAVAILABLE", "message": str(exc), "details": {}})
     except GatewayError as exc:

@@ -19,6 +19,12 @@ export interface SystemStatus {
   mode: string
   execution_mode?: string
   is_admin?: boolean
+  broker_deployment: {
+    available: boolean
+    ready: boolean
+    missing: string[]
+    invalid: string[]
+  }
   global_kill_switch: boolean
   material_breaks: number
   time: string

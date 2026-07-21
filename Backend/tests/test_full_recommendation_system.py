@@ -213,7 +213,15 @@ def test_all_valid_goal_profiles_have_bounded_counts_and_live_constraints():
     assert len(pairs) == 20
 
 
-def test_deployment_readiness_requires_all_20_warm_cache_profiles(client):
+def test_deployment_readiness_requires_all_20_warm_cache_profiles(client, settings, monkeypatch):
+    settings.BROKER_SESSION_ENCRYPTION_KEY = "readiness-test-key"
+    settings.IBKR_GATEWAY_IMAGE = "registry.example/ibkr@sha256:" + ("a" * 64)
+    settings.QCH_APP_ID = "readiness-app"
+    settings.QCH_API_HOST = "https://qch.example"
+    settings.QCH_SERVICE_TOKEN = "readiness-token"
+    monkeypatch.setenv("QCH_APP_ID", settings.QCH_APP_ID)
+    monkeypatch.setenv("QCH_API_HOST", settings.QCH_API_HOST)
+    monkeypatch.setenv("QCH_SERVICE_TOKEN", settings.QCH_SERVICE_TOKEN)
     dataset, _ = import_bundle(BUNDLE, activate=True)
     not_ready = client.get("/readyz")
     assert not_ready.status_code == 503
@@ -232,7 +240,7 @@ def test_deployment_readiness_requires_all_20_warm_cache_profiles(client):
     assert ready.json()["data"] == {
         "status": "ready", "universe_members": 500, "strategy_implementations": 97,
         "current_cache_profiles": 20, "required_cache_profiles": 20, "missing_cache_profiles": [],
-        "deployment": {"ready": True, "missing": [], "invalid": []},
+        "deployment": {"available": True, "ready": True, "missing": [], "invalid": []},
     }
 
 

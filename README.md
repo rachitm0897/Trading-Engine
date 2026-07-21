@@ -25,7 +25,7 @@ python manage.py warm_recommendation_cache
 
 The scheduled data, feature, experiment, and scoring tasks must run before Tier 1 caches are expected. Finalists are exactly IBKR-qualified with deterministic substitutions. Missing optional data moves through explicit stale/full, price-only, baseline, and validated-snapshot fallbacks; the system never invents data, scores, contracts, or SHADOW evidence.
 
-`GET /healthz` is process liveness. `GET /readyz` separately checks the database, non-secret QCH/broker-session deployment configuration, digest-pinned child image, and recommendation readiness; it returns ready only after the active 500-member universe, 97-entry registry, and all 20 valid timeframe/risk cache profiles are current.
+`GET /healthz` is process liveness. `GET /readyz` checks required database and recommendation readiness and also reports non-secret managed QCH/broker-session deployment status. Missing or invalid managed Gateway configuration disables only managed sessions and does not by itself make the Backend unready; when recommendations are enabled, readiness still requires the active 500-member universe, 97-entry registry, and all 20 valid timeframe/risk cache profiles to be current.
 
 ## Local start
 

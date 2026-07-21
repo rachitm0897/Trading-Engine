@@ -5,6 +5,11 @@ from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 
+from .configuration import (
+    ManagedBrokerGatewayUnavailable,
+    managed_broker_deployment_configuration,
+    managed_broker_disabled_task_result,
+)
 from .models import BrokerGatewaySession, BrokerGatewaySessionSecret
 from .qch import QCHError
 from .services import inspect_gateway_session, provision_session, record_provision_failure
@@ -14,6 +19,8 @@ from .services import inspect_gateway_session, provision_session, record_provisi
 def provision_broker_session(self, session_id):
     try:
         return provision_session(session_id)
+    except ManagedBrokerGatewayUnavailable as exc:
+        return managed_broker_disabled_task_result(exc.configuration)
     except QCHError as exc:
         if exc.retryable and self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
@@ -22,6 +29,10 @@ def provision_broker_session(self, session_id):
 
 @shared_task
 def monitor_broker_sessions():
+    deployment = managed_broker_deployment_configuration()
+    if not deployment["available"]:
+        return managed_broker_disabled_task_result(deployment)
+
     now = timezone.now()
     expired_session_ids = list(BrokerGatewaySessionSecret.objects.filter(
         expires_at__lte=now

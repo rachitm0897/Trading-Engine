@@ -68,7 +68,7 @@ FLINK_REST_URL=https://FLINK_HOST
 
 Also configure `FINNHUB_API_KEY` and the Finnhub timeout/fallback variables when those providers are enabled. Research controls include `RESEARCH_ENABLED`, `RECOMMENDATION_SYSTEM_ENABLED`, bundle/artifact paths, provider, lookback, concurrency, score-age, and cache-age variables listed in [`Backend/.env.example`](../Backend/.env.example). The production image contains its own research bundle and Kafka schemas; it does not read repository-parent files.
 
-`GET /healthz` is process liveness and does not wait for database or recommendation caches. `GET /readyz` checks the database, reports missing broker/QCH variable names without returning values, validates that the child image is digest-pinned, and then applies recommendation-cache readiness. The System API also returns the non-secret broker deployment status.
+`GET /healthz` is process liveness and does not wait for database or recommendation caches. `GET /readyz` checks required database and recommendation-cache readiness and reports missing broker/QCH variable names without returning values, including whether the child image is digest-pinned. Missing managed Gateway configuration does not by itself return HTTP 503. The System API returns the same non-secret broker deployment status, and managed-session actions return `BROKER_GATEWAY_NOT_CONFIGURED` until it is available.
 
 Required public routes include:
 
@@ -141,7 +141,7 @@ Authorization: Bearer <QCH_SERVICE_TOKEN>
 
 Create sends required `image` and `name`, optional `env` and `network`, and normally omits `command` so the image `ENTRYPOINT` runs. HTTP 409 and ambiguous retryable creates are resolved by listing and adopting only the expected name. A delete 404 is successful idempotent deletion.
 
-Temporary IBKR credentials are encrypted at rest. They survive retryable QCH/network failures and Celery retries, then are deleted after confirmed creation/adoption, final non-retryable failure, final retry exhaustion, or TTL expiry. The periodic monitor requeues stale `CREATING` sessions so a lost task cannot leave one permanently stuck. If a private child exits or disappears, the Backend records a visible error, disables trading commands, and waits for explicit credential-based recreation; it does not silently replace the failure.
+Temporary IBKR credentials are encrypted at rest. They survive retryable QCH/network failures and Celery retries, then are deleted after confirmed creation/adoption, final non-retryable failure, final retry exhaustion, or TTL expiry. The periodic monitor requeues stale `CREATING` sessions so a lost task cannot leave one permanently stuck. When managed QCH deployment is not configured, monitoring exits with a disabled result without changing existing sessions; unrelated Celery work continues. If a private child exits or disappears while QCH is available, the Backend records a visible error, disables trading commands, and waits for explicit credential-based recreation; it does not silently replace the failure.
 
 QCH's child API does **not** expose volume mounting, automatic restart policies, or public Traefik routes. Do not document or depend on those capabilities.
 
