@@ -1,4 +1,4 @@
-import {render, screen, waitFor, within} from '@testing-library/react'
+import {fireEvent, render, screen, waitFor, within} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {beforeEach, afterEach, expect, test, vi} from 'vitest'
 
@@ -20,10 +20,12 @@ const accounts={
 function pathFor(input:string){return (new URL(input,'http://localhost').pathname.split('/api/v1/')[1]||'').replace(/\/$/,'')}
 
 let requests:{path:string;method:string;body:Record<string,unknown>}[]=[]
+let brokerDeployment={available:true,ready:true,missing:[] as string[],invalid:[] as string[]}
 
 beforeEach(()=>{
   window.history.replaceState({},'','/ibkr-sessions')
   localStorage.clear();queryClient.clear();requests=[]
+  brokerDeployment={available:true,ready:true,missing:[],invalid:[]}
   usePreferencesStore.setState({selectedSessionId:null,selectedAccountId:null,selectedPortfolioId:null})
   vi.stubGlobal('fetch',vi.fn(async(input:string,init?:RequestInit)=>{
     const path=pathFor(input);const method=init?.method||'GET';const body=init?.body?JSON.parse(String(init.body)):{}
@@ -36,7 +38,7 @@ beforeEach(()=>{
     else if(method==='DELETE')data={session:{...sessions[0],status:'DELETED'},container_deleted:true}
     else if(path==='accounts')data=[...accounts[sessions[0].id],...accounts[sessions[1].id]]
     else if(path==='portfolios')data=[{id:10,name:'Paper route',account_id:1,gateway_session_id:sessions[0].id},{id:20,name:'Live route',account_id:2,gateway_session_id:sessions[1].id}]
-    else if(path==='system')data={mode:'MULTI_SESSION',global_kill_switch:false,material_breaks:0,time:now}
+    else if(path==='system')data={mode:'MULTI_SESSION',broker_deployment:brokerDeployment,global_kill_switch:false,material_breaks:0,time:now}
     else if(path==='positions')data=[]
     return {ok:true,status:method==='POST'?202:200,json:async()=>({ok:true,data,error:null,meta:{}})} as Response
   }))
@@ -57,7 +59,9 @@ test('starts and manages multiple paper/live sessions without persisting passwor
   await user.type(screen.getByLabelText('IBKR username'),'operator-user')
   await user.type(screen.getByLabelText('IBKR password'),'never-store-this')
   await user.click(screen.getByLabelText('Live'))
-  await user.click(screen.getByRole('button',{name:'Start session'}))
+  const start=screen.getByRole('button',{name:'Start session'})
+  await waitFor(()=>expect(start).toBeEnabled())
+  await user.click(start)
   await waitFor(()=>expect(requests.some((item)=>item.path==='broker-sessions'&&item.method==='POST'&&item.body.mode==='live')).toBe(true))
   expect(screen.getByLabelText('IBKR password')).toHaveValue('')
   expect(localStorage.getItem('finflock-broker-selection')).not.toContain('never-store-this')
@@ -70,4 +74,27 @@ test('starts and manages multiple paper/live sessions without persisting passwor
   expect(screen.getByText(/existing IBKR orders are not automatically cancelled/i)).toBeInTheDocument()
   await user.click(screen.getByRole('button',{name:'Delete session'}))
   await waitFor(()=>expect(requests.some((item)=>item.method==='DELETE')).toBe(true))
+})
+
+
+test('keeps sessions viewable and blocks creation when managed Gateway configuration is missing',async()=>{
+  brokerDeployment={
+    available:false,
+    ready:false,
+    missing:['IBKR_GATEWAY_IMAGE','QCH_API_HOST','QCH_SERVICE_TOKEN'],
+    invalid:[],
+  }
+  render(<App />)
+
+  expect(await screen.findByRole('heading',{name:'Paper alpha'})).toBeInTheDocument()
+  expect(screen.getByRole('heading',{name:'Live beta'})).toBeInTheDocument()
+  const message=await screen.findByRole('status')
+  expect(message).toHaveTextContent('Managed IB Gateway session creation is unavailable.')
+  expect(message).toHaveTextContent('IBKR_GATEWAY_IMAGE, QCH_API_HOST, QCH_SERVICE_TOKEN')
+  expect(message).not.toHaveTextContent('qch-secret')
+
+  const start=screen.getByRole('button',{name:'Start session'})
+  expect(start).toBeDisabled()
+  fireEvent.submit(start.closest('form')!)
+  await waitFor(()=>expect(requests.filter((item)=>item.path==='broker-sessions'&&item.method==='POST')).toHaveLength(0))
 })

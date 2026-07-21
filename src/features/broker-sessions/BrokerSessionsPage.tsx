@@ -13,6 +13,7 @@ interface StartPayload {display_name: string; username: string; password: string
 export function BrokerSessionsPage() {
   const queryClient=useQueryClient()
   const sessions=useQuery(queries.brokerSessions())
+  const system=useQuery(queries.system())
   const selectedSessionId=usePreferencesStore((state)=>state.selectedSessionId)
   const selectedAccountId=usePreferencesStore((state)=>state.selectedAccountId)
   const setSelectedSession=usePreferencesStore((state)=>state.setSelectedSession)
@@ -28,6 +29,8 @@ export function BrokerSessionsPage() {
   const [deleteTarget,setDeleteTarget]=useState<BrokerGatewaySession|null>(null)
   const activeSession=(sessions.data||[]).find((item)=>item.id===selectedSessionId)||(sessions.data||[])[0]||null
   const accounts=useQuery(queries.brokerSessionAccounts(activeSession?.id))
+  const brokerDeployment=system.data?.broker_deployment
+  const managedGatewayAvailable=Boolean(brokerDeployment&&(brokerDeployment.available??brokerDeployment.ready))
 
   useEffect(()=>{if(activeSession&&activeSession.id!==selectedSessionId)setSelectedSession(activeSession.id)},[activeSession,selectedSessionId,setSelectedSession])
   useEffect(()=>{
@@ -63,6 +66,7 @@ export function BrokerSessionsPage() {
 
   const submit=(event:React.FormEvent)=>{
     event.preventDefault()
+    if(!managedGatewayAvailable)return
     create.mutate({display_name:displayName.trim()||`${mode==='live'?'Live':'Paper'} IBKR`,username,password,mode})
   }
   const selectAccount=(account:BrokerSessionAccount)=>{setSelectedAccount(account.id);setSelectedPortfolio(account.default_portfolio_id,account.id)}
@@ -71,12 +75,17 @@ export function BrokerSessionsPage() {
     <PageHeader eyebrow="IBKR connectivity" title="IBKR Sessions" description="Provision and operate isolated paper and live IB Gateway sessions. Credentials are encrypted, consumed once, and never returned." />
     <section className="terminal-panel session-start-panel">
       <header className="panel-header"><div><h2>Start an IBKR session</h2><p>Each session gets its own child container, service token, noVNC password, accounts, and event cursor.</p></div><Plus /></header>
+      {brokerDeployment&&!managedGatewayAvailable&&<p className="inline-warning" role="status">Managed IB Gateway session creation is unavailable.
+        {brokerDeployment.missing.length>0&&<> Missing configuration: <code>{brokerDeployment.missing.join(', ')}</code>.</>}
+        {brokerDeployment.invalid.length>0&&<> Invalid configuration: <code>{brokerDeployment.invalid.join(', ')}</code>.</>}
+      </p>}
+      {system.isError&&<p className="inline-warning" role="status">Managed IB Gateway availability could not be determined. Session creation is disabled.</p>}
       <form className="form-grid session-start-form" onSubmit={submit}>
         <label>Display name<input aria-label="Display name" value={displayName} maxLength={128} onChange={(event)=>setDisplayName(event.target.value)} placeholder="Primary live" /></label>
         <label>IBKR username<input aria-label="IBKR username" value={username} maxLength={128} required autoComplete="username" onChange={(event)=>setUsername(event.target.value)} /></label>
         <label>Password<input aria-label="IBKR password" type="password" value={password} maxLength={512} required autoComplete="new-password" onChange={(event)=>setPassword(event.target.value)} /></label>
         <fieldset className="mode-control"><legend>Trading mode</legend><label><input type="radio" name="ibkr-mode" value="paper" checked={mode==='paper'} onChange={()=>setMode('paper')} />Paper</label><label><input type="radio" name="ibkr-mode" value="live" checked={mode==='live'} onChange={()=>setMode('live')} />Live</label></fieldset>
-        <button className="button-primary form-submit" type="submit" disabled={create.isPending}>{create.isPending?'Starting…':'Start session'}</button>
+        <button className="button-primary form-submit" type="submit" disabled={create.isPending||!managedGatewayAvailable}>{create.isPending?'Starting…':'Start session'}</button>
       </form>
       {create.isError&&<ErrorState title="Session was not started" error={create.error} compact />}
     </section>
