@@ -1,9 +1,30 @@
 import pytest
 import importlib
+import os
+from pathlib import Path
+import subprocess
+import sys
 from django.test import override_settings
 from django.urls import clear_url_caches
 
 pytestmark = pytest.mark.django_db
+
+
+MANAGED_GATEWAY_VARIABLES = (
+    "QCH_APP_ID",
+    "QCH_API_HOST",
+    "QCH_SERVICE_TOKEN",
+    "IBKR_GATEWAY_IMAGE",
+)
+
+
+def disable_managed_gateway(settings, monkeypatch):
+    settings.BROKER_SESSION_ENCRYPTION_KEY = "test-encryption-key"
+    for name in MANAGED_GATEWAY_VARIABLES:
+        setattr(settings, name, "")
+        monkeypatch.setenv(name, "")
+
+
 def test_health_and_api_envelope(client):
     body = client.get("/healthz").json()
     assert body["ok"] and body["data"]["status"] == "healthy"
@@ -30,21 +51,72 @@ def test_prefix_preserved_backend_health_api_and_dashboard_alias(client):
         clear_url_caches()
 
 
-def test_readiness_reports_missing_broker_configuration_names_only(client, settings):
-    settings.BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED = False
-    settings.BROKER_SESSION_ENCRYPTION_KEY = ""
-    settings.IBKR_GATEWAY_IMAGE = ""
-    settings.QCH_APP_ID = ""
-    settings.QCH_API_HOST = ""
-    settings.QCH_SERVICE_TOKEN = ""
+def test_backend_initializes_without_managed_gateway_environment():
+    environment = os.environ.copy()
+    for name in MANAGED_GATEWAY_VARIABLES:
+        environment[name] = ""
+    environment["DATABASE_URL"] = "sqlite:///:memory:"
+    result = subprocess.run(
+        [sys.executable, "manage.py", "check"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_health_and_readiness_succeed_when_only_managed_gateway_is_missing(client, settings, monkeypatch):
+    disable_managed_gateway(settings, monkeypatch)
+    settings.RECOMMENDATION_SYSTEM_ENABLED = False
+    assert client.get("/healthz").status_code == 200
     result = client.get("/readyz")
-    assert result.status_code == 503
-    details = result.json()["error"]["details"]
-    assert details["missing"] == [
-        "BROKER_SESSION_ENCRYPTION_KEY",
+    assert result.status_code == 200
+    deployment = result.json()["data"]["deployment"]
+    assert deployment["available"] is False and deployment["ready"] is False
+    assert deployment["missing"] == [
         "IBKR_GATEWAY_IMAGE",
         "QCH_API_HOST",
         "QCH_APP_ID",
         "QCH_SERVICE_TOKEN",
     ]
     assert "qch-secret" not in result.content.decode()
+
+
+def test_system_reports_managed_gateway_unavailable_without_exposing_values(client, settings, monkeypatch):
+    settings.BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED = True
+    disable_managed_gateway(settings, monkeypatch)
+    result = client.get("/api/v1/system/")
+    assert result.status_code == 200
+    deployment = result.json()["data"]["broker_deployment"]
+    assert deployment == {
+        "available": False,
+        "ready": False,
+        "missing": ["IBKR_GATEWAY_IMAGE", "QCH_API_HOST", "QCH_APP_ID", "QCH_SERVICE_TOKEN"],
+        "invalid": [],
+    }
+    assert "test-encryption-key" not in result.content.decode()
+
+
+def test_readiness_reports_invalid_managed_gateway_names_without_values(client, settings, monkeypatch):
+    settings.RECOMMENDATION_SYSTEM_ENABLED = False
+    settings.BROKER_SESSION_ENCRYPTION_KEY = "test-encryption-key"
+    settings.IBKR_GATEWAY_IMAGE = "ghcr.io/OWNER/trading-engine-ib-gateway@sha256:REPLACE_WITH_DIGEST"
+    settings.QCH_APP_ID = "configured-app"
+    settings.QCH_API_HOST = "https://qch.example"
+    settings.QCH_SERVICE_TOKEN = "configured-token"
+    monkeypatch.setenv("QCH_APP_ID", settings.QCH_APP_ID)
+    monkeypatch.setenv("QCH_API_HOST", settings.QCH_API_HOST)
+    monkeypatch.setenv("QCH_SERVICE_TOKEN", settings.QCH_SERVICE_TOKEN)
+
+    result = client.get("/readyz")
+
+    assert result.status_code == 200
+    deployment = result.json()["data"]["deployment"]
+    assert deployment["available"] is False
+    assert deployment["missing"] == []
+    assert deployment["invalid"] == ["IBKR_GATEWAY_IMAGE"]
+    assert "REPLACE_WITH_DIGEST" not in result.content.decode()
+    assert "configured-token" not in result.content.decode()

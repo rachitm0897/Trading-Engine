@@ -8,6 +8,7 @@ import json
 import hashlib
 import uuid
 from apps.core.idempotency import IdempotencyConflict
+from apps.broker_gateway.configuration import managed_broker_deployment_configuration
 
 def response(data=None, *, status=200, error=None, meta=None):
     return JsonResponse({"ok": error is None, "data": data if error is None else None, "error": error, "meta": meta or {}}, status=status, safe=False)
@@ -31,38 +32,15 @@ def dashboard_alias(request):
     return HttpResponseRedirect(f"{settings.APP_BASE_PATH}/api/v1/dashboard/summary/")
 
 
-def broker_deployment_configuration():
-    if settings.BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED:
-        return {"ready": True, "missing": [], "invalid": []}
-    required = {
-        "BROKER_SESSION_ENCRYPTION_KEY": settings.BROKER_SESSION_ENCRYPTION_KEY,
-        "IBKR_GATEWAY_IMAGE": settings.IBKR_GATEWAY_IMAGE,
-        "QCH_APP_ID": settings.QCH_APP_ID,
-        "QCH_API_HOST": settings.QCH_API_HOST,
-        "QCH_SERVICE_TOKEN": settings.QCH_SERVICE_TOKEN,
-    }
-    missing = sorted(key for key, value in required.items() if not str(value or "").strip())
-    invalid = []
-    if settings.IBKR_GATEWAY_IMAGE and "@sha256:" not in settings.IBKR_GATEWAY_IMAGE:
-        invalid.append("IBKR_GATEWAY_IMAGE")
-    return {"ready": not missing and not invalid, "missing": missing, "invalid": invalid}
-
-
 def readiness(request):
-    """Deployment gate: recommendation traffic is ready only after every profile cache is warm."""
+    """Check required Backend readiness and report optional broker deployment status."""
     invalid = method_guard(request, "GET")
     if invalid:
         return invalid
     try:
         with connection.cursor() as cursor:
             cursor.execute("SELECT 1")
-        deployment = broker_deployment_configuration()
-        if not deployment["ready"]:
-            return response(status=503, error={
-                "code": "DEPLOYMENT_CONFIGURATION_INCOMPLETE",
-                "message": "Broker-session deployment configuration is incomplete",
-                "details": deployment,
-            })
+        deployment = managed_broker_deployment_configuration()
         if not settings.RECOMMENDATION_SYSTEM_ENABLED:
             return response({"status": "ready", "recommendation_system": "disabled", "deployment": deployment})
         from apps.portfolio_construction.rules import MAXIMUM_RISK
@@ -83,6 +61,7 @@ def readiness(request):
         ).values_list("goal_timeframe", "risk_level"))
         missing = sorted(expected - current)
         details = {
+            "deployment": deployment,
             "universe_members": universe.members.filter(active=True, membership_end__isnull=True).count(),
             "strategy_implementations": len(REGISTRY), "current_cache_profiles": len(expected & current),
             "required_cache_profiles": len(expected), "missing_cache_profiles": [f"{key}:{risk}" for key, risk in missing],
@@ -96,7 +75,8 @@ def readiness(request):
         return response({"status": "ready", "deployment": deployment, **details})
     except Exception as exc:
         return response(status=503, error={
-            "code": "RECOMMENDATION_SYSTEM_NOT_READY", "message": str(exc), "details": {},
+            "code": "RECOMMENDATION_SYSTEM_NOT_READY", "message": str(exc),
+            "details": {"deployment": managed_broker_deployment_configuration()},
         })
 
 @ensure_csrf_cookie
@@ -108,7 +88,7 @@ def system(request):
     is_admin = bool(getattr(request, "user", None) and request.user.is_authenticated and request.user.is_active and request.user.is_staff)
     return response({"mode":"MULTI_SESSION","execution_mode":settings.NEW_EXECUTION_MODE,
         "allow_live_trading":settings.ALLOW_LIVE_TRADING,
-        "broker_deployment":broker_deployment_configuration(),
+        "broker_deployment":managed_broker_deployment_configuration(),
         "is_admin":is_admin,"global_kill_switch": settings.GLOBAL_KILL_SWITCH or KillSwitch.objects.filter(scope="GLOBAL", enabled=True).exists(),
         "material_breaks": ReconciliationBreak.objects.filter(material=True, resolved=False).count(), "time": timezone.now().isoformat()})
 

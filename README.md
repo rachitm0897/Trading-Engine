@@ -12,7 +12,7 @@ python manage.py runserver 8000
 pytest
 ```
 
-Process liveness is `GET /healthz`; deployment/database/recommendation readiness is `GET /readyz`. APIs use `/api/v1/` and return the documented `{ok,data,error,meta}` envelope. `APP_BASE_PATH` may be empty locally or `/trading_eng_backend` on QFS. Managed sessions accept only `paper` and `live`; live order execution still requires the independent `ALLOW_LIVE_TRADING` gate and every existing safety control.
+Process liveness is `GET /healthz`; required database/recommendation readiness is `GET /readyz`. The readiness and System responses report non-secret managed Gateway configuration status, but missing QCH or child-image configuration disables only managed sessions and does not by itself return HTTP 503. APIs use `/api/v1/` and return the documented `{ok,data,error,meta}` envelope. `APP_BASE_PATH` may be empty locally or `/trading_eng_backend` on QFS. Managed sessions accept only `paper` and `live`; live order execution still requires the independent `ALLOW_LIVE_TRADING` gate and every existing safety control.
 
 `docker build -t trading-engine-backend .` works from this directory. Runtime Kafka schemas and the canonical research bundle are packaged below `Backend`, so the production image does not depend on its repository parent. The QFS container listens on `${PORT:-8000}` and runs Django ASGI, Celery workers, and Celery Beat under Supervisor. PostgreSQL, Redis, Kafka, and Flink URLs must reference external services in production.
 
