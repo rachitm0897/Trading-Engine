@@ -20,7 +20,7 @@ There are six distinct deployment roles:
 2. The public Frontend QFS app serves the React build through Nginx.
 3. The public standalone Gateway QFS app is for manual or diagnostic use.
 4. Private per-session Gateway children are created by the Backend through QCH. Every `BrokerGatewaySession` has a unique child name, service token, noVNC password, account set, and event cursor.
-5. A public Docker Hub repository stores the manually published `IB_gateway` image that QCH pulls for private children.
+5. A Docker Hub repository stores the manually published `IB_gateway` image that QCH pulls for private children. It may be private during testing or public for server deployment.
 6. External PostgreSQL, Redis, Kafka, and Flink services support the Backend.
 
 The standalone public Gateway never replaces `IBKR_GATEWAY_IMAGE` and is never used as the shared route for managed trading sessions. Managed child URLs always have the form `http://<container-name>:8080/api/v1`. Do not publish child TWS ports 4001/4002, VNC 5900, websockify 6080, internal Gunicorn 8001, or child HTTP 8080. The Backend requires no Docker socket, SSH, or direct Docker daemon access.
@@ -68,7 +68,7 @@ FLINK_REST_URL=https://FLINK_HOST
 
 Also configure `FINNHUB_API_KEY` and the Finnhub timeout/fallback variables when those providers are enabled. Research controls include `RESEARCH_ENABLED`, `RECOMMENDATION_SYSTEM_ENABLED`, bundle/artifact paths, provider, lookback, concurrency, score-age, and cache-age variables listed in [`Backend/.env.example`](../Backend/.env.example). The production image contains its own research bundle and Kafka schemas; it does not read repository-parent files.
 
-`GET /healthz` is process liveness and does not wait for database or recommendation caches. `GET /readyz` checks required database and recommendation-cache readiness and reports missing broker/QCH variable names without returning values, including whether the child image is digest-pinned. Missing managed Gateway configuration does not by itself return HTTP 503. The System API returns the same non-secret broker deployment status, and managed-session actions return `BROKER_GATEWAY_NOT_CONFIGURED` until it is available.
+`GET /healthz` is process liveness and does not wait for database or recommendation caches. `GET /readyz` checks required database and recommendation-cache readiness and reports only missing or invalid broker/QCH variable names, never the Docker Hub username, repository, tag, digest, visibility, or credentials. Missing managed Gateway configuration does not by itself return HTTP 503. The System API returns the same non-secret broker deployment status, and managed-session actions return `BROKER_GATEWAY_NOT_CONFIGURED` until it is available.
 
 Required public routes include:
 
@@ -141,6 +141,8 @@ Authorization: Bearer <QCH_SERVICE_TOKEN>
 
 Create sends required `image` and `name`, optional `env` and `network`, and normally omits `command` so the image `ENTRYPOINT` runs. The session environment contains `DJANGO_SECRET_KEY`, `GATEWAY_SERVICE_TOKEN`, `NOVNC_PASSWORD`, `IB_USERNAME`, `IB_PASSWORD`, `IBC_TRADING_MODE`, `BROKER_ADAPTER=ib_async`, `PORT=8080`, and `APP_BASE_PATH=`. The Backend generates the Django secret only for this create request and does not persist it. HTTP 409 and ambiguous retryable creates are resolved by listing and adopting only the expected name. A delete 404 is successful idempotent deletion.
 
+The create API has no registry-authentication fields. The Backend does not run Docker, pull the image itself, accept registry credentials from the browser, store them on sessions, or send them in the QCH request or child environment. QCH receives only the validated configured Docker Hub image reference. An image-pull failure is reported as a generic QCH provisioning failure because it can mean a missing image, a wrong tag or digest, network failure, missing host authentication, rate limiting, or an unsupported architecture; it does not prove the repository is private.
+
 Temporary IBKR credentials are encrypted at rest. They survive retryable QCH/network failures and Celery retries, then are deleted after confirmed creation/adoption, final non-retryable failure, final retry exhaustion, or TTL expiry. The periodic monitor requeues stale `CREATING` sessions so a lost task cannot leave one permanently stuck. When managed QCH deployment is not configured, monitoring exits with a disabled result without changing existing sessions; unrelated Celery work continues. If a private child exits or disappears while QCH is available, the Backend records a visible error, disables trading commands, and waits for explicit credential-based recreation; it does not silently replace the failure.
 
 QCH's child API does **not** expose volume mounting, automatic restart policies, or public Traefik routes. Do not document or depend on those capabilities.
@@ -166,7 +168,29 @@ docker pull docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
 docker image inspect --format='{{index .RepoDigests 0}}' docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
 ```
 
-Set `IBKR_GATEWAY_IMAGE` to `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway@sha256:<digest>`. A fixed tag such as `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0` is accepted for development, but never use `latest` in production. The Docker Hub repository must be public because the current QCH create contract has no registry-credential field.
+The Backend requires the explicit `docker.io/` prefix. Set `IBKR_GATEWAY_IMAGE` to `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway@sha256:<64-hex-digest>` for production. A fixed tag such as `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0` is accepted for testing; `latest`, bare repositories, URL-style values, other registries, placeholders, and malformed tags or digests are rejected.
+
+### Private-image testing
+
+```text
+Docker Hub repository: private
+IBKR_GATEWAY_IMAGE: docker.io/<username>/<repository>:<fixed-version>
+QCH host: authenticated with read permission
+Backend: no Docker Hub credentials
+```
+
+Provision Docker Hub read authentication directly on the QCH/Docker host, outside this repository and outside Backend configuration. The host must be able to perform the equivalent of an authenticated Docker pull. Do not place the token in QFS Backend variables, browser requests, broker-session records, QCH request fields, or child environments.
+
+### Public-image server deployment
+
+```text
+Docker Hub repository: public
+IBKR_GATEWAY_IMAGE: docker.io/<username>/<repository>@sha256:<digest>
+QCH host: no registry authentication required
+Backend: unchanged
+```
+
+The Backend cannot detect or control image visibility. Changing the same Docker Hub repository from private to public requires no Backend code change, and the same configured image reference may continue to be used. Only the QCH host's need for registry authentication changes.
 
 ## Build and post-deployment checks
 

@@ -80,6 +80,8 @@ docker pull docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
 docker image inspect --format='{{index .RepoDigests 0}}' docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
 ```
 
-Set `IBKR_GATEWAY_IMAGE` to `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway@sha256:<digest>`. The Docker Hub repository must be public because the current QCH create API does not accept registry credentials. Publication is manual; do not use `latest` for production. See the exact app settings, routes, storage, WebSocket requirements, smoke commands, and QCH limitations in [QFS deployment](docs/QFS_DEPLOYMENT.md).
+Set `IBKR_GATEWAY_IMAGE` to `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway@sha256:<64-hex-digest>` for production. A fixed non-`latest` tag such as `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0` is accepted for testing. Publication is manual.
+
+Private testing uses a private Docker Hub repository and a fixed version reference; the QCH/Docker host must already have read authentication sufficient for an authenticated pull. Public server deployment uses a public repository, preferably with the immutable digest reference, and requires no Docker Hub authentication. In both cases the Backend only sends the configured image reference: it does not accept, store, or forward registry credentials and does not determine repository visibility. Changing the same repository from private to public therefore requires no Backend code change. See the exact app settings, routes, storage, WebSocket requirements, smoke commands, and QCH limitations in [QFS deployment](docs/QFS_DEPLOYMENT.md).
 
 > Live gateway sessions are supported, but live orders still require the independent `ALLOW_LIVE_TRADING=true` deployment gate and all existing kill switches, reconciliation, confirmation, validation, and pre-trade risk controls. Actionable recommendations remain long-only; short and pair/basket execution remain disabled.

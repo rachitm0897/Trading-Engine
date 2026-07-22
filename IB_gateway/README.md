@@ -1,6 +1,6 @@
-# IB Gateway image
+# IB Gateway Docker Hub image
 
-This directory builds the reusable, registry-neutral image used for one isolated IBKR session. The image contains IB Gateway, IBC, Xvfb, Fluxbox, x11vnc, noVNC/websockify, Django/Gunicorn, Nginx, Supervisor, the broker worker, and Tini as PID 1. Only Nginx port `8080` is exposed; TWS (`4001`/`4002`), VNC (`5900`), websockify (`6080`), and Gunicorn (`8001`) stay on loopback.
+This directory builds the reusable Docker Hub image used for one isolated IBKR session. The image contains IB Gateway, IBC, Xvfb, Fluxbox, x11vnc, noVNC/websockify, Django/Gunicorn, Nginx, Supervisor, the broker worker, and Tini as PID 1. Only Nginx port `8080` is exposed; TWS (`4001`/`4002`), VNC (`5900`), websockify (`6080`), and Gunicorn (`8001`) stay on loopback.
 
 The Interactive Brokers installer is Linux x86-64 only. Production builds must target `linux/amd64`; ARM64 is not supported or claimed.
 
@@ -48,7 +48,12 @@ A fixed version tag is supported during development:
 IBKR_GATEWAY_IMAGE=docker.io/<DOCKERHUB_USERNAME>/trading-engine-ib-gateway:v1.0.0
 ```
 
-Do not use `latest` in production. The Docker Hub repository must initially be public because the current QCH create-container API has no registry-credential field.
+Do not use `latest`; the Backend rejects it. Repository visibility is an operational property of Docker Hub, not session configuration:
+
+- Private testing: keep the repository private, use a fixed version such as `docker.io/<DOCKERHUB_USERNAME>/trading-engine-ib-gateway:v1.0.0`, and authenticate the QCH/Docker host with read permission. The host must be able to perform the equivalent of an authenticated pull.
+- Public server deployment: make the repository public, use the immutable `docker.io/<DOCKERHUB_USERNAME>/trading-engine-ib-gateway@sha256:<digest>` reference, and use no registry authentication on QCH.
+
+The Backend flow is identical in both cases. It never receives or stores the Docker Hub token, never forwards registry credentials to the child, and cannot make a repository public or private. Changing the same repository from private to public requires no Backend code change and the configured reference can remain unchanged. Never put an actual Docker Hub token in this repository.
 
 ## Runtime contract
 

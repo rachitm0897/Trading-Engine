@@ -109,6 +109,18 @@ class QCHBrokerClient:
         return next((item for item in self.list_containers() if item.name == name), None)
 
     def create_container(self, *, name, image, command=None, env=None, network=None):
+        for field, value in (("name", name), ("image", image)):
+            if not isinstance(value, str) or not value.strip():
+                raise QCHError(f"QCH child container {field} is required")
+            if "\r" in value or "\n" in value:
+                raise QCHError(f"QCH child container {field} must be a single line")
+        if env is not None and not isinstance(env, dict):
+            raise QCHError("QCH child container env must be a dictionary")
+        if network is not None:
+            if not isinstance(network, str) or not network.strip():
+                raise QCHError("QCH child container network must be non-empty when supplied")
+            if "\r" in network or "\n" in network:
+                raise QCHError("QCH child container network must be a single line")
         payload = {"name": name, "image": image}
         if command is not None:
             payload["command"] = command

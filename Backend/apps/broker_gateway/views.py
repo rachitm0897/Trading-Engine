@@ -29,6 +29,25 @@ from .services import container_name_for, delete_session, temporary_secret_expir
 from .tasks import provision_broker_session
 
 
+CONTAINER_CONFIGURATION_FIELDS = {
+    "image",
+    "ibkr_gateway_image",
+    "registry_username",
+    "registry_password",
+    "registry_token",
+    "registry_auth",
+    "docker_config",
+    "pull_secret",
+    "dockerhub_token",
+    "dockerhub_password",
+    "dockerhub_username",
+    "dockerhub_auth",
+    "docker_username",
+    "docker_password",
+    "docker_token",
+}
+
+
 def _payload(request):
     value = json.loads(request.body or b"{}")
     if not isinstance(value, dict):
@@ -43,6 +62,11 @@ def _bounded(value, field, maximum, *, required=True):
     if len(result) > maximum:
         raise ValueError(f"{field} cannot exceed {maximum} characters")
     return result
+
+
+def _reject_container_configuration(payload):
+    if {str(name).casefold() for name in payload} & CONTAINER_CONFIGURATION_FIELDS:
+        raise ValueError("The Gateway image and registry authentication are configured by the server")
 
 
 def _managed_broker_preflight():
@@ -145,6 +169,7 @@ def sessions(request, session_id=None, action=None):
             if unavailable:
                 return unavailable
             payload = _payload(request)
+            _reject_container_configuration(payload)
             display_name = _bounded(payload.get("display_name") or "IBKR session", "display_name", 128)
             username = _bounded(payload.get("username"), "username", 128)
             password = _bounded(payload.get("password"), "password", 512)
@@ -187,6 +212,7 @@ def sessions(request, session_id=None, action=None):
             if unavailable:
                 return unavailable
             payload = _payload(request)
+            _reject_container_configuration(payload)
             username = _bounded(payload.get("username"), "username", 128)
             password = _bounded(payload.get("password"), "password", 512)
             if session.status in {session.Status.STOPPING, session.Status.DELETED}:
