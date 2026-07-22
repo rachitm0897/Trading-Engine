@@ -1,4 +1,4 @@
-i# Streaming subsystem
+# Streaming subsystem
 
 Kafka is durable transport, PyFlink owns continuous market transformations, and PostgreSQL remains authoritative for every financial fact. Neither Kafka nor Flink imports the OMS or Gateway and neither can place orders.
 

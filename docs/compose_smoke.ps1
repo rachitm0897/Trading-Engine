@@ -1,36 +1,46 @@
 $ErrorActionPreference = "Stop"
 
-docker compose config --quiet
-docker compose up --build -d
+$expectedServices = @(
+    "flink-jobmanager",
+    "flink-taskmanager",
+    "kafka",
+    "kafka-init",
+    "postgres",
+    "redis"
+) | Sort-Object
 
-$deadline = (Get-Date).AddMinutes(3)
+docker compose config --quiet
+$configuredServices = @(docker compose config --services | Sort-Object)
+if (Compare-Object $expectedServices $configuredServices) {
+    throw "Compose contains an unexpected service set"
+}
+
+docker compose up -d
+
+$expectedRunning = @("flink-jobmanager", "flink-taskmanager", "kafka", "postgres", "redis")
+$deadline = (Get-Date).AddMinutes(5)
 do {
+    $running = @(docker compose ps --status running --services)
     $states = @(docker compose ps --format json | ConvertFrom-Json)
+    $missing = @($expectedRunning | Where-Object { $_ -notin $running })
     $unhealthy = @($states | Where-Object { $_.Health -and $_.Health -ne "healthy" })
-    if ($states.Count -eq 7 -and $unhealthy.Count -eq 0) { break }
+    if ($missing.Count -eq 0 -and $unhealthy.Count -eq 0) { break }
     Start-Sleep -Seconds 3
 } while ((Get-Date) -lt $deadline)
 
-if ($states.Count -ne 7 -or $unhealthy.Count -ne 0) { throw "Compose services did not become healthy" }
-
-$null = Invoke-RestMethod "http://127.0.0.1:8000/healthz"
-$null = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:5173/healthz"
-$null = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:5173/dashboard"
-$null = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:5173/ibkr-sessions"
-$runtimeConfig = (Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:5173/runtime-config.js").Content
-if ($runtimeConfig -notmatch 'http://localhost:8000/api/v1') { throw "Frontend runtime Backend URL is incorrect" }
-$accounts = Invoke-RestMethod "http://127.0.0.1:8000/api/v1/accounts/"
-if (@($accounts.data | Where-Object { $_.account_id -eq "DU-MOCK" }).Count) { throw "Demo broker account must not be created" }
-
-try {
-    Invoke-RestMethod "http://127.0.0.1:8000/api/v1/broker-sessions/" -Method Post -ContentType "application/json" -Body '{"display_name":"Unavailable locally","username":"unused","password":"unused","mode":"paper"}'
-    throw "Managed broker-session creation unexpectedly succeeded without QCH"
-} catch {
-    if ($_.Exception.Response.StatusCode.value__ -ne 503) { throw }
+if ($missing.Count -ne 0 -or $unhealthy.Count -ne 0) {
+    throw "Infrastructure services did not become ready"
 }
 
-$kafkaPorts = docker inspect finflock-trading-engine-kafka-1 --format '{{json .NetworkSettings.Ports}}'
-$flinkPorts = docker inspect finflock-trading-engine-flink-jobmanager-1 --format '{{json .NetworkSettings.Ports}}'
-if ($kafkaPorts -match 'HostPort' -or $flinkPorts -match 'HostPort') { throw "Kafka or Flink published a private listener" }
+$kafkaInit = @(docker compose ps -a --format json kafka-init | ConvertFrom-Json)
+if ($kafkaInit.Count -ne 1 -or $kafkaInit[0].State -ne "exited" -or $kafkaInit[0].ExitCode -ne 0) {
+    throw "Kafka topic initialization did not complete successfully"
+}
 
-Write-Output "Compose smoke test passed"
+foreach ($service in @("redis", "kafka", "flink-jobmanager", "flink-taskmanager")) {
+    $containerId = docker compose ps -q $service
+    $ports = docker inspect $containerId --format '{{json .NetworkSettings.Ports}}'
+    if ($ports -match 'HostPort') { throw "$service published a private listener" }
+}
+
+Write-Output "Infrastructure Compose smoke test passed"

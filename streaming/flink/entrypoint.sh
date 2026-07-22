@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 
+# Preserve job identity and recover from the latest available checkpoint.
 if [ "${1:-}" = "jobmanager" ] && [ "${AUTO_SUBMIT_FLINK_JOBS:-true}" = "true" ]; then
   /docker-entrypoint.sh jobmanager &
   manager_pid=$!

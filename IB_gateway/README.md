@@ -18,18 +18,15 @@ docker push <DOCKERHUB_USERNAME>/trading-engine-ib-gateway:<version>
 
 Optional OCI metadata uses `OCI_VERSION`, `OCI_REVISION`, and `OCI_CREATED` build arguments. Never put credentials in build arguments or labels.
 
-After publication, resolve the immutable Docker Hub digest and configure it only on the Backend:
+After publication, resolve the immutable Docker Hub digest and configure that digest only on the Backend:
 
 ```bash
 docker pull docker.io/<DOCKERHUB_USERNAME>/trading-engine-ib-gateway:<version>
 docker image inspect --format='{{index .RepoDigests 0}}' docker.io/<DOCKERHUB_USERNAME>/trading-engine-ib-gateway:<version>
 ```
 
-```text
-IBKR_GATEWAY_IMAGE=docker.io/<DOCKERHUB_USERNAME>/trading-engine-ib-gateway@sha256:<digest>
-```
-
-QCH performs the pull. The Backend only sends the validated image reference and never handles registry credentials.
+QCH performs the pull from the immutable
+`docker.io/<DOCKERHUB_USERNAME>/trading-engine-ib-gateway@sha256:<digest>` reference. The Backend only sends that validated reference and never handles registry credentials.
 
 ## Child contract
 

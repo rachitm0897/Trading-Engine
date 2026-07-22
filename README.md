@@ -1,76 +1,90 @@
-# Finflock IBKR Trading Execution Engine
+# Trading Engine Infrastructure
 
-A paper-first execution platform that converts deterministic portfolio targets into risk-checked orders, broker executions, append-only ledgers, and reconciliation records.
+This branch is the standalone infrastructure stack and private IB Gateway image source. It is not an all-in-one application image and it is not a public QFS website.
 
-## Repository components
+The Compose stack contains only PostgreSQL, Redis, Kafka, Kafka topic initialization, Flink JobManager, and Flink TaskManager. Application deployments consume these services through their own environment variables; no application source or application credentials are present here.
 
-- `Backend/` contains Django ASGI, Celery workers, research, allocation, risk, OMS, execution, and reconciliation.
-- `Frontend/` contains the React/TypeScript operator application served by Nginx.
-- `IB_gateway/` builds the reusable `linux/amd64` Docker Hub image used for one private IBKR session child.
-- `streaming/` contains Kafka contracts and PyFlink jobs. PostgreSQL remains the financial source of truth.
+## Compose stack
 
-Only the private Gateway child owns an `ib_async`/TWS connection. The browser, Frontend, Backend, Kafka, and Flink never connect to a TWS socket directly.
+Validate and start the stack from the repository root:
 
-## Production architecture
+```bash
+docker compose config --quiet
+docker compose up -d
+docker compose ps
+```
 
-QFS contains exactly two public applications:
+The `private` Compose network carries service-to-service traffic. PostgreSQL is published on `${POSTGRES_PORT:-5433}` for controlled local access. Redis, Kafka, and Flink do not publish host listeners. Production consumers should use secured externally reachable endpoints or an explicitly managed shared network rather than relying on sibling source checkouts.
 
-| QFS application | Root/build context | Dockerfile | Public URL |
-| --- | --- | --- | --- |
-| Frontend | `Frontend` | `Frontend/Dockerfile` | `https://qfsplatform.com/trading_eng_frontend` |
-| Backend | `Backend` | `Backend/Dockerfile` | `https://qfsplatform.com/trading_eng_backend` |
+Compose owns these named volumes:
 
-PostgreSQL, Redis, Celery storage, Kafka, and Flink are external and are configured only on the Backend. Broker sessions use this path:
+- `postgres_data` for PostgreSQL data;
+- `kafka_data` for Kafka logs;
+- `flink_checkpoints` for Flink checkpoints; and
+- `flink_savepoints` for Flink savepoints.
+
+`docker compose down` removes containers and the project network but preserves the named volumes. Add `-v` only when intentionally discarding all local infrastructure state.
+
+## Kafka topics
+
+After Kafka passes its health check, the one-shot `kafka-init` service mounts `streaming/kafka/create-topics.sh` and creates the contracts declared in `streaming/kafka/topics.yml`. Schemas live under `streaming/kafka/schemas/`. Kafka is durable transport; PostgreSQL remains the authoritative store for financial facts.
+
+## Flink
+
+Both Flink services build `streaming/flink/Dockerfile`. The JobManager waits for topic initialization and automatically submits the versioned Python jobs. JobManager and TaskManager share checkpoint and savepoint volumes, use stable job/operator identities, and communicate with Kafka through the Compose network.
+
+Build the Flink image independently with:
+
+```bash
+docker build -t trading-engine-flink ./streaming/flink
+```
+
+The streaming recovery smoke test restarts both Flink roles and verifies that all expected jobs recover:
+
+```powershell
+powershell -NoProfile -File docs/streaming_recovery_smoke.ps1
+```
+
+## Private IB Gateway image
+
+`IB_gateway/` is image source only. The managed Gateway is not a permanent Compose service and exposes no public QFS route. Build the child image for its required architecture:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --load \
+  -t trading-engine-ib-gateway:local \
+  ./IB_gateway
+```
+
+The image exposes port `8080` with public `/healthz`, authenticated `/api/v1/*`, and `/novnc/*`. It contains IB Gateway, IBC, noVNC, and its private HTTP service; it has no application-source dependency.
+
+For Docker Hub publication, use an immutable version tag, push it, and resolve the repository digest:
+
+```bash
+docker tag trading-engine-ib-gateway:local <dockerhub-user>/trading-engine-ib-gateway:<version>
+docker push <dockerhub-user>/trading-engine-ib-gateway:<version>
+docker image inspect --format='{{index .RepoDigests 0}}' <dockerhub-user>/trading-engine-ib-gateway:<version>
+```
+
+QCH, not Compose and not application-side Docker code, pulls that image and creates one private child container per managed broker session. Backend deployments consume only the resulting immutable reference:
 
 ```text
-Frontend session form
-  -> Backend broker-session API
-  -> QCH Sub-container Broker API
-  -> QCH pulls IBKR_GATEWAY_IMAGE from Docker Hub
-  -> one private Gateway child per session
-  -> Backend uses http://<child-name>:8080/api/v1
+docker.io/<dockerhub-user>/trading-engine-ib-gateway@sha256:<digest>
 ```
 
-The Backend validates and forwards only the configured image reference and child configuration. It does not run Docker, pull images, mount a Docker socket, or accept/store/forward registry credentials. Gateway children publish no host ports; managed noVNC is available only through the Backend broker-session path.
+Registry authentication belongs on the QCH host. Do not store registry credentials, brokerage credentials, QCH application credentials, or child service tokens in this branch.
 
-Build and publish the child image separately:
-
-```bash
-cd IB_gateway
-docker buildx build --platform linux/amd64 --load -t DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0 .
-docker push DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
-```
-
-Production should configure `IBKR_GATEWAY_IMAGE=docker.io/<username>/<repository>@sha256:<64-hex-digest>`. A fixed non-`latest` Docker Hub tag is accepted for controlled testing. See [QFS deployment](docs/QFS_DEPLOYMENT.md) for the complete variable matrix, routes, networking, WebSocket, publication, and access-control requirements.
-
-## Local development
-
-Compose starts PostgreSQL, Redis, Kafka, topic initialization, Flink, Backend, and Frontend. It does not start an IBKR Gateway. Without QCH and `IBKR_GATEWAY_IMAGE`, managed broker-session creation returns a configuration error while the rest of the platform remains available.
+## Tests and builds
 
 ```bash
-cp .env.example .env
-docker compose up --build -d
-docker compose ps
-powershell -NoProfile -File docs/compose_smoke.ps1
-```
-
-- Frontend: <http://localhost:5173>
-- Backend system API: <http://localhost:8000/api/v1/system/>
-- Backend liveness: <http://localhost:8000/healthz>
-
-See [local development](docs/LOCAL_DEVELOPMENT.md), [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), [research universe](docs/RESEARCH_UNIVERSE.md), and [recommendation engine](docs/RECOMMENDATION_ENGINE.md).
-
-## Tests and independent builds
-
-```bash
-cd Backend && pytest
-cd ../IB_gateway && pytest
-cd ../Frontend && npm ci && npm test && npm run test:production-build
-cd .. && python -m pytest streaming/flink/tests
 docker compose config --quiet
-docker build -t trading-engine-backend ./Backend
-docker build -t trading-engine-frontend ./Frontend
-docker buildx build --platform linux/amd64 --load -t trading-engine-gateway ./IB_gateway
+pip install -r IB_gateway/requirements.txt
+python -m pytest -q IB_gateway/tests
+pip install -r streaming/flink/requirements.txt
+python -m pytest -q streaming/flink/tests
+docker build --platform linux/amd64 -t trading-engine-gateway ./IB_gateway
+docker build -t trading-engine-flink ./streaming/flink
 ```
 
-`GET /healthz` is process liveness. Backend `GET /readyz` checks database and recommendation readiness; missing managed-session configuration does not make process health fail. Live broker sessions remain subject to `ALLOW_LIVE_TRADING`, kill switches, reconciliation, confirmation, validation, and pre-trade risk controls.
+Run `docs/compose_smoke.ps1` for a local infrastructure-only startup check. See `IB_gateway/README.md` and `streaming/README.md` for component contracts.

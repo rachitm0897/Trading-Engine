@@ -1,7 +1,0 @@
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.env
-db.sqlite3*
-tests/
-config/test_settings.py
