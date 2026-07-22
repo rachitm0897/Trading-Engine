@@ -29,7 +29,7 @@ RUN selected_arch="${TARGETARCH:-amd64}" && \
     fi
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl unzip nginx supervisor xvfb fluxbox x11vnc novnc websockify default-jre tini gettext-base procps \
+    ca-certificates curl unzip nginx supervisor xvfb fluxbox x11vnc x11-utils novnc websockify default-jre tini gettext-base procps \
     libxrender1 libxtst6 libxi6 libfreetype6 libgtk-3-0 libasound2 libnss3 libxss1 && rm -rf /var/lib/apt/lists/*
 COPY ibgateway_version.py /usr/local/bin/ibgateway-version
 RUN useradd -m -u 1000 ibgateway && mkdir -p /opt/ibc /opt/ibgateway /data /run/nginx && \
@@ -43,11 +43,11 @@ RUN useradd -m -u 1000 ibgateway && mkdir -p /opt/ibc /opt/ibgateway /data /run/
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY manage.py runtime_config.py entrypoint.sh start-ibgateway.sh supervisord.conf nginx.conf.template proxy_headers.conf ./
+COPY manage.py runtime_config.py entrypoint.sh start-ibgateway.sh wait-for-x.sh supervisord.conf nginx.conf.template proxy_headers.conf ./
 COPY broker ./broker
 COPY config ./config
 COPY gateway_service ./gateway_service
-RUN chmod +x entrypoint.sh start-ibgateway.sh /opt/ibc/scripts/*.sh && mkdir -p /var/log/supervisor
+RUN chmod +x entrypoint.sh start-ibgateway.sh wait-for-x.sh /opt/ibc/scripts/*.sh && mkdir -p /var/log/supervisor
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --retries=5 CMD curl -fsS http://127.0.0.1:${PORT:-8080}/healthz || exit 1
 ENTRYPOINT ["/usr/bin/tini", "--", "./entrypoint.sh"]

@@ -14,7 +14,10 @@ if [ "${1:-}" = "--validate-only" ]; then
   exit 0
 fi
 
-mkdir -p /data /home/ibgateway/.vnc /home/ibgateway/ibc
+mkdir -p /data /home/ibgateway/.vnc /home/ibgateway/ibc /home/ibgateway/Jts /tmp/.X11-unix
+chown root:root /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
 chown -R ibgateway:ibgateway /data /home/ibgateway
 
 novnc_password="$NOVNC_PASSWORD"
