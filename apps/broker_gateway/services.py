@@ -12,7 +12,7 @@ from apps.accounts.models import BrokerAccount
 from apps.portfolios.models import TradingPortfolio
 
 from .client import GatewayClient, GatewayError
-from .configuration import require_managed_broker_deployment
+from .configuration import configured_gateway_image, require_managed_broker_deployment
 from .crypto import decrypt_secret
 from .models import (
     BrokerGatewaySession,
@@ -234,6 +234,7 @@ def inspect_gateway_session(session, *, qch_client=None, container=None, synchro
 def provision_session(session_id, *, qch_client=None, sleep=time.sleep):
     require_managed_broker_deployment()
     try:
+        configured_image = configured_gateway_image()
         qch = qch_client or QCHBrokerClient()
         session = BrokerGatewaySession.objects.get(pk=session_id)
         if session.status in {session.Status.STOPPING, session.Status.DELETED}:
@@ -260,7 +261,7 @@ def provision_session(session_id, *, qch_client=None, sleep=time.sleep):
             try:
                 existing = qch.create_container(
                     name=session.child_container_name,
-                    image=settings.IBKR_GATEWAY_IMAGE,
+                    image=configured_image,
                     env=gateway_environment(session, username, password, gateway_token, novnc_password),
                     network=settings.QCH_SUBCONTAINER_NETWORK,
                 )

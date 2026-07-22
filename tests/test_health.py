@@ -140,3 +140,66 @@ def test_managed_gateway_allows_a_fixed_non_latest_development_tag(settings, mon
     deployment = managed_broker_deployment_configuration()
     assert deployment["available"] is False
     assert deployment["invalid"] == ["IBKR_GATEWAY_IMAGE"]
+
+
+def test_docker_hub_digest_and_fixed_tag_are_accepted_for_either_visibility():
+    from apps.broker_gateway.configuration import parse_docker_hub_image_reference
+
+    digest = "docker.io/example/trading-engine-ib-gateway@sha256:" + ("a" * 64)
+    tag = "docker.io/example/trading-engine-ib-gateway:v1.0.0"
+    for assumed_visibility in ("private", "public"):
+        assert assumed_visibility not in digest
+        assert parse_docker_hub_image_reference(digest) == digest
+        assert parse_docker_hub_image_reference(tag) == tag
+
+
+@pytest.mark.parametrize("image", [
+    "docker.io/example/trading-engine-ib-gateway:latest",
+    "docker.io/example/trading-engine-ib-gateway:LATEST",
+    "ghcr.io/example/trading-engine-ib-gateway:v1.0.0",
+    "quay.io/example/trading-engine-ib-gateway:v1.0.0",
+    "localhost/example/trading-engine-ib-gateway:v1.0.0",
+    "registry.example/example/trading-engine-ib-gateway:v1.0.0",
+    "https://docker.io/example/trading-engine-ib-gateway:v1.0.0",
+    "example/trading-engine-ib-gateway:v1.0.0",
+    "docker.io/example/trading-engine-ib-gateway",
+    "docker.io//trading-engine-ib-gateway:v1.0.0",
+    "docker.io/example/:v1.0.0",
+    "docker.io/example/nested/trading-engine-ib-gateway:v1.0.0",
+    "docker.io/example/trading-engine-ib-gateway@sha256:REPLACE_WITH_DIGEST",
+    "docker.io/example/trading-engine-ib-gateway@sha256:" + ("a" * 63),
+    "docker.io/example/trading-engine-ib-gateway@sha256:" + ("a" * 65),
+    "docker.io/example/trading-engine-ib-gateway:REPLACE_WITH_VERSION",
+    "docker.io/replace-me/trading-engine-ib-gateway:v1.0.0",
+    "docker.io/example/placeholder-repository:v1.0.0",
+    "docker.io/example/trading-engine-ib-gateway:v1.0.0?public=true",
+    "docker.io/example/trading-engine-ib-gateway:v1.0.0#fragment",
+    "docker.io/example/bad..repository:v1.0.0",
+    "docker.io/example/trading-engine-ib-gateway:-v1",
+    " docker.io/example/trading-engine-ib-gateway:v1.0.0",
+    "docker.io/example/trading-engine-ib-gateway:v1.0.0 ",
+    "docker.io/example/trading-engine-ib-gateway:v1.0.0\nnext",
+])
+def test_non_docker_hub_mutable_or_malformed_image_references_are_rejected(image):
+    from apps.broker_gateway.configuration import (
+        GatewayImageConfigurationError,
+        parse_docker_hub_image_reference,
+    )
+
+    with pytest.raises(GatewayImageConfigurationError):
+        parse_docker_hub_image_reference(image)
+
+
+def test_configured_gateway_image_strips_outer_spacing_but_rejects_line_breaks(settings):
+    from apps.broker_gateway.configuration import (
+        GatewayImageConfigurationError,
+        configured_gateway_image,
+    )
+
+    image = "docker.io/example/trading-engine-ib-gateway:v1.0.0"
+    settings.IBKR_GATEWAY_IMAGE = f"  {image}\t"
+    assert configured_gateway_image() == image
+
+    settings.IBKR_GATEWAY_IMAGE = image + "\n"
+    with pytest.raises(GatewayImageConfigurationError):
+        configured_gateway_image()

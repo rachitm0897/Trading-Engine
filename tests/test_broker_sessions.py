@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from apps.accounts.models import BrokerAccount
 from apps.broker_gateway.client import GatewayClient, GatewayRoute, GatewayRouteError, GatewaySessionUnavailable
+from apps.broker_gateway.configuration import ManagedBrokerGatewayUnavailable
 from apps.broker_gateway.crypto import decrypt_secret, encrypt_secret, issue_novnc_access_token
 from apps.broker_gateway.models import (
     BrokerGatewaySession,
@@ -44,7 +45,7 @@ def broker_settings(settings, monkeypatch):
     settings.NOVNC_ACCESS_TOKEN_TTL_SECONDS = 300
     settings.NOVNC_PROXY_CONNECT_TIMEOUT_SECONDS = 1
     settings.NOVNC_PROXY_MAX_BODY_BYTES = 1024 * 1024
-    settings.IBKR_GATEWAY_IMAGE = "registry.example/ibkr@sha256:" + ("a" * 64)
+    settings.IBKR_GATEWAY_IMAGE = "docker.io/example/trading-engine-ib-gateway@sha256:" + ("a" * 64)
     settings.QCH_SUBCONTAINER_NETWORK = "traefik"
     settings.QCH_API_HOST = "https://qch.example"
     settings.QCH_APP_ID = "app-1"
@@ -143,6 +144,25 @@ def test_creation_accepts_only_paper_live_encrypts_credentials_and_returns_no_se
     assert len(queued) == 2
 
 
+@pytest.mark.parametrize("field", [
+    "image", "IBKR_GATEWAY_IMAGE", "registry_auth", "DOCKERHUB_USERNAME", "DOCKERHUB_TOKEN",
+])
+def test_creation_rejects_browser_image_and_registry_auth_overrides(client, field):
+    result = client.post("/api/v1/broker-sessions/", data=json.dumps({
+        "display_name": "No override",
+        "username": "plain-user",
+        "password": "plain-password",
+        "mode": "paper",
+        field: "must-not-be-accepted",
+    }), content_type="application/json")
+
+    assert result.status_code == 400
+    assert result.json()["error"]["code"] == "BROKER_SESSION_INVALID"
+    assert "must-not-be-accepted" not in result.content.decode()
+    assert BrokerGatewaySession.objects.count() == 0
+    assert BrokerGatewaySessionSecret.objects.count() == 0
+
+
 def test_creation_preflight_returns_503_without_records_secrets_or_task(
     client, settings, monkeypatch, django_capture_on_commit_callbacks
 ):
@@ -186,6 +206,8 @@ def test_qch_payload_and_bearer_auth_do_not_leak_into_error():
     assert child.id == "child-1"
     assert request.headers["Authorization"] == "Bearer qch-secret"
     assert payload["network"] == "traefik" and "command" not in payload
+    assert set(payload) == {"name", "image", "env", "network"}
+    assert not ({"registry_username", "registry_password", "registry_token", "registry_auth", "docker_config", "pull_secret"} & set(payload))
     assert payload["env"]["IB_PASSWORD"] == "secret-password" and "environment" not in payload
     responses.post(url, status=500, json={"error": "secret-password qch-secret"})
     with pytest.raises(QCHError) as error:
@@ -194,6 +216,20 @@ def test_qch_payload_and_bearer_auth_do_not_leak_into_error():
             env={"IB_PASSWORD": "secret-password"}, network="traefik",
         )
     assert "secret-password" not in str(error.value) and "qch-secret" not in str(error.value)
+
+
+@pytest.mark.parametrize("payload", [
+    {"name": "", "image": "docker.io/example/gateway:v1"},
+    {"name": "child", "image": ""},
+    {"name": "child\nother", "image": "docker.io/example/gateway:v1"},
+    {"name": "child", "image": "docker.io/example/gateway:v1\nother"},
+    {"name": "child", "image": "docker.io/example/gateway:v1", "env": []},
+    {"name": "child", "image": "docker.io/example/gateway:v1", "network": ""},
+    {"name": "child", "image": "docker.io/example/gateway:v1", "network": "traefik\rnext"},
+])
+def test_qch_create_rejects_invalid_local_payload_without_http(payload):
+    with pytest.raises(QCHError):
+        QCHBrokerClient().create_container(**payload)
 
 
 @responses.activate
@@ -212,6 +248,17 @@ def test_qch_direct_list_409_adoption_and_name_encoded_idempotent_delete():
     responses.delete(delete_url, status=404)
     assert QCHBrokerClient().delete_container(existing["name"]) is False
     assert responses.calls[-1].request.url == delete_url
+
+
+@responses.activate
+def test_qch_expected_name_lookup_ignores_unrelated_ibkr_containers():
+    url = "https://qch.example/api/apps/app-1/containers"
+    responses.get(url, status=200, json=[
+        {"id": "other-1", "name": "some-ibkr-container", "status": "RUNNING"},
+        {"id": "other-2", "name": "trading-engine-ibkr-similar", "status": "RUNNING"},
+    ])
+
+    assert QCHBrokerClient().find_by_name("trading-engine-ibkr-expected") is None
 
 
 class FakeQCH:
@@ -254,6 +301,9 @@ def test_provision_consumes_secret_builds_required_environment_and_live_waits_fo
     assert provision_session(session.pk, qch_client=qch) == BrokerGatewaySession.Status.WAITING_FOR_2FA
     assert not BrokerGatewaySessionSecret.objects.filter(session=session).exists()
     environment = qch.created[0]["env"]
+    assert qch.created[0]["name"] == session.child_container_name
+    assert qch.created[0]["image"] == "docker.io/example/trading-engine-ib-gateway@sha256:" + ("a" * 64)
+    assert set(qch.created[0]) == {"name", "image", "env", "network"}
     assert environment["IB_USERNAME"] == "ib-user" and environment["IB_PASSWORD"] == "ib-password"
     assert environment["IBC_TRADING_MODE"] == "live" and environment["PORT"] == "8080"
     assert environment["APP_BASE_PATH"] == "" and environment["GATEWAY_SERVICE_TOKEN"] != environment["NOVNC_PASSWORD"]
@@ -261,6 +311,23 @@ def test_provision_consumes_secret_builds_required_environment_and_live_waits_fo
     assert "command" not in qch.created[0]
     session.refresh_from_db()
     assert session.commands_enabled is False
+
+
+def test_invalid_configured_image_stops_before_credentials_are_decrypted(settings, monkeypatch):
+    session = make_session("Invalid image", "paper")
+    add_secret(session)
+    settings.IBKR_GATEWAY_IMAGE = "ghcr.io/example/trading-engine-ib-gateway:v1.0.0"
+    monkeypatch.setattr(
+        "apps.broker_gateway.services.decrypt_secret",
+        lambda value: (_ for _ in ()).throw(AssertionError("credentials must not be decrypted")),
+    )
+
+    with pytest.raises(ManagedBrokerGatewayUnavailable):
+        provision_session(session.pk, qch_client=FakeQCH())
+
+    session.refresh_from_db()
+    assert session.status == BrokerGatewaySession.Status.CREATING
+    assert BrokerGatewaySessionSecret.objects.filter(session=session).exists()
 
 
 def test_gateway_environment_uses_an_ephemeral_unique_django_secret():
@@ -293,6 +360,18 @@ def test_provision_adoption_deletes_secret_and_retryable_failure_keeps_it(monkey
     assert BrokerGatewaySessionSecret.objects.filter(session=failed).exists()
     record_provision_failure(failed.pk, QCHError("QCH unavailable", retryable=True), final=True)
     assert not BrokerGatewaySessionSecret.objects.filter(session=failed).exists()
+
+
+def test_final_provisioning_failure_deletes_temporary_credentials():
+    session = make_session("Final failure", "paper")
+    add_secret(session)
+    qch = FakeQCH()
+    qch.create_container = lambda **kwargs: (_ for _ in ()).throw(
+        QCHError("QCH sub-container request failed with HTTP 400", status_code=400)
+    )
+
+    assert provision_session(session.pk, qch_client=qch) == BrokerGatewaySession.Status.ERROR
+    assert not BrokerGatewaySessionSecret.objects.filter(session=session).exists()
 
 
 def test_ambiguous_create_timeout_lists_expected_name_before_retry(monkeypatch):

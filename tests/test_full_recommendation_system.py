@@ -215,7 +215,7 @@ def test_all_valid_goal_profiles_have_bounded_counts_and_live_constraints():
 
 def test_deployment_readiness_requires_all_20_warm_cache_profiles(client, settings, monkeypatch):
     settings.BROKER_SESSION_ENCRYPTION_KEY = "readiness-test-key"
-    settings.IBKR_GATEWAY_IMAGE = "registry.example/ibkr@sha256:" + ("a" * 64)
+    settings.IBKR_GATEWAY_IMAGE = "docker.io/example/trading-engine-ib-gateway@sha256:" + ("a" * 64)
     settings.QCH_APP_ID = "readiness-app"
     settings.QCH_API_HOST = "https://qch.example"
     settings.QCH_SERVICE_TOKEN = "readiness-token"
