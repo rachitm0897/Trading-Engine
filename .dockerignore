@@ -1,8 +1,5 @@
-.git
-.venv
-.pytest_cache
-**/__pycache__
-**/.pytest_cache
-Frontend/node_modules
-Frontend/dist
-*.md
+node_modules/
+dist/
+.env
+tests/
+*.tsbuildinfo
