@@ -33,6 +33,7 @@ QCH performs the pull from the immutable
 Nginx on port `8080` exposes only:
 
 - public `GET /healthz`
+- public `GET /readyz`
 - authenticated `/api/v1/*`
 - `/novnc/*`
 
@@ -53,7 +54,9 @@ PORT=8080
 
 Real-mode startup validates required values before creating runtime files or applying migrations. Missing values, placeholders, line breaks, invalid modes, and invalid numeric tuning fail closed without echoing secrets. Temporary IBKR credentials are written only to the mode-0600 runtime IBC configuration and removed from the process environment after configuration.
 
-Low-level optional defaults are `IBKR_CLIENT_ID=17`, `TWS_MAJOR_VRSN=1045`, `IBC_2FA_TIMEOUT=180`, `IBC_AUTO_RESTART_TIME=11:45 PM`, `BROKER_REFRESH_SECONDS=5`, `GATEWAY_DB_PATH=/data/gateway.sqlite3`, seven-day event/health retention, hourly compaction, and a 1000-row compaction batch. QCH currently attaches no persistent volume, so managed child state is disposable.
+The image detects the installed IB Gateway major from its launcher jar and configures IBC to use that exact installation. `TWS_MAJOR_VRSN` is an optional assertion only; startup fails with a version error if it does not match the installed major. Low-level optional defaults are `IBKR_CLIENT_ID=17`, `IBC_2FA_TIMEOUT=180`, `IBC_AUTO_RESTART_TIME=11:45 PM`, `BROKER_REFRESH_SECONDS=5`, `GATEWAY_DB_PATH=/data/gateway.sqlite3`, seven-day event/health retention, hourly compaction, and a 1000-row compaction batch. QCH currently attaches no persistent volume, so managed child state is disposable.
+
+`GET /healthz` is container liveness only and remains healthy while IB Gateway is waiting for login or live second-factor authentication. `GET /readyz` reports whether the internal services and broker session are ready; a waiting state returns `503` without affecting the Docker health check. Authenticated `GET /api/v1/diagnostics/` reports only process, port, and sanitized broker state and never returns configuration or secret values.
 
 ## Local image validation
 
@@ -73,11 +76,13 @@ Validate public health and authenticated API behavior:
 
 ```bash
 curl -i http://127.0.0.1:8080/healthz
+curl -i http://127.0.0.1:8080/readyz
 curl -i http://127.0.0.1:8080/api/v1/health/
+curl -i -H 'Authorization: Bearer mock-only-service-token-for-local-smoke' http://127.0.0.1:8080/api/v1/diagnostics/
 curl -i -H 'Authorization: Bearer mock-only-service-token-for-local-smoke' http://127.0.0.1:8080/api/v1/health/
 ```
 
-The expected statuses are `200`, `401`, and `200`. For a real local validation, place credentials in an owner-restricted environment file outside the repository and use `docker run --env-file`; never type or commit them.
+For a real local validation, place credentials in an owner-restricted environment file outside the repository and use `docker run --env-file`; never type or commit them.
 
 ## Tests
 

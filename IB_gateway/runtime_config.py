@@ -108,7 +108,6 @@ def validate_environment(environment: Mapping[str, str] | None = None) -> dict[s
         "PORT": ("8080", 65535),
         "IBC_2FA_TIMEOUT": ("180", 86400),
         "IBKR_CLIENT_ID": ("17", 999999),
-        "TWS_MAJOR_VRSN": ("1045", 99999),
         "BROKER_REFRESH_SECONDS": ("5", 86400),
     }
     for name, (default, maximum) in integer_fields.items():
@@ -116,6 +115,14 @@ def validate_environment(environment: Mapping[str, str] | None = None) -> dict[s
             normalized[name] = _positive_integer(environment, name, default, maximum)
         except ValueError:
             invalid.append(name)
+
+    if str(environment.get("TWS_MAJOR_VRSN", "") or "").strip():
+        try:
+            normalized["TWS_MAJOR_VRSN"] = _positive_integer(
+                environment, "TWS_MAJOR_VRSN", "", 99999
+            )
+        except ValueError:
+            invalid.append("TWS_MAJOR_VRSN")
 
     restart_time = str(environment.get("IBC_AUTO_RESTART_TIME", "11:45 PM") or "").strip().upper()
     if not RESTART_TIME.fullmatch(restart_time):

@@ -1,7 +1,7 @@
 from django.urls import include, path
 from gateway_service import views
 api=[
- path("health/",views.health),path("session/",views.session),path("session/reconnect/",views.reconnect),
+ path("health/",views.health),path("diagnostics/",views.diagnostics),path("session/",views.session),path("session/reconnect/",views.reconnect),
  path("accounts/",views.accounts),path("account-summary/",views.account_summary),path("positions/",views.positions),path("open-orders/",views.open_orders),path("completed-orders/",views.completed_orders),path("executions/",views.executions),
  path("contracts/search/",views.contract_search),path("contracts/qualify/",views.qualify),path("commands/<int:command_id>/",views.command_detail),
  path("market-data/history/",views.historical_data),
@@ -12,5 +12,6 @@ api=[
 ]
 urlpatterns = [
     path("healthz", views.healthz),
+    path("readyz", views.readyz),
     path("api/v1/", include(api)),
 ]

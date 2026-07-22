@@ -97,7 +97,14 @@ def test_backend_child_environment_contract_validates_without_public_base_path()
     configuration = validate_environment(environment)
 
     assert configuration["PORT"] == "8080"
+    assert "TWS_MAJOR_VRSN" not in configuration
     assert "APP_BASE_PATH" not in configuration
+
+
+def test_optional_gateway_major_is_only_a_validated_runtime_assertion():
+    configuration = validate_environment(valid_real_environment(TWS_MAJOR_VRSN="1047"))
+
+    assert configuration["TWS_MAJOR_VRSN"] == "1047"
 
 
 def test_dockerfile_is_registry_neutral_and_has_one_public_port():
