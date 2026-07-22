@@ -1,17 +1,36 @@
 #!/bin/sh
 set -eu
-export PORT="${PORT:-8080}" FORWARDED_ALLOW_IPS="${FORWARDED_ALLOW_IPS:-*}" APP_BASE_PATH="/${APP_BASE_PATH#/}"
-[ "$APP_BASE_PATH" = "/" ] && export APP_BASE_PATH=""
-ibc_mode="$(printf '%s' "${IBC_TRADING_MODE:-paper}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-case "$ibc_mode" in paper|live) export IBC_TRADING_MODE="$ibc_mode" ;; *) echo "IBC_TRADING_MODE must be exactly paper or live" >&2; exit 64 ;; esac
+umask 077
+
+# This script emits only validated, non-secret shell assignments. Validation
+# completes before any runtime file, migration, or process is created.
+runtime_exports="$(python /app/runtime_config.py)" || exit $?
+eval "$runtime_exports"
+unset runtime_exports
+export FORWARDED_ALLOW_IPS="${FORWARDED_ALLOW_IPS:-*}"
+export GATEWAY_DB_PATH="${GATEWAY_DB_PATH:-/data/gateway.sqlite3}"
+
+if [ "${1:-}" = "--validate-only" ]; then
+  exit 0
+fi
+
 mkdir -p /data /home/ibgateway/.vnc /home/ibgateway/ibc
 chown -R ibgateway:ibgateway /data /home/ibgateway
-novnc_password="${NOVNC_PASSWORD:-change-me}"
-x11vnc -storepasswd "$novnc_password" /home/ibgateway/.vnc/passwd >/dev/null
+
+novnc_password="$NOVNC_PASSWORD"
+x11vnc -storepasswd "$novnc_password" /home/ibgateway/.vnc/passwd >/dev/null 2>&1
 unset novnc_password
+unset NOVNC_PASSWORD
 chown -R ibgateway:ibgateway /home/ibgateway/.vnc
+
 envsubst '${PORT} ${APP_BASE_PATH}' < /app/nginx.conf.template > /etc/nginx/nginx.conf
-python manage.py migrate --noinput
-python manage.py configure_ibc
-chown ibgateway:ibgateway /home/ibgateway/ibc/config.ini
-exec supervisord -c /app/supervisord.conf
+su -s /bin/sh ibgateway -c 'cd /app && python manage.py migrate --noinput'
+
+if [ "$BROKER_ADAPTER" = "ib_async" ]; then
+  python manage.py configure_ibc
+else
+  rm -f /home/ibgateway/ibc/config.ini
+fi
+unset IB_USERNAME IB_PASSWORD
+
+exec /usr/bin/supervisord -c /app/supervisord.conf

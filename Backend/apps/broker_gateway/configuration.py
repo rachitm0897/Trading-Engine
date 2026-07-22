@@ -6,6 +6,7 @@ from django.conf import settings
 
 QCH_RUNTIME_VARIABLES = ("QCH_APP_ID", "QCH_API_HOST", "QCH_SERVICE_TOKEN")
 PINNED_IMAGE_RE = re.compile(r"^.+@sha256:[0-9a-fA-F]{64}$")
+VERSION_TAG_RE = re.compile(r"^.+:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")
 EXAMPLE_ENCRYPTION_KEYS = {"replace-with-a-long-random-encryption-key"}
 
 
@@ -27,7 +28,14 @@ def managed_broker_deployment_configuration():
     missing = sorted(name for name, value in required.items() if not str(value or "").strip())
     invalid = []
     image = str(required["IBKR_GATEWAY_IMAGE"] or "").strip()
-    if image and not PINNED_IMAGE_RE.fullmatch(image):
+    tag = image.rsplit(":", 1)[-1].casefold() if ":" in image else ""
+    fixed_version_tag = bool(
+        image
+        and "@sha256:" not in image
+        and VERSION_TAG_RE.fullmatch(image)
+        and tag != "latest"
+    )
+    if image and not PINNED_IMAGE_RE.fullmatch(image) and not fixed_version_tag:
         invalid.append("IBKR_GATEWAY_IMAGE")
     encryption_key = str(required["BROKER_SESSION_ENCRYPTION_KEY"] or "").strip().casefold()
     if encryption_key in EXAMPLE_ENCRYPTION_KEYS:

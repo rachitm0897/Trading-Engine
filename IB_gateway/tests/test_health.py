@@ -29,7 +29,8 @@ def test_public_nginx_contract_and_spelling():
     nginx = (root / "nginx.conf.template").read_text(encoding="utf-8")
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
     combined = nginx + dockerfile
-    assert "APP_BASE_PATH=/trading_eng_gateway" in dockerfile
+    assert 'APP_BASE_PATH=""' in dockerfile
+    assert "qfsplatform.com" not in combined
     assert "/novnc/websockify" in nginx and "/novnc/(.*)" in nginx
     assert '"service":"ibkr-gateway"' in nginx
     assert ("tra" + "gin_eng_gateway") not in combined

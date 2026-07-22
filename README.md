@@ -72,11 +72,14 @@ No repository-root build, `deploy` directory, Compose stack, or hidden frontend 
 Build and publish the child image before enabling managed sessions:
 
 ```bash
-docker build -t ghcr.io/OWNER/trading-engine-ib-gateway:GIT_COMMIT_SHA ./IB_gateway
-docker push ghcr.io/OWNER/trading-engine-ib-gateway:GIT_COMMIT_SHA
-docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/OWNER/trading-engine-ib-gateway:GIT_COMMIT_SHA
+cd IB_gateway
+docker buildx build --platform linux/amd64 --load -t DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0 .
+docker login
+docker push DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
+docker pull docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
+docker image inspect --format='{{index .RepoDigests 0}}' docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
 ```
 
-Set `IBKR_GATEWAY_IMAGE` to `ghcr.io/OWNER/trading-engine-ib-gateway@sha256:<digest>`. The GHCR package must be public or the QCH host must have registry authentication. See the exact app settings, routes, storage, WebSocket requirements, smoke commands, and QCH limitations in [QFS deployment](docs/QFS_DEPLOYMENT.md).
+Set `IBKR_GATEWAY_IMAGE` to `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway@sha256:<digest>`. The Docker Hub repository must be public because the current QCH create API does not accept registry credentials. Publication is manual; do not use `latest` for production. See the exact app settings, routes, storage, WebSocket requirements, smoke commands, and QCH limitations in [QFS deployment](docs/QFS_DEPLOYMENT.md).
 
 > Live gateway sessions are supported, but live orders still require the independent `ALLOW_LIVE_TRADING=true` deployment gate and all existing kill switches, reconciliation, confirmation, validation, and pre-trade risk controls. Actionable recommendations remain long-only; short and pair/basket execution remain disabled.

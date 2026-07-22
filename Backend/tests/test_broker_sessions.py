@@ -24,6 +24,7 @@ from apps.broker_gateway.services import (
     inspect_gateway_session,
     provision_session,
     record_provision_failure,
+    gateway_environment,
     synchronize_accounts,
 )
 from apps.broker_gateway.tasks import monitor_broker_sessions
@@ -256,9 +257,19 @@ def test_provision_consumes_secret_builds_required_environment_and_live_waits_fo
     assert environment["IB_USERNAME"] == "ib-user" and environment["IB_PASSWORD"] == "ib-password"
     assert environment["IBC_TRADING_MODE"] == "live" and environment["PORT"] == "8080"
     assert environment["APP_BASE_PATH"] == "" and environment["GATEWAY_SERVICE_TOKEN"] != environment["NOVNC_PASSWORD"]
+    assert len(environment["DJANGO_SECRET_KEY"]) >= 64
     assert "command" not in qch.created[0]
     session.refresh_from_db()
     assert session.commands_enabled is False
+
+
+def test_gateway_environment_uses_an_ephemeral_unique_django_secret():
+    session = SimpleNamespace(mode="paper")
+    first = gateway_environment(session, "user", "password", "token", "vnc-pass")
+    second = gateway_environment(session, "user", "password", "token", "vnc-pass")
+
+    assert first["DJANGO_SECRET_KEY"] != second["DJANGO_SECRET_KEY"]
+    assert "DJANGO_SECRET_KEY" not in {field.name for field in BrokerGatewaySession._meta.fields}
 
 
 def test_provision_adoption_deletes_secret_and_retryable_failure_keeps_it(monkeypatch):

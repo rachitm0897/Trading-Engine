@@ -20,7 +20,7 @@ There are six distinct deployment roles:
 2. The public Frontend QFS app serves the React build through Nginx.
 3. The public standalone Gateway QFS app is for manual or diagnostic use.
 4. Private per-session Gateway children are created by the Backend through QCH. Every `BrokerGatewaySession` has a unique child name, service token, noVNC password, account set, and event cursor.
-5. GHCR stores the published `IB_gateway` image that QCH pulls for private children.
+5. A public Docker Hub repository stores the manually published `IB_gateway` image that QCH pulls for private children.
 6. External PostgreSQL, Redis, Kafka, and Flink services support the Backend.
 
 The standalone public Gateway never replaces `IBKR_GATEWAY_IMAGE` and is never used as the shared route for managed trading sessions. Managed child URLs always have the form `http://<container-name>:8080/api/v1`. Do not publish child TWS ports 4001/4002, VNC 5900, websockify 6080, internal Gunicorn 8001, or child HTTP 8080. The Backend requires no Docker socket, SSH, or direct Docker daemon access.
@@ -39,7 +39,7 @@ CSRF_TRUSTED_ORIGINS=https://qfsplatform.com
 DJANGO_SECRET_KEY=<long random secret>
 BROKER_SESSION_ENCRYPTION_KEY=<independently managed encryption key>
 BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED=false
-IBKR_GATEWAY_IMAGE=ghcr.io/OWNER/trading-engine-ib-gateway@sha256:<digest>
+IBKR_GATEWAY_IMAGE=docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway@sha256:<digest>
 BROKER_CREDENTIAL_TTL_SECONDS=900
 BROKER_SESSION_CREATING_STALE_SECONDS=60
 BROKER_SESSION_START_TIMEOUT_SECONDS=45
@@ -139,7 +139,7 @@ DELETE {QCH_API_HOST}/api/apps/{QCH_APP_ID}/containers/{url-encoded-container-na
 Authorization: Bearer <QCH_SERVICE_TOKEN>
 ```
 
-Create sends required `image` and `name`, optional `env` and `network`, and normally omits `command` so the image `ENTRYPOINT` runs. HTTP 409 and ambiguous retryable creates are resolved by listing and adopting only the expected name. A delete 404 is successful idempotent deletion.
+Create sends required `image` and `name`, optional `env` and `network`, and normally omits `command` so the image `ENTRYPOINT` runs. The session environment contains `DJANGO_SECRET_KEY`, `GATEWAY_SERVICE_TOKEN`, `NOVNC_PASSWORD`, `IB_USERNAME`, `IB_PASSWORD`, `IBC_TRADING_MODE`, `BROKER_ADAPTER=ib_async`, `PORT=8080`, and `APP_BASE_PATH=`. The Backend generates the Django secret only for this create request and does not persist it. HTTP 409 and ambiguous retryable creates are resolved by listing and adopting only the expected name. A delete 404 is successful idempotent deletion.
 
 Temporary IBKR credentials are encrypted at rest. They survive retryable QCH/network failures and Celery retries, then are deleted after confirmed creation/adoption, final non-retryable failure, final retry exhaustion, or TTL expiry. The periodic monitor requeues stale `CREATING` sessions so a lost task cannot leave one permanently stuck. When managed QCH deployment is not configured, monitoring exits with a disabled result without changing existing sessions; unrelated Celery work continues. If a private child exits or disappears while QCH is available, the Backend records a visible error, disables trading commands, and waits for explicit credential-based recreation; it does not silently replace the failure.
 
@@ -155,17 +155,18 @@ Browser input never selects an upstream host, URL, scheme, or port. The proxy pr
 
 ## Publish the child image
 
-The workflow [`.github/workflows/publish-gateway.yml`](../.github/workflows/publish-gateway.yml) builds with `IB_gateway` as its context, pushes the commit-SHA tag to GHCR, and records the immutable digest as a workflow artifact and job summary. It never publishes or recommends `latest`.
-
-Equivalent manual commands are:
+Publication is currently a manual Docker Hub operation. Build the x86-64 image from the `IB_gateway` context, then log in and push a fixed version:
 
 ```bash
-docker build -t ghcr.io/OWNER/trading-engine-ib-gateway:GIT_COMMIT_SHA ./IB_gateway
-docker push ghcr.io/OWNER/trading-engine-ib-gateway:GIT_COMMIT_SHA
-docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/OWNER/trading-engine-ib-gateway:GIT_COMMIT_SHA
+cd IB_gateway
+docker buildx build --platform linux/amd64 --load -t DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0 .
+docker login
+docker push DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
+docker pull docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
+docker image inspect --format='{{index .RepoDigests 0}}' docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
 ```
 
-Set `IBKR_GATEWAY_IMAGE` to `ghcr.io/OWNER/trading-engine-ib-gateway@sha256:<digest>`. Make the GHCR package public, or configure registry authentication on the QCH host; the current QCH create contract has no registry-credential field.
+Set `IBKR_GATEWAY_IMAGE` to `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway@sha256:<digest>`. A fixed tag such as `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0` is accepted for development, but never use `latest` in production. The Docker Hub repository must be public because the current QCH create contract has no registry-credential field.
 
 ## Build and post-deployment checks
 
@@ -174,7 +175,7 @@ From the repository root, the production contexts are exactly:
 ```bash
 docker build -t trading-engine-backend ./Backend
 docker build -t trading-engine-frontend ./Frontend
-docker build -t trading-engine-gateway ./IB_gateway
+docker buildx build --platform linux/amd64 --load -t trading-engine-gateway ./IB_gateway
 ```
 
 Run containers independently with explicit environment variables; production smoke testing does not connect them with Compose. Local Docker Compose remains a separate development option.

@@ -1,4 +1,5 @@
 import re
+import secrets
 import time
 from datetime import timedelta
 
@@ -36,6 +37,9 @@ def temporary_secret_expiry():
 
 def gateway_environment(session, username, password, gateway_token, novnc_password):
     return {
+        # This secret exists only in the QCH create request and the child
+        # process environment. It is intentionally not stored on the session.
+        "DJANGO_SECRET_KEY": secrets.token_urlsafe(64),
         "IB_USERNAME": username,
         "IB_PASSWORD": password,
         "IBC_TRADING_MODE": session.mode,
