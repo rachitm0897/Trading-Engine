@@ -1,8 +1,7 @@
-.git
-.venv
-.pytest_cache
-**/__pycache__
-**/.pytest_cache
-Frontend/node_modules
-Frontend/dist
-*.md
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+db.sqlite3*
+tests/
+config/test_settings.py

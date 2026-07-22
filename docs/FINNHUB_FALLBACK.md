@@ -43,8 +43,8 @@ On IBKR failure, Backend fetches required Finnhub history when historical fallba
 
 No setting in this feature enables live trading. `ALLOW_LIVE_TRADING=true` remains a startup error and `NEW_EXECUTION_MODE` remains restricted to `SHADOW` or `PAPER`.
 
-Run the mocked takeover/recovery smoke test inside the built Backend image without brokerage credentials or a Finnhub key:
+Run the mocked takeover/recovery smoke test without brokerage credentials or a Finnhub key:
 
-```text
-docker compose exec backend pytest tests/test_finnhub_fallback_smoke.py
+```bash
+pytest -q tests/test_finnhub_fallback_smoke.py
 ```

@@ -10,4 +10,4 @@ Live order submission remains separately controlled by `ALLOW_LIVE_TRADING` and 
 
 The child container writes normalized `IBC_TRADING_MODE` to its mode-0600 IBC configuration. IBKR credentials are never inserted into either application database in plaintext, returned by an API, or emitted to logs.
 
-See [QFS deployment](QFS_DEPLOYMENT.md) for QCH variables, private-network requirements, the image publication commands, and the required platform-level access control.
+See the root [Backend deployment guide](../README.md) for QCH variables, private-network requirements, the immutable image contract, and required platform-level access control.

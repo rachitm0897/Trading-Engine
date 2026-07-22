@@ -1,1 +1,0 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://finflock.local/schemas/portfolio-rebalance-planned-v1.json","type":"object","required":["rebalance_run_id","mode","phase","turnover"],"properties":{"rebalance_run_id":{"type":"integer"},"mode":{"enum":["SHADOW","PAPER"]},"phase":{"type":"string"},"turnover":{"type":"string"}},"additionalProperties":false}

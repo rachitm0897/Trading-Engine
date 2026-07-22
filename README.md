@@ -1,76 +1,84 @@
-# Finflock IBKR Trading Execution Engine
+# Trading Engine Backend
 
-A paper-first execution platform that converts deterministic portfolio targets into risk-checked orders, broker executions, append-only ledgers, and reconciliation records.
+This branch is the standalone Django/ASGI execution service. The image runs Gunicorn, Celery workers, Celery Beat, the market-stream consumer, and the Finnhub consumer under Supervisor. Startup applies Django migrations before serving traffic.
 
-## Repository components
+It contains its own application source, migrations, tests, research bundle, and packaged Kafka schemas. A normal clone of this branch is sufficient to build and test the Backend; no Frontend, Gateway-image, streaming-infrastructure, sibling checkout, or repository-parent build context is required.
 
-- `Backend/` contains Django ASGI, Celery workers, research, allocation, risk, OMS, execution, and reconciliation.
-- `Frontend/` contains the React/TypeScript operator application served by Nginx.
-- `IB_gateway/` builds the reusable `linux/amd64` Docker Hub image used for one private IBKR session child.
-- `streaming/` contains Kafka contracts and PyFlink jobs. PostgreSQL remains the financial source of truth.
+## Build and run
 
-Only the private Gateway child owns an `ib_async`/TWS connection. The browser, Frontend, Backend, Kafka, and Flink never connect to a TWS socket directly.
+From the repository root:
 
-## Production architecture
+```bash
+pip install -r requirements.txt
+python manage.py migrate --noinput
+python manage.py runserver 8000
+```
 
-QFS contains exactly two public applications:
+Build the production image from the same root:
 
-| QFS application | Root/build context | Dockerfile | Public URL |
-| --- | --- | --- | --- |
-| Frontend | `Frontend` | `Frontend/Dockerfile` | `https://qfsplatform.com/trading_eng_frontend` |
-| Backend | `Backend` | `Backend/Dockerfile` | `https://qfsplatform.com/trading_eng_backend` |
+```bash
+docker build -t trading-engine-backend .
+```
 
-PostgreSQL, Redis, Celery storage, Kafka, and Flink are external and are configured only on the Backend. Broker sessions use this path:
+The image contains no environment file. Copy `.env.example` to an ignored `.env` only for local development.
+
+## QFS deployment
+
+Preserve these QFS application settings:
 
 ```text
-Frontend session form
+PORT=8000
+APP_BASE_PATH=/trading_eng_backend
+PUBLIC_BASE_URL=https://qfsplatform.com/trading_eng_backend
+```
+
+Set `DJANGO_SECRET_KEY`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS`, and `BROKER_SESSION_ENCRYPTION_KEY` with deployment-specific values. PostgreSQL, Redis, Kafka, and Flink are external services configured through `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `KAFKA_BOOTSTRAP_SERVERS`, and `FLINK_REST_URL`. Backend policy, execution-mode, research, and provider variables are documented in `.env.example`.
+
+The QFS proxy may preserve the configured prefix or strip it while supplying `X-Forwarded-Prefix`. Managed noVNC traffic requires WebSocket `Upgrade` and `Connection` headers to be preserved.
+
+## Managed IBKR sessions
+
+The runtime contract is:
+
+```text
+browser request
   -> Backend broker-session API
   -> QCH Sub-container Broker API
-  -> QCH pulls IBKR_GATEWAY_IMAGE from Docker Hub
-  -> one private Gateway child per session
-  -> Backend uses http://<child-name>:8080/api/v1
+  -> QCH pulls the configured Gateway image
+  -> private Gateway child on port 8080
 ```
 
-The Backend validates and forwards only the configured image reference and child configuration. It does not run Docker, pull images, mount a Docker socket, or accept/store/forward registry credentials. Gateway children publish no host ports; managed noVNC is available only through the Backend broker-session path.
+QCH injects `QCH_APP_ID`, `QCH_API_HOST`, and `QCH_SERVICE_TOKEN` into the Backend. `QCH_SUBCONTAINER_NETWORK` is optional. Configure the child image as an immutable Docker Hub reference:
 
-Build and publish the child image separately:
+```text
+IBKR_GATEWAY_IMAGE=docker.io/<username>/<repository>@sha256:<64-hex-digest>
+```
+
+The Backend sends QCH the validated image reference and permitted child configuration. It does not build or pull the image, run Compose, use the Docker CLI or SDK, mount `/var/run/docker.sock`, or handle Docker Hub credentials. It reaches a child only through its authenticated internal HTTP API. Missing QCH or image configuration disables managed-session operations without making Backend liveness fail.
+
+## Public routes
+
+With the production prefix, prepend `/trading_eng_backend` to these routes:
+
+- `GET /` returns service and route metadata.
+- `GET /healthz` reports process liveness for the QFS health check.
+- `GET /readyz` reports database and recommendation-cache readiness.
+- `GET /metrics` exposes service metrics.
+- `/api/v1/system/`, `/api/v1/accounts/`, `/api/v1/instruments/`, `/api/v1/portfolios/`, `/api/v1/positions/`, `/api/v1/orders/`, `/api/v1/executions/`, `/api/v1/risk/`, `/api/v1/audit/`, and `/api/v1/reconciliation/` expose the core operational API.
+- `/api/v1/broker-sessions/` manages private Gateway children and proxies their noVNC sessions.
+- `/api/v1/strategy-*`, `/api/v1/allocations/`, `/api/v1/rebalancing/`, `/api/v1/position-sizing/`, `/api/v1/portfolio-optimization/`, and `/api/v1/portfolio-construction/` expose trading workflows.
+- `/api/v1/streaming/`, `/api/v1/data-providers/`, and `/api/v1/research/` expose streaming, provider, and research operations.
+
+API responses retain the `{ok,data,error,meta}` envelope. Liveness and readiness are intentionally distinct: `/healthz` proves the process can serve requests, while `/readyz` checks required stateful dependencies.
+
+## Tests and checks
 
 ```bash
-cd IB_gateway
-docker buildx build --platform linux/amd64 --load -t DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0 .
-docker push DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
+pip install -r requirements.txt
+python manage.py check --settings=config.test_settings
+python manage.py makemigrations --check --dry-run --settings=config.test_settings
+pytest -q
+docker build -t trading-engine-backend .
 ```
 
-Production should configure `IBKR_GATEWAY_IMAGE=docker.io/<username>/<repository>@sha256:<64-hex-digest>`. A fixed non-`latest` Docker Hub tag is accepted for controlled testing. See [QFS deployment](docs/QFS_DEPLOYMENT.md) for the complete variable matrix, routes, networking, WebSocket, publication, and access-control requirements.
-
-## Local development
-
-Compose starts PostgreSQL, Redis, Kafka, topic initialization, Flink, Backend, and Frontend. It does not start an IBKR Gateway. Without QCH and `IBKR_GATEWAY_IMAGE`, managed broker-session creation returns a configuration error while the rest of the platform remains available.
-
-```bash
-cp .env.example .env
-docker compose up --build -d
-docker compose ps
-powershell -NoProfile -File docs/compose_smoke.ps1
-```
-
-- Frontend: <http://localhost:5173>
-- Backend system API: <http://localhost:8000/api/v1/system/>
-- Backend liveness: <http://localhost:8000/healthz>
-
-See [local development](docs/LOCAL_DEVELOPMENT.md), [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), [research universe](docs/RESEARCH_UNIVERSE.md), and [recommendation engine](docs/RECOMMENDATION_ENGINE.md).
-
-## Tests and independent builds
-
-```bash
-cd Backend && pytest
-cd ../IB_gateway && pytest
-cd ../Frontend && npm ci && npm test && npm run test:production-build
-cd .. && python -m pytest streaming/flink/tests
-docker compose config --quiet
-docker build -t trading-engine-backend ./Backend
-docker build -t trading-engine-frontend ./Frontend
-docker buildx build --platform linux/amd64 --load -t trading-engine-gateway ./IB_gateway
-```
-
-`GET /healthz` is process liveness. Backend `GET /readyz` checks database and recommendation readiness; missing managed-session configuration does not make process health fail. Live broker sessions remain subject to `ALLOW_LIVE_TRADING`, kill switches, reconciliation, confirmation, validation, and pre-trade risk controls.
+Tests use SQLite through `config.test_settings` and do not require live brokerage credentials. See `docs/` for database upgrades, asynchronous operations, research, risk, accounting, and strategy-plugin guidance.
