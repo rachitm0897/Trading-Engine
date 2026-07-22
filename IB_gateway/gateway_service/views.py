@@ -3,9 +3,9 @@ import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from django.conf import settings
-from django.db import connection
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from .diagnostics import collect_gateway_diagnostics, readiness_state
 from .models import GatewayCommand, GatewayEvent, GatewayOrderReference, GatewaySession
 from .services import CommandRetryNotAllowed, IdempotencyConflict, enqueue
 
@@ -23,8 +23,20 @@ def protected(fn):
 def healthz(request):
     invalid=_method(request,"GET")
     if invalid:return invalid
-    with connection.cursor() as cursor: cursor.execute("SELECT 1")
-    return response({"status":"healthy"})
+    return response({"status":"alive"})
+def readyz(request):
+    invalid=_method(request,"GET")
+    if invalid:return invalid
+    diagnostics=collect_gateway_diagnostics()
+    ready,state,details=readiness_state(
+        diagnostics,settings.BROKER_ADAPTER,settings.IBC_TRADING_MODE
+    )
+    if ready:return response({"status":"ready"})
+    return response(status=503,error={
+        "code":"GATEWAY_NOT_READY",
+        "message":"Gateway internal services are not ready",
+        "details":{"status":state,"fatal":False,**details},
+    })
 def _payload(request):
     value=json.loads(request.body or b"{}")
     if not isinstance(value,dict):raise ValueError("Request body must be a JSON object")
@@ -51,6 +63,11 @@ def health(request):
     if invalid:return invalid
     session=GatewaySession.objects.filter(pk=1).first()
     return response({"connected":bool(session and session.state=="CONNECTED"),"reconciled":bool(session and session.reconciled),"mode":settings.IBC_TRADING_MODE,"last_callback":session.last_callback_at if session else None,"worker":session.connection_owner if session else "","connection_generation":str(session.connection_generation) if session else ""})
+@protected
+def diagnostics(request):
+    invalid=_method(request,"GET")
+    if invalid:return invalid
+    return response(collect_gateway_diagnostics())
 @protected
 def session(request):
     invalid=_method(request,"GET")

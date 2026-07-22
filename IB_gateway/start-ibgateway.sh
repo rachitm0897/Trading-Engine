@@ -3,7 +3,8 @@ set -eu
 if [ "${BROKER_ADAPTER:-ib_async}" = "mock" ]; then
   exec sleep infinity
 fi
-exec /opt/ibc/scripts/ibcstart.sh "${TWS_MAJOR_VRSN:-1045}" \
+installed_major="$(/usr/local/bin/ibgateway-version verify --expected "${TWS_MAJOR_VRSN:-}")" || exit $?
+exec /opt/ibc/scripts/ibcstart.sh "$installed_major" \
   --gateway \
   --tws-path=/opt/Jts \
   --tws-settings-path=/home/ibgateway/Jts \

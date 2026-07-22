@@ -139,9 +139,9 @@ def test_no_credential_leakage(client,settings):
     assert "SECRET_USER" not in content and "SECRET_PASSWORD" not in content
 
 
-@pytest.mark.parametrize("path", ["/healthz", "/api/v1/health/", "/api/v1/events/"])
+@pytest.mark.parametrize("path", ["/healthz", "/readyz", "/api/v1/health/", "/api/v1/diagnostics/", "/api/v1/events/"])
 def test_read_endpoints_reject_wrong_method(client, path):
-    kwargs={} if path=="/healthz" else AUTH
+    kwargs={} if path in {"/healthz", "/readyz"} else AUTH
     assert client.post(path, **kwargs).status_code==405
 
 
