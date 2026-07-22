@@ -21,6 +21,7 @@ from apps.broker_gateway.models import (
 )
 from apps.broker_gateway.qch import QCHBrokerClient, QCHConflict, QCHContainer, QCHError
 from apps.broker_gateway.services import (
+    container_name_for,
     delete_session,
     inspect_gateway_session,
     provision_session,
@@ -67,7 +68,7 @@ def make_session(name="Paper one", mode="paper", *, status="CREATING"):
         encrypted_gateway_token=encrypt_secret(f"token-{name}"),
         encrypted_novnc_password=encrypt_secret("vnc-pass"),
     )
-    session.child_container_name = f"trading-engine-ibkr-{str(session.pk).replace('-', '')[:20]}"
+    session.child_container_name = container_name_for(session.pk)
     session.internal_base_url = f"http://{session.child_container_name}:8080/api/v1"
     if status == "CONNECTED":
         session.last_gateway_state = {"connected": True, "mode": mode}
@@ -105,6 +106,22 @@ def test_gateway_client_rejects_parameterless_construction_and_isolates_two_fake
         responses.get(url, json={"ok":True, "data":{"connected":True, "mode":mode}, "error":None, "meta":{}})
     assert first.health()["mode"] == "paper" and second.health()["mode"] == "live"
     assert [call.request.headers["Authorization"] for call in responses.calls] == ["Bearer token-a", "Bearer token-b"]
+
+
+def test_portfolio_without_managed_session_is_always_unavailable():
+    account = BrokerAccount.objects.create(account_id="DU-NO-SESSION")
+    portfolio = TradingPortfolio.objects.create(name="Unmanaged", account=account)
+
+    with pytest.raises(GatewaySessionUnavailable, match="not bound"):
+        GatewayClient.for_portfolio(portfolio)
+
+
+def test_child_name_uses_the_full_session_uuid():
+    session_id = "11111111-2222-3333-4444-555555555555"
+    name = container_name_for(session_id)
+
+    assert name == "trading-engine-ibkr-11111111222233334444555555555555"
+    assert len(name.removeprefix("trading-engine-ibkr-")) == 32
 
 
 @pytest.mark.parametrize("status", [
@@ -218,6 +235,21 @@ def test_qch_payload_and_bearer_auth_do_not_leak_into_error():
     assert "secret-password" not in str(error.value) and "qch-secret" not in str(error.value)
 
 
+@responses.activate
+def test_qch_blank_network_is_omitted_from_create_payload():
+    url = "https://qch.example/api/apps/app-1/containers"
+    responses.post(url, status=201, json={"id": "child-1", "name": "session-child", "status": "RUNNING"})
+
+    QCHBrokerClient().create_container(
+        name="session-child",
+        image="docker.io/example/gateway:v1",
+        env={"PORT": "8080"},
+        network=None,
+    )
+
+    assert set(json.loads(responses.calls[0].request.body)) == {"name", "image", "env"}
+
+
 @pytest.mark.parametrize("payload", [
     {"name": "", "image": "docker.io/example/gateway:v1"},
     {"name": "child", "image": ""},
@@ -306,7 +338,11 @@ def test_provision_consumes_secret_builds_required_environment_and_live_waits_fo
     assert set(qch.created[0]) == {"name", "image", "env", "network"}
     assert environment["IB_USERNAME"] == "ib-user" and environment["IB_PASSWORD"] == "ib-password"
     assert environment["IBC_TRADING_MODE"] == "live" and environment["PORT"] == "8080"
-    assert environment["APP_BASE_PATH"] == "" and environment["GATEWAY_SERVICE_TOKEN"] != environment["NOVNC_PASSWORD"]
+    assert set(environment) == {
+        "DJANGO_SECRET_KEY", "IB_USERNAME", "IB_PASSWORD", "IBC_TRADING_MODE",
+        "GATEWAY_SERVICE_TOKEN", "NOVNC_PASSWORD", "BROKER_ADAPTER", "PORT",
+    }
+    assert environment["GATEWAY_SERVICE_TOKEN"] != environment["NOVNC_PASSWORD"]
     assert len(environment["DJANGO_SECRET_KEY"]) >= 64
     assert "command" not in qch.created[0]
     session.refresh_from_db()
@@ -549,7 +585,6 @@ def test_public_novnc_url_and_asgi_connect_page_use_exact_prefix_once(monkeypatc
     )
     assert public_url.startswith(expected_connect + "#access_token=")
     assert public_url.count("/trading_eng_backend") == 1
-    assert "trading_eng_gateway" not in public_url
 
     async def load(_):
         return session

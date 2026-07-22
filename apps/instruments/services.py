@@ -1,7 +1,6 @@
 from django.db import transaction
-from django.conf import settings
 from django.utils import timezone
-from apps.broker_gateway.client import GatewayClient, GatewayRoute
+from apps.broker_gateway.client import GatewayClient, GatewaySessionUnavailable
 from apps.audit.models import OutboxEvent
 from .models import BrokerContract, Instrument
 
@@ -9,13 +8,7 @@ from .models import BrokerContract, Instrument
 def _gateway(gateway=None,gateway_session=None):
     if gateway is not None:return gateway
     if gateway_session is None:
-        if settings.BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED:
-            return GatewayClient(GatewayRoute(
-                session_id="static-development",
-                base_url=settings.STATIC_DEVELOPMENT_IB_GATEWAY_URL,
-                service_token=settings.STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN,
-            ))
-        raise ValueError("A broker gateway session is required")
+        raise GatewaySessionUnavailable("A broker gateway session is required")
     return GatewayClient(gateway_session,require_commands=True)
 
 

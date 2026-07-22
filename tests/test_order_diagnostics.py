@@ -9,15 +9,17 @@ from apps.instruments.models import Instrument
 from apps.oms.models import OrderIntent
 from apps.oms.services import create_order, transition
 from apps.portfolios.models import TradingPortfolio
+from tests.managed_gateway import bind_managed_gateway
 
 
 pytestmark = pytest.mark.django_db
 
 
 @pytest.fixture
-def submitted_order():
+def submitted_order(settings):
     account = BrokerAccount.objects.create(account_id="DU-DIAGNOSTICS", is_reconciled=True)
     portfolio = TradingPortfolio.objects.create(name="Diagnostics paper", account=account)
+    bind_managed_gateway(portfolio, settings)
     instrument = Instrument.objects.create(symbol="AAPL", exchange="SMART", primary_exchange="NASDAQ")
     intent = OrderIntent.objects.create(portfolio=portfolio, instrument=instrument, side="BUY", quantity=1,
         idempotency_key="diagnostic-intent")
@@ -45,7 +47,8 @@ def test_exact_ibkr_rejection_is_append_only_and_changes_status(submitted_order)
 
 @responses.activate
 def test_operator_request_and_ibkr_cancel_confirmation_remain_distinct(client, submitted_order):
-    responses.post("http://localhost:8080/api/v1/orders/%s/cancel/" % submitted_order.internal_id,status=202,
+    base_url = submitted_order.intent.portfolio.gateway_session.internal_base_url
+    responses.post(f"{base_url}/orders/{submitted_order.internal_id}/cancel/",status=202,
         json={"ok":True,"data":{"command_id":7,"status":"PENDING"},"error":None,"meta":{}})
     response=client.post(f"/api/v1/orders/{submitted_order.internal_id}/cancel/",json.dumps({"reason":"Operator risk review"}),
         content_type="application/json",HTTP_IDEMPOTENCY_KEY="cancel-diagnostic")

@@ -1,27 +1,48 @@
 # Backend
 
-Django/DRF execution core backed by PostgreSQL and Redis. Supervisor runs Gunicorn, Celery, and Celery Beat in the single deployable application container. The Backend never opens a TWS socket; all broker operations use the authenticated Gateway REST client.
+The Backend is the Django/ASGI execution core. One container runs Gunicorn with an ASGI worker, required Celery workers, Celery Beat, the market consumer, and the Finnhub consumer under Supervisor. Startup applies Django migrations before Supervisor starts.
 
 ## Run and test
 
+Create a local ignored `.env` only when running outside Compose. Production images do not contain an environment file.
+
 ```bash
-cp .env.example .env
 pip install -r requirements.txt
 python manage.py migrate --noinput
 python manage.py runserver 8000
 pytest
+docker build -t trading-engine-backend .
 ```
 
-Process liveness is `GET /healthz`; required database/recommendation readiness is `GET /readyz`. The readiness and System responses report non-secret managed Gateway configuration status, but missing QCH or child-image configuration disables only managed sessions and does not by itself return HTTP 503. APIs use `/api/v1/` and return the documented `{ok,data,error,meta}` envelope. `APP_BASE_PATH` may be empty locally or `/trading_eng_backend` on QFS. Managed sessions accept only `paper` and `live`; live order execution still requires the independent `ALLOW_LIVE_TRADING` gate and every existing safety control.
+The image builds from `Backend` alone. Its research bundle and Kafka schemas are below that build context.
 
-`docker build -t trading-engine-backend .` works from this directory. Runtime Kafka schemas and the canonical research bundle are packaged below `Backend`, so the production image does not depend on its repository parent. The QFS container listens on `${PORT:-8000}` and runs Django ASGI, Celery workers, and Celery Beat under Supervisor. PostgreSQL, Redis, Kafka, and Flink URLs must reference external services in production.
+## Public routing and health
 
-Managed broker sessions use QCH private children at `http://<container-name>:8080/api/v1`; they never use the public standalone Gateway. `IBKR_GATEWAY_IMAGE` accepts only an explicit Docker Hub reference: use `docker.io/<username>/<repository>@sha256:<64-hex-digest>` for production or a fixed non-`latest` tag such as `docker.io/<username>/<repository>:v1.0.0` for testing. The Backend validates and sends that configured reference through the QCH create contract and never accepts or stores Docker Hub credentials.
+- `GET /healthz` is process liveness and is the QFS health check.
+- `GET /readyz` checks database and recommendation-cache readiness.
+- `GET /api/v1/system/` reports non-secret deployment status.
+- The exact configured base path returns service, health, and System route metadata.
+- Both prefix-preserved requests and prefix-stripped requests with `X-Forwarded-Prefix` are supported.
 
-For private-image testing, authenticate the QCH/Docker host with read permission so it can perform the equivalent of an authenticated pull; keep all registry credentials outside the Backend, frontend, session database, and child environment. For public deployment, no Docker Hub authentication is required. Repository visibility is not detected or controlled by the Backend, so changing the same repository from private to public requires no Backend code change. QCH access variables belong only on the Backend application. See [`docs/QFS_DEPLOYMENT.md`](../docs/QFS_DEPLOYMENT.md).
+Set `APP_BASE_PATH=/trading_eng_backend` and `PUBLIC_BASE_URL=https://qfsplatform.com/trading_eng_backend` on QFS. APIs use the `{ok,data,error,meta}` envelope. Missing QCH or child-image configuration disables managed-session operations without failing `/healthz` or otherwise disabling the Backend.
 
-Database startup uses normal Django migrations only. See [`docs/DATABASE_UPGRADES.md`](../docs/DATABASE_UPGRADES.md) before upgrading an existing installation.
+## Managed IBKR sessions
 
-Optimization previews/applications, optimization-backed portfolio flows, rebalances, history refreshes, reconciliation, and Kafka replay execute as background jobs. Their write endpoints return `202 Accepted` while queued; poll the corresponding run-detail endpoint until a terminal status. See [`docs/ASYNC_OPERATIONS.md`](../docs/ASYNC_OPERATIONS.md).
+Every broker operation resolves a real `BrokerGatewaySession`. A portfolio without a valid session raises `GatewaySessionUnavailable`; there is no global or local static route.
 
-The legacy `/api/v1/strategies/` and `/api/v1/strategy-runs/` contracts were deleted with the legacy strategy engine. Use `/api/v1/strategy-instances/` and its action/run resources. This is an intentional compatibility break: financial history is retained through immutable strategy snapshots, while no runtime compatibility layer remains.
+The Backend calls QCH to list, create, and delete app-scoped child containers. New names contain the complete session UUID and resolve internally as `http://<child-container-name>:8080/api/v1`. QCH receives the validated `IBKR_GATEWAY_IMAGE`, child name, permitted child environment, and an optional network. Blank `QCH_SUBCONTAINER_NETWORK` is omitted so QCH can select its platform default.
+
+`IBKR_GATEWAY_IMAGE` accepts explicit Docker Hub references only:
+
+- Production: `docker.io/<username>/<repository>@sha256:<64-hex-digest>`
+- Controlled testing: `docker.io/<username>/<repository>:<fixed-non-latest-tag>`
+
+The browser cannot override the image or provide registry authentication. The Backend has no Docker SDK/CLI/socket/SSH/Compose path and never pulls the image itself. Registry access, if needed for a private repository, is configured on the QCH host outside this application.
+
+Managed noVNC HTTP and WebSocket traffic is proxied through `/api/v1/broker-sessions/<uuid>/novnc/...`. The QFS outer proxy must preserve WebSocket `Upgrade` and `Connection` headers.
+
+## External services and safety
+
+PostgreSQL, Redis, Celery broker/result storage, Kafka, Flink, and Finnhub configuration belong only to this application. Managed live sessions still require the independent `ALLOW_LIVE_TRADING` gate and all kill-switch, sizing, risk, OMS, ledger, and reconciliation controls.
+
+Database startup uses normal Django migrations. See [database upgrades](../docs/DATABASE_UPGRADES.md), [async operations](../docs/ASYNC_OPERATIONS.md), and [QFS deployment](../docs/QFS_DEPLOYMENT.md).

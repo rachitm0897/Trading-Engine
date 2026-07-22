@@ -9,16 +9,18 @@ from apps.accounts.models import BrokerAccount
 from apps.instruments.models import Instrument
 from apps.oms.models import Order, OrderIntent
 from apps.portfolios.models import TradingPortfolio
+from tests.managed_gateway import bind_managed_gateway
 
 pytestmark=pytest.mark.django_db
 
 @responses.activate
-def test_manual_order_runs_risk_then_queues_gateway_command(client):
+def test_manual_order_runs_risk_then_queues_gateway_command(client, settings):
     account=BrokerAccount.objects.create(account_id="DU1",available_cash=10000,is_reconciled=True)
     portfolio=TradingPortfolio.objects.create(name="Paper",account=account)
+    session=bind_managed_gateway(portfolio, settings)
     instrument=Instrument.objects.create(symbol="AAPL")
-    responses.get("http://localhost:8080/api/v1/health/",json={"ok":True,"data":{"connected":True,"reconciled":True,"mode":"paper"},"error":None,"meta":{}})
-    responses.post("http://localhost:8080/api/v1/orders/",status=202,json={"ok":True,"data":{"command_id":1,"status":"PENDING"},"error":None,"meta":{}})
+    responses.get(f"{session.internal_base_url}/health/",json={"ok":True,"data":{"connected":True,"reconciled":True,"mode":"paper"},"error":None,"meta":{}})
+    responses.post(f"{session.internal_base_url}/orders/",status=202,json={"ok":True,"data":{"command_id":1,"status":"PENDING"},"error":None,"meta":{}})
     payload={"portfolio_id":portfolio.pk,"instrument_id":instrument.pk,"side":"BUY","order_type":"MKT","quantity":"5","reference_price":"100","time_in_force":"DAY"}
     result=client.post("/api/v1/orders/",json.dumps(payload),content_type="application/json",HTTP_IDEMPOTENCY_KEY="manual-1")
     assert result.status_code==201 and result.json()["data"]["status"]=="QUEUED"
@@ -30,12 +32,13 @@ def test_manual_order_requires_idempotency_key(client):
 
 
 @responses.activate
-def test_manual_order_rejects_same_key_with_different_request(client):
+def test_manual_order_rejects_same_key_with_different_request(client, settings):
     account=BrokerAccount.objects.create(account_id="DU1",available_cash=10000,is_reconciled=True)
     portfolio=TradingPortfolio.objects.create(name="Paper",account=account)
+    session=bind_managed_gateway(portfolio, settings)
     instrument=Instrument.objects.create(symbol="AAPL")
-    responses.get("http://localhost:8080/api/v1/health/",json={"ok":True,"data":{"connected":True,"reconciled":True,"mode":"paper"},"error":None,"meta":{}})
-    responses.post("http://localhost:8080/api/v1/orders/",status=202,json={"ok":True,"data":{"command_id":1,"status":"PENDING"},"error":None,"meta":{}})
+    responses.get(f"{session.internal_base_url}/health/",json={"ok":True,"data":{"connected":True,"reconciled":True,"mode":"paper"},"error":None,"meta":{}})
+    responses.post(f"{session.internal_base_url}/orders/",status=202,json={"ok":True,"data":{"command_id":1,"status":"PENDING"},"error":None,"meta":{}})
     payload={"portfolio_id":portfolio.pk,"instrument_id":instrument.pk,"side":"BUY","order_type":"MKT","quantity":"5","reference_price":"100","time_in_force":"DAY"}
     assert client.post("/api/v1/orders/",json.dumps(payload),content_type="application/json",HTTP_IDEMPOTENCY_KEY="manual-conflict").status_code==201
     payload["quantity"]="6"
@@ -43,9 +46,10 @@ def test_manual_order_rejects_same_key_with_different_request(client):
     assert conflict.status_code==409 and conflict.json()["error"]["code"]=="IDEMPOTENCY_CONFLICT"
 
 
-def test_manual_order_calls_gateway_outside_database_transactions(client,monkeypatch):
+def test_manual_order_calls_gateway_outside_database_transactions(client,monkeypatch,settings):
     account=BrokerAccount.objects.create(account_id="DU1",available_cash=10000,is_reconciled=True)
     portfolio=TradingPortfolio.objects.create(name="Paper",account=account)
+    bind_managed_gateway(portfolio, settings)
     instrument=Instrument.objects.create(symbol="AAPL")
     from apps.broker_gateway.client import GatewayClient
     baseline_atomic_depth=len(connection.atomic_blocks)
@@ -61,9 +65,10 @@ def test_manual_order_calls_gateway_outside_database_transactions(client,monkeyp
     assert client.post("/api/v1/orders/",json.dumps(payload),content_type="application/json",HTTP_IDEMPOTENCY_KEY="outside-tx").status_code==201
 
 
-def test_retryable_manual_order_failure_requires_explicit_retry(client,monkeypatch):
+def test_retryable_manual_order_failure_requires_explicit_retry(client,monkeypatch,settings):
     account=BrokerAccount.objects.create(account_id="DU1",available_cash=10000,is_reconciled=True)
     portfolio=TradingPortfolio.objects.create(name="Paper",account=account)
+    bind_managed_gateway(portfolio, settings)
     instrument=Instrument.objects.create(symbol="AAPL")
     from apps.broker_gateway.client import GatewayClient, GatewayError
     monkeypatch.setattr(GatewayClient,"health",lambda self:{"connected":True,"reconciled":True,"mode":"paper"})

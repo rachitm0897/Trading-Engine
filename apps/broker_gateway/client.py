@@ -73,23 +73,13 @@ def route_for_session(gateway_session, *, purpose="read"):
 
 
 class GatewayClient:
-    """Authenticated client bound to one immutable broker-session route.
+    """Authenticated client bound to one immutable broker-session route."""
 
-    A URL plus token is accepted as an explicit route for isolated tests and local
-    tooling. Production callers pass a BrokerGatewaySession or GatewayRoute.
-    """
-
-    def __init__(self, route, token=None, *, http_session=None, require_commands=False, purpose=None):
+    def __init__(self, route, *, http_session=None, require_commands=False, purpose=None):
         self.gateway_session = None
         self.purpose = purpose or ("command" if require_commands else "read")
         if isinstance(route, GatewayRoute):
             resolved = route
-        elif isinstance(route, str) and token:
-            resolved = GatewayRoute(
-                session_id=f"explicit-{hashlib.sha256(route.encode()).hexdigest()[:12]}",
-                base_url=route,
-                service_token=token,
-            )
         elif hasattr(route, "internal_base_url"):
             self.gateway_session = route
             resolved = route_for_session(route, purpose=self.purpose)
@@ -108,13 +98,6 @@ class GatewayClient:
     def for_portfolio(cls, portfolio, *, require_commands=False, http_session=None):
         gateway_session = getattr(portfolio, "gateway_session", None)
         if gateway_session is None:
-            from django.conf import settings
-            if settings.BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED:
-                return cls(GatewayRoute(
-                    session_id="static-development",
-                    base_url=settings.STATIC_DEVELOPMENT_IB_GATEWAY_URL,
-                    service_token=settings.STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN,
-                ),http_session=http_session)
             raise GatewaySessionUnavailable("Portfolio is not bound to an IBKR gateway session")
         mapping_exists = gateway_session.session_accounts.filter(broker_account_id=portfolio.account_id, available=True).exists()
         if not mapping_exists:

@@ -47,7 +47,7 @@ def configured_gateway_image():
     configured = str(_effective_value("IBKR_GATEWAY_IMAGE") or "")
     if "\r" in configured or "\n" in configured:
         raise GatewayImageConfigurationError("IBKR_GATEWAY_IMAGE contains an invalid line break")
-    return parse_docker_hub_image_reference(configured.strip())
+    return parse_docker_hub_image_reference(configured)
 
 
 def _effective_value(name):

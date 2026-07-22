@@ -119,8 +119,6 @@ def evaluate_intent(intent, gateway_state=None):
         add("gateway", "HELD", "Gateway is disconnected", 0)
         return "HELD", Decimal(0), checks
     broker_mode=str(gateway_state.get("mode", "")).lower()
-    if not broker_mode and settings.BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED:
-        broker_mode="paper"
     if broker_mode not in {"paper","live"}:
         add("gateway_mode", "REJECTED", "Gateway must report paper or live mode", 0)
         return "REJECTED", Decimal(0), checks
