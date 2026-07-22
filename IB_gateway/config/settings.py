@@ -3,7 +3,7 @@ from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 from gateway_service.modes import normalize_trading_mode, tws_port_for_mode
-from runtime_config import normalize_app_base_path, normalize_broker_adapter
+from runtime_config import normalize_broker_adapter
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env", override=False)
@@ -19,7 +19,6 @@ def required_environment(name):
 SECRET_KEY = required_environment("DJANGO_SECRET_KEY")
 DEBUG = False
 ALLOWED_HOSTS = ["*"]
-APP_BASE_PATH = normalize_app_base_path(os.getenv("APP_BASE_PATH", ""))
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 INSTALLED_APPS = ["django.contrib.contenttypes", "gateway_service"]

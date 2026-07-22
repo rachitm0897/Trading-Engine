@@ -2,32 +2,50 @@
 
 A paper-first execution platform that converts deterministic portfolio targets into risk-checked orders, broker executions, append-only ledgers, and reconciliation records.
 
-## Applications
+## Repository components
 
-- `Backend/` — Django, PostgreSQL, Redis, Celery, research, construction, allocation, risk, OMS, execution, and reconciliation.
-- `Frontend/` — React/TypeScript operator application served by Nginx.
-- `IB_gateway/` — the per-session `ib_async` connection owner and publishable child-container image, with IB Gateway/IBC and noVNC behind one private Nginx port.
-- `streaming/` — private Kafka contracts and PyFlink jobs; PostgreSQL remains the financial source of truth.
+- `Backend/` contains Django ASGI, Celery workers, research, allocation, risk, OMS, execution, and reconciliation.
+- `Frontend/` contains the React/TypeScript operator application served by Nginx.
+- `IB_gateway/` builds the reusable `linux/amd64` Docker Hub image used for one private IBKR session child.
+- `streaming/` contains Kafka contracts and PyFlink jobs. PostgreSQL remains the financial source of truth.
 
-Strategies, Kafka, Flink, and the frontend cannot access the TWS socket. Kafka uses a transactional PostgreSQL outbox; sizing, risk, OMS, Gateway, ledgers, kill switch, and reconciliation remain mandatory.
+Only the private Gateway child owns an `ib_async`/TWS connection. The browser, Frontend, Backend, Kafka, and Flink never connect to a TWS socket directly.
 
-The [Portfolio Builder](docs/PORTFOLIO_BUILDER.md) now uses Goals → Recommendations → Preview & Apply. One plan-level request selects diversified stocks and one primary long-only strategy per stock from cached full-universe research. Duplicate stocks and compatible identities aggregate across goals into one combined target. Generation creates no orders, rebalances, strategy instances, enablement, or LIVE path; apply remains explicit and every created or updated instance remains disabled in SHADOW.
+## Production architecture
 
-The [Research Universe](docs/RESEARCH_UNIVERSE.md) validates and imports the complete 500-stock/97-strategy bundle. Every catalogue strategy has an explicit audited Python implementation and scope-aware engine; JSON formula text is metadata and is never evaluated. Incremental daily/intraday data, corporate actions, fundamentals, analyst estimates, events, point-in-time features, bounded experiments, role-specific scores, and recommendation caches run outside web requests. Pair/basket models remain research-only until atomic multi-instrument and short execution exist.
+QFS contains exactly two public applications:
 
-After activating the bundle, run:
+| QFS application | Root/build context | Dockerfile | Public URL |
+| --- | --- | --- | --- |
+| Frontend | `Frontend` | `Frontend/Dockerfile` | `https://qfsplatform.com/trading_eng_frontend` |
+| Backend | `Backend` | `Backend/Dockerfile` | `https://qfsplatform.com/trading_eng_backend` |
 
-```powershell
-cd Backend
-python manage.py bootstrap_recommendation_system
-python manage.py warm_recommendation_cache
+PostgreSQL, Redis, Celery storage, Kafka, and Flink are external and are configured only on the Backend. Broker sessions use this path:
+
+```text
+Frontend session form
+  -> Backend broker-session API
+  -> QCH Sub-container Broker API
+  -> QCH pulls IBKR_GATEWAY_IMAGE from Docker Hub
+  -> one private Gateway child per session
+  -> Backend uses http://<child-name>:8080/api/v1
 ```
 
-The scheduled data, feature, experiment, and scoring tasks must run before Tier 1 caches are expected. Finalists are exactly IBKR-qualified with deterministic substitutions. Missing optional data moves through explicit stale/full, price-only, baseline, and validated-snapshot fallbacks; the system never invents data, scores, contracts, or SHADOW evidence.
+The Backend validates and forwards only the configured image reference and child configuration. It does not run Docker, pull images, mount a Docker socket, or accept/store/forward registry credentials. Gateway children publish no host ports; managed noVNC is available only through the Backend broker-session path.
 
-`GET /healthz` is process liveness. `GET /readyz` checks required database and recommendation readiness and also reports non-secret managed QCH/broker-session deployment status. Missing or invalid managed Gateway configuration disables only managed sessions and does not by itself make the Backend unready; when recommendations are enabled, readiness still requires the active 500-member universe, 97-entry registry, and all 20 valid timeframe/risk cache profiles to be current.
+Build and publish the child image separately:
 
-## Local start
+```bash
+cd IB_gateway
+docker buildx build --platform linux/amd64 --load -t DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0 .
+docker push DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
+```
+
+Production should configure `IBKR_GATEWAY_IMAGE=docker.io/<username>/<repository>@sha256:<64-hex-digest>`. A fixed non-`latest` Docker Hub tag is accepted for controlled testing. See [QFS deployment](docs/QFS_DEPLOYMENT.md) for the complete variable matrix, routes, networking, WebSocket, publication, and access-control requirements.
+
+## Local development
+
+Compose starts PostgreSQL, Redis, Kafka, topic initialization, Flink, Backend, and Frontend. It does not start an IBKR Gateway. Without QCH and `IBKR_GATEWAY_IMAGE`, managed broker-session creation returns a configuration error while the rest of the platform remains available.
 
 ```bash
 cp .env.example .env
@@ -36,52 +54,23 @@ docker compose ps
 powershell -NoProfile -File docs/compose_smoke.ps1
 ```
 
-Local URLs:
-
 - Frontend: <http://localhost:5173>
-- Backend: <http://localhost:8000/api/v1/system/>
-- Local/static gateway health: <http://localhost:8080/healthz>
-- Managed sessions and protected noVNC links: <http://localhost:5173/ibkr-sessions>
+- Backend system API: <http://localhost:8000/api/v1/system/>
+- Backend liveness: <http://localhost:8000/healthz>
 
-Compose retains one explicitly local/static real-adapter gateway for legacy development flows. Production execution never uses it: the Backend provisions one QCH child container per IBKR session and resolves every broker call through the portfolio's stored session. The Sessions page requires QCH variables and a published `IBKR_GATEWAY_IMAGE`. No demo account, portfolio, instrument, or order data is created.
+See [local development](docs/LOCAL_DEVELOPMENT.md), [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), [research universe](docs/RESEARCH_UNIVERSE.md), and [recommendation engine](docs/RECOMMENDATION_ENGINE.md).
 
-## Tests
+## Tests and independent builds
 
 ```bash
 cd Backend && pytest
 cd ../IB_gateway && pytest
-cd ../Frontend && npm install && npm test && npm run build
-cd .. && ./.venv/Scripts/python -m pytest streaming/flink/tests
+cd ../Frontend && npm ci && npm test && npm run test:production-build
+cd .. && python -m pytest streaming/flink/tests
 docker compose config --quiet
+docker build -t trading-engine-backend ./Backend
+docker build -t trading-engine-frontend ./Frontend
+docker buildx build --platform linux/amd64 --load -t trading-engine-gateway ./IB_gateway
 ```
 
-See [local development](docs/LOCAL_DEVELOPMENT.md), [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), [research universe](docs/RESEARCH_UNIVERSE.md), [backtesting](docs/BACKTESTING_PROTOCOL.md), [promotion](docs/STRATEGY_PROMOTION.md), and the [recommendation engine](docs/RECOMMENDATION_ENGINE.md).
-
-## QFS / QCH production
-
-Enter `https://github.com/rachitm0897/trading-engine` into QFS three times:
-
-| Application | QFS root / Docker context | Dockerfile | Public path |
-| --- | --- | --- | --- |
-| Backend | `Backend` | `Dockerfile` | `/trading_eng_backend` |
-| Frontend | `Frontend` | `Dockerfile` | `/trading_eng_frontend` |
-| Standalone Gateway | `IB_gateway` | `Dockerfile` | `/trading_eng_gateway` |
-
-No repository-root build, `deploy` directory, Compose stack, or hidden frontend build argument is required. PostgreSQL, Redis, Kafka, and Flink remain external. Only the Backend receives `QCH_APP_ID`, `QCH_API_HOST`, and `QCH_SERVICE_TOKEN` and provisions one private child Gateway per managed session. The public standalone Gateway is manual/diagnostic and is never a shared managed-session route.
-
-Build and publish the child image before enabling managed sessions:
-
-```bash
-cd IB_gateway
-docker buildx build --platform linux/amd64 --load -t DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0 .
-docker login
-docker push DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
-docker pull docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
-docker image inspect --format='{{index .RepoDigests 0}}' docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
-```
-
-Set `IBKR_GATEWAY_IMAGE` to `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway@sha256:<64-hex-digest>` for production. A fixed non-`latest` tag such as `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0` is accepted for testing. Publication is manual.
-
-Private testing uses a private Docker Hub repository and a fixed version reference; the QCH/Docker host must already have read authentication sufficient for an authenticated pull. Public server deployment uses a public repository, preferably with the immutable digest reference, and requires no Docker Hub authentication. In both cases the Backend only sends the configured image reference: it does not accept, store, or forward registry credentials and does not determine repository visibility. Changing the same repository from private to public therefore requires no Backend code change. See the exact app settings, routes, storage, WebSocket requirements, smoke commands, and QCH limitations in [QFS deployment](docs/QFS_DEPLOYMENT.md).
-
-> Live gateway sessions are supported, but live orders still require the independent `ALLOW_LIVE_TRADING=true` deployment gate and all existing kill switches, reconciliation, confirmation, validation, and pre-trade risk controls. Actionable recommendations remain long-only; short and pair/basket execution remain disabled.
+`GET /healthz` is process liveness. Backend `GET /readyz` checks database and recommendation readiness; missing managed-session configuration does not make process health fail. Live broker sessions remain subject to `ALLOW_LIVE_TRADING`, kill switches, reconciliation, confirmation, validation, and pre-trade risk controls.

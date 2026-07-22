@@ -23,7 +23,7 @@ unset novnc_password
 unset NOVNC_PASSWORD
 chown -R ibgateway:ibgateway /home/ibgateway/.vnc
 
-envsubst '${PORT} ${APP_BASE_PATH}' < /app/nginx.conf.template > /etc/nginx/nginx.conf
+envsubst '${PORT}' < /app/nginx.conf.template > /etc/nginx/nginx.conf
 su -s /bin/sh ibgateway -c 'cd /app && python manage.py migrate --noinput'
 
 if [ "$BROKER_ADAPTER" = "ib_async" ]; then

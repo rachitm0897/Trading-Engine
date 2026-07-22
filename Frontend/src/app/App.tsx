@@ -10,7 +10,7 @@ export function normalizeBasename(configured: string) {
 
 export function appBasename() {
   if (import.meta.env.MODE === 'test') return '/'
-  return normalizeBasename(import.meta.env.VITE_APP_BASE_PATH || import.meta.env.BASE_URL || '/')
+  return normalizeBasename(import.meta.env.BASE_URL || '/')
 }
 
 export default function App() {

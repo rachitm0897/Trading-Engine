@@ -1,7 +1,16 @@
 # Local development
 
-1. Copy `.env.example` to `.env`; replace local tokens and passwords.
-2. Start the infrastructure services and wait for PostgreSQL, Redis, and Kafka to become healthy. `kafka-init` should exit successfully after creating topics; the Flink services should remain running.
+Docker Compose is only a local stack for PostgreSQL, Redis, Kafka, topic initialization, Flink, Backend, and Frontend. It does not start an IBKR Gateway container.
+
+1. Optionally copy the small root example and replace local-only secrets:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   The ignored `.env` remains outside every production image.
+
+2. Start infrastructure:
 
    ```bash
    docker compose up -d postgres redis kafka kafka-init flink-jobmanager flink-taskmanager
@@ -9,62 +18,51 @@
    docker compose logs -f postgres redis kafka kafka-init flink-jobmanager flink-taskmanager
    ```
 
-3. Start the local/static IB Gateway compatibility service, then verify its public process health.
-
-   ```bash
-   docker compose up --build --no-deps -d ib_gateway
-   curl -fsS http://localhost:8080/healthz
-   docker compose logs -f ib_gateway
-   ```
-
-4. Start the Backend after the infrastructure and Gateway. Managed QCH configuration is optional locally: when it is absent, the Backend and non-IBKR features remain available, while managed session creation is disabled. `/healthz` is process liveness; `/readyz` checks required Backend/database/recommendation readiness and reports managed Gateway availability without making missing QCH configuration a global failure.
+3. Start the Backend:
 
    ```bash
    docker compose up --build --no-deps -d backend
    curl -fsS http://localhost:8000/healthz
    curl -fsS http://localhost:8000/readyz
    curl -fsS http://localhost:8000/api/v1/system/
-   docker compose logs -f backend
    ```
 
-5. Start the Frontend last, then open the application.
+   QCH and `IBKR_GATEWAY_IMAGE` are intentionally absent by default. Managed broker-session creation is unavailable, but health, research, portfolio, streaming, and all other non-broker features continue to start normally. Every broker operation still requires a real managed session; there is no static local route.
+
+4. Start the Frontend:
 
    ```bash
    docker compose up --build --no-deps -d frontend
    curl -fsS http://localhost:5173/healthz
-   docker compose logs -f frontend
    ```
 
-   The application is at <http://localhost:5173>. Existing sessions remain visible when managed Gateway deployment is unavailable.
+   Open <http://localhost:5173>. Runtime configuration points the browser to `http://localhost:8000/api/v1`; Nginx does not proxy `/api/v1`.
 
-To stop components individually in reverse order, use:
+Stop individual components in reverse order:
 
 ```bash
-docker compose stop frontend
-docker compose stop backend
-docker compose stop ib_gateway
+docker compose stop frontend backend
 docker compose stop flink-taskmanager flink-jobmanager kafka redis postgres
 ```
 
-To stop and remove the complete stack while preserving named volumes, use `docker compose down`. Add `-v` only when intentionally discarding all local database, Kafka, Flink, and Gateway state.
+`docker compose down` removes containers and the network while preserving named data volumes. Add `-v` only when intentionally discarding local PostgreSQL, Kafka, and Flink state.
 
-Validate the complete private Kafka/Flink topology and restart recovery with:
+Run the local topology smoke checks with:
 
 ```powershell
 powershell -NoProfile -File docs/compose_smoke.ps1
 powershell -NoProfile -File docs/streaming_recovery_smoke.ps1
 ```
 
-Compose's `ib_gateway` is an explicitly local/static compatibility service using the real `ib_async` adapter and `${IBC_TRADING_MODE:-paper}`. Configure its credentials in the root `.env` only when testing legacy local flows. Backend production logic has no global gateway route; managed sessions require the QCH injected variables and published `IBKR_GATEWAY_IMAGE` described in [QFS deployment](QFS_DEPLOYMENT.md). Until IBKR authentication completes, broker health stays disconnected and risk correctly blocks submissions.
+The Compose smoke verifies seven long-running services, Backend and Frontend health, SPA deep links, the absolute runtime Backend URL, absent demo accounts, disabled managed-session creation without QCH, and private Kafka/Flink listeners.
 
-The static compatibility route is enabled only by `BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED=true` in Compose. Never enable it in production. PostgreSQL and Redis are reachable only on the private Compose network and are not published to the host.
+For host-side Python tests, use a separate environment per Python application because the Backend and child image own different dependencies. Tests default to SQLite when `DATABASE_URL` is unset; if a local component `.env` points to external PostgreSQL, explicitly set `DATABASE_URL=sqlite:///:memory:` for an isolated test run.
 
-For host-side tests, use a separate Python environment per Python application because both intentionally own their dependencies. SQLite is the automatic test database.
-
-Health URLs:
+Local health URLs:
 
 ```text
 GET http://localhost:5173/healthz
 GET http://localhost:8000/healthz
-GET http://localhost:8080/healthz
 ```
+
+`docker run` for the image under `IB_gateway/` is a separate image-validation procedure documented in that directory. It is not part of the Compose application topology.

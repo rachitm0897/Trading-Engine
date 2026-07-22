@@ -41,6 +41,9 @@ def test_prefix_preserved_backend_health_api_and_dashboard_alias(client):
             clear_url_caches()
             assert client.get("/trading_eng_backend/healthz").status_code == 200
             assert client.get("/trading_eng_backend/api/v1/system/").status_code == 200
+            base = client.get("/trading_eng_backend")
+            assert base.status_code == 200
+            assert base.json()["data"]["system"] == "/trading_eng_backend/api/v1/system/"
             redirect = client.get("/trading_eng_backend/dashboard")
             assert redirect.status_code == 302
             assert redirect["Location"] == "/trading_eng_backend/api/v1/dashboard/summary/"
@@ -68,6 +71,16 @@ def test_backend_initializes_without_managed_gateway_environment():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_backend_image_is_context_local_and_contains_no_environment_file():
+    root = Path(__file__).resolve().parents[1]
+    dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
+    dockerignore = (root / ".dockerignore").read_text(encoding="utf-8")
+
+    assert "COPY .env.example" not in dockerfile
+    assert "COPY ../" not in dockerfile
+    assert ".env" in dockerignore.splitlines()
+
+
 def test_health_and_readiness_succeed_when_only_managed_gateway_is_missing(client, settings, monkeypatch):
     disable_managed_gateway(settings, monkeypatch)
     settings.RECOMMENDATION_SYSTEM_ENABLED = False
@@ -86,7 +99,6 @@ def test_health_and_readiness_succeed_when_only_managed_gateway_is_missing(clien
 
 
 def test_system_reports_managed_gateway_unavailable_without_exposing_values(client, settings, monkeypatch):
-    settings.BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED = True
     disable_managed_gateway(settings, monkeypatch)
     result = client.get("/api/v1/system/")
     assert result.status_code == 200
@@ -190,7 +202,7 @@ def test_non_docker_hub_mutable_or_malformed_image_references_are_rejected(image
         parse_docker_hub_image_reference(image)
 
 
-def test_configured_gateway_image_strips_outer_spacing_but_rejects_line_breaks(settings):
+def test_configured_gateway_image_rejects_outer_spacing_and_line_breaks(settings):
     from apps.broker_gateway.configuration import (
         GatewayImageConfigurationError,
         configured_gateway_image,
@@ -198,7 +210,8 @@ def test_configured_gateway_image_strips_outer_spacing_but_rejects_line_breaks(s
 
     image = "docker.io/example/trading-engine-ib-gateway:v1.0.0"
     settings.IBKR_GATEWAY_IMAGE = f"  {image}\t"
-    assert configured_gateway_image() == image
+    with pytest.raises(GatewayImageConfigurationError):
+        configured_gateway_image()
 
     settings.IBKR_GATEWAY_IMAGE = image + "\n"
     with pytest.raises(GatewayImageConfigurationError):

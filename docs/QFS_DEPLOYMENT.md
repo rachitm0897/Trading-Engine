@@ -1,60 +1,79 @@
 # QFS / QCH production deployment
 
-Connect the same repository to QFS three times. Each application uses its component directory as both the QFS root directory and Docker build context. Production does not use a repository-root Dockerfile, Docker Compose, or a `deploy` directory.
+Connect `https://github.com/rachitm0897/trading-engine` to QFS exactly twice. Each application uses its component directory as both the QFS root and Docker build context.
 
-Repository for all three applications: `https://github.com/rachitm0897/trading-engine`
-
-| QFS application | Root directory | Dockerfile | Public path | Health URL |
+| QFS application | Root/build context | Dockerfile | Public URL | Health check |
 | --- | --- | --- | --- | --- |
-| Backend | `Backend` | `Dockerfile` | `/trading_eng_backend` | `https://qfsplatform.com/trading_eng_backend/healthz` |
-| Frontend | `Frontend` | `Dockerfile` | `/trading_eng_frontend` | `https://qfsplatform.com/trading_eng_frontend/healthz` |
-| Standalone Gateway | `IB_gateway` | `Dockerfile` | `/trading_eng_gateway` | `https://qfsplatform.com/trading_eng_gateway/healthz` |
+| Frontend | `Frontend` | `Frontend/Dockerfile` | `https://qfsplatform.com/trading_eng_frontend` | `/healthz` |
+| Backend | `Backend` | `Backend/Dockerfile` | `https://qfsplatform.com/trading_eng_backend` | `/healthz` |
 
-These three public applications do not provide PostgreSQL, Redis, Kafka, or Flink. Provision those as external services and give their connection URLs only to the Backend application.
+There is no third public application. `IB_gateway/` is only the source for a reusable private child image published to Docker Hub. PostgreSQL, Redis, Celery broker/result storage, Kafka, and Flink are external services configured only on the Backend.
 
-## Architecture boundaries
+## Architecture
 
-There are six distinct deployment roles:
+```text
+Browser
+  -> Frontend QFS app
+  -> Backend QFS app
+       -> external PostgreSQL / Redis / Kafka / Flink
+       -> QCH Sub-container Broker API
+            -> pulls configured Docker Hub image
+            -> starts one private Gateway child per BrokerGatewaySession
+       -> http://<full-session-uuid-child-name>:8080/api/v1
+```
 
-1. The public Backend QFS app runs Django ASGI, Celery workers, Celery Beat, and the private managed-session noVNC proxy.
-2. The public Frontend QFS app serves the React build through Nginx.
-3. The public standalone Gateway QFS app is for manual or diagnostic use.
-4. Private per-session Gateway children are created by the Backend through QCH. Every `BrokerGatewaySession` has a unique child name, service token, noVNC password, account set, and event cursor.
-5. A Docker Hub repository stores the manually published `IB_gateway` image that QCH pulls for private children. It may be private during testing or public for server deployment.
-6. External PostgreSQL, Redis, Kafka, and Flink services support the Backend.
+The Backend never pulls an image. It has no Docker SDK, Docker CLI, Docker socket, SSH deployment, or Compose execution path. The browser cannot supply an image reference or any registry authentication. The database and child environment contain no Docker Hub credentials. QCH receives only the validated configured image reference and permitted child configuration.
 
-The standalone public Gateway never replaces `IBKR_GATEWAY_IMAGE` and is never used as the shared route for managed trading sessions. Managed child URLs always have the form `http://<container-name>:8080/api/v1`. Do not publish child TWS ports 4001/4002, VNC 5900, websockify 6080, internal Gunicorn 8001, or child HTTP 8080. The Backend requires no Docker socket, SSH, or direct Docker daemon access.
+## Environment matrix
+
+| Owner | Variables |
+| --- | --- |
+| Frontend QFS app | `PORT`, `BACKEND_API_URL` |
+| Backend QFS app | `PORT`, `APP_BASE_PATH`, `PUBLIC_BASE_URL`, `FORWARDED_ALLOW_IPS`, `DJANGO_SECRET_KEY`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS`, external infrastructure URLs, `IBKR_GATEWAY_IMAGE`, `BROKER_SESSION_ENCRYPTION_KEY`, optional `QCH_SUBCONTAINER_NETWORK`, trading/provider/research policy overrides |
+| QCH-injected Backend values | `QCH_APP_ID`, `QCH_API_HOST`, `QCH_SERVICE_TOKEN` |
+| Per-session child environment | `DJANGO_SECRET_KEY`, `GATEWAY_SERVICE_TOKEN`, `NOVNC_PASSWORD`, `IB_USERNAME`, `IB_PASSWORD`, `IBC_TRADING_MODE`, `BROKER_ADAPTER`, `PORT` |
+| Optional local development | PostgreSQL credentials, host ports, local Django/encryption secrets, CORS/CSRF origins, SHADOW execution mode, optional Finnhub key |
+
+Do not configure IBKR usernames/passwords on either QFS application. They are submitted per session, encrypted temporarily by the Backend, sent once to QCH, and deleted after confirmed creation/adoption or final expiry/failure.
+
+## Frontend QFS application
+
+Set:
+
+```text
+PORT=5173
+BACKEND_API_URL=https://qfsplatform.com/trading_eng_backend/api/v1
+```
+
+The production Vite base is deterministically `/trading_eng_frontend/`. React Router uses Vite's normalized `BASE_URL`, so routes and built assets share one prefix. Nginx:
+
+- permanently redirects `/trading_eng_frontend` to `/trading_eng_frontend/`;
+- serves the SPA shell for `/dashboard`, `/ibkr-sessions`, and all other deep links;
+- serves assets and lazy chunks below `/trading_eng_frontend/`;
+- serves both prefixed and application-root upstream paths;
+- serves `/runtime-config.js` with `Cache-Control: no-store`;
+- serves `/healthz` without depending on the Backend.
+
+Container startup accepts only a single-line HTTP(S) `BACKEND_API_URL` from a restricted URL character set before inserting it into JavaScript. Quotes, whitespace, line breaks, and malformed schemes fail startup. The production browser never uses Docker DNS.
 
 ## Backend QFS application
 
-Set:
+Set the public/runtime fundamentals:
 
 ```text
 PORT=8000
 APP_BASE_PATH=/trading_eng_backend
 PUBLIC_BASE_URL=https://qfsplatform.com/trading_eng_backend
+FORWARDED_ALLOW_IPS=*
+DJANGO_SECRET_KEY=<long random secret>
 ALLOWED_HOSTS=qfsplatform.com
 CORS_ALLOWED_ORIGINS=https://qfsplatform.com
 CSRF_TRUSTED_ORIGINS=https://qfsplatform.com
-DJANGO_SECRET_KEY=<long random secret>
-BROKER_SESSION_ENCRYPTION_KEY=<independently managed encryption key>
-BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED=false
-IBKR_GATEWAY_IMAGE=docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway@sha256:<digest>
-BROKER_CREDENTIAL_TTL_SECONDS=900
-BROKER_SESSION_CREATING_STALE_SECONDS=60
-BROKER_SESSION_START_TIMEOUT_SECONDS=45
-BROKER_SESSION_HEALTH_TIMEOUT_SECONDS=5
-NOVNC_ACCESS_TOKEN_TTL_SECONDS=300
-NOVNC_PROXY_CONNECT_TIMEOUT_SECONDS=10
-NOVNC_PROXY_IDLE_TIMEOUT_SECONDS=300
-NOVNC_PROXY_MAX_BODY_BYTES=10485760
-QCH_REQUEST_TIMEOUT_SECONDS=10
-QCH_SUBCONTAINER_NETWORK=traefik
+BROKER_SESSION_ENCRYPTION_KEY=<independent long random key>
+IBKR_GATEWAY_IMAGE=docker.io/<dockerhub-user>/<repository>@sha256:<64-hex-digest>
 ```
 
-Enable QFS **Sub-container management / QCH broker access** for this Backend application. QFS/QCH must inject `QCH_APP_ID`, `QCH_API_HOST`, and the rotated `QCH_SERVICE_TOKEN` into the Backend process environment. Do not set these variables on the Frontend or standalone Gateway. The token is read from the process environment when a QCH client is created and is never stored in the database.
-
-Configure external dependencies:
+Configure external dependencies only here:
 
 ```text
 DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/trading_engine
@@ -66,151 +85,94 @@ KAFKA_ENABLED=true
 FLINK_REST_URL=https://FLINK_HOST
 ```
 
-Also configure `FINNHUB_API_KEY` and the Finnhub timeout/fallback variables when those providers are enabled. Research controls include `RESEARCH_ENABLED`, `RECOMMENDATION_SYSTEM_ENABLED`, bundle/artifact paths, provider, lookback, concurrency, score-age, and cache-age variables listed in [`Backend/.env.example`](../Backend/.env.example). The production image contains its own research bundle and Kafka schemas; it does not read repository-parent files.
-
-`GET /healthz` is process liveness and does not wait for database or recommendation caches. `GET /readyz` checks required database and recommendation-cache readiness and reports only missing or invalid broker/QCH variable names, never the Docker Hub username, repository, tag, digest, visibility, or credentials. Missing managed Gateway configuration does not by itself return HTTP 503. The System API returns the same non-secret broker deployment status, and managed-session actions return `BROKER_GATEWAY_NOT_CONFIGURED` until it is available.
-
-Required public routes include:
+Enable QFS Sub-container management for this Backend app. QCH must inject:
 
 ```text
+QCH_APP_ID
+QCH_API_HOST
+QCH_SERVICE_TOKEN
+```
+
+`QCH_SUBCONTAINER_NETWORK` is optional. Leave it blank to omit `network` from the create payload and use QCH's platform default. Set it only when QFS requires an explicit shared network that resolves child container names from the Backend.
+
+The QFS process health check must use `/healthz`, not `/readyz`. `/healthz` is process liveness. `/readyz` checks the database and recommendation cache; missing managed-session configuration alone does not make either endpoint fail.
+
+Required public routing:
+
+```text
+/trading_eng_backend
 /trading_eng_backend/healthz
 /trading_eng_backend/readyz
 /trading_eng_backend/api/v1/system/
-/trading_eng_backend/api/v1/dashboard/summary/
 /trading_eng_backend/api/v1/broker-sessions/
-/trading_eng_backend/api/v1/broker-sessions/<uuid>/
 /trading_eng_backend/api/v1/broker-sessions/<uuid>/novnc/...
 ```
 
-`/trading_eng_backend/dashboard` redirects to `/trading_eng_backend/api/v1/dashboard/summary/`. The Backend does not contain or serve the React application.
+The exact base returns useful JSON metadata. Django routes work when QFS preserves the prefix and when QFS strips it before forwarding. In stripped mode, QFS must send `X-Forwarded-Prefix: /trading_eng_backend`.
 
-## Frontend QFS application
+## QCH contract
 
-The Dockerfile builds with `/trading_eng_frontend/` as the deterministic Vite base. It does not require QFS build arguments. At container start, `BACKEND_API_URL` generates a small uncached `runtime-config.js`; the QFS default is already built in.
-
-```text
-PORT=5173
-APP_BASE_PATH=/trading_eng_frontend
-PUBLIC_BASE_URL=https://qfsplatform.com/trading_eng_frontend
-BACKEND_API_URL=https://qfsplatform.com/trading_eng_backend/api/v1
-```
-
-`VITE_APP_BASE_PATH` remains available as a build-time override for non-QFS builds, and `VITE_API_BASE_URL` remains available for local Vite. The production image does not call `http://backend:8000` or any other Docker DNS name. Nginx serves the SPA shell for direct refreshes including `/dashboard`, `/ibkr-sessions`, and every current React route, with all assets and lazy chunks below `/trading_eng_frontend/`.
-
-## Standalone Gateway QFS application
-
-Set:
-
-```text
-PORT=8080
-APP_BASE_PATH=/trading_eng_gateway
-PUBLIC_BASE_URL=https://qfsplatform.com/trading_eng_gateway
-DJANGO_SECRET_KEY=<long random secret>
-GATEWAY_SERVICE_TOKEN=<long random service token>
-NOVNC_PASSWORD=<long random noVNC password>
-IB_USERNAME=<standalone diagnostic account username>
-IB_PASSWORD=<standalone diagnostic account password>
-IBC_TRADING_MODE=paper
-BROKER_ADAPTER=ib_async
-GATEWAY_DB_PATH=/data/gateway.sqlite3
-```
-
-`IBC_TRADING_MODE` accepts exactly `paper` or `live`; paper uses TWS/API 4002 and live uses 4001. Configure persistent QFS storage for both `/data` and `/home/ibgateway/Jts`. Only `${PORT}` is public. The useful root response, public health, authenticated API, noVNC asset, and WebSocket paths are:
-
-```text
-/trading_eng_gateway/
-/trading_eng_gateway/healthz
-/trading_eng_gateway/api/v1/health/
-/trading_eng_gateway/api/v1/session/
-/trading_eng_gateway/novnc/vnc.html
-/trading_eng_gateway/novnc/websockify
-```
-
-The standalone service is operationally separate from all managed QCH children.
-
-## QCH contract and lifecycle
-
-The Backend uses exactly:
+The Backend uses only:
 
 ```text
 GET    {QCH_API_HOST}/api/apps/{QCH_APP_ID}/containers
 POST   {QCH_API_HOST}/api/apps/{QCH_APP_ID}/containers
-DELETE {QCH_API_HOST}/api/apps/{QCH_APP_ID}/containers/{url-encoded-container-name}
+DELETE {QCH_API_HOST}/api/apps/{QCH_APP_ID}/containers/{url-encoded-child-name}
 Authorization: Bearer <QCH_SERVICE_TOKEN>
 ```
 
-Create sends required `image` and `name`, optional `env` and `network`, and normally omits `command` so the image `ENTRYPOINT` runs. The session environment contains `DJANGO_SECRET_KEY`, `GATEWAY_SERVICE_TOKEN`, `NOVNC_PASSWORD`, `IB_USERNAME`, `IB_PASSWORD`, `IBC_TRADING_MODE`, `BROKER_ADAPTER=ib_async`, `PORT=8080`, and `APP_BASE_PATH=`. The Backend generates the Django secret only for this create request and does not persist it. HTTP 409 and ambiguous retryable creates are resolved by listing and adopting only the expected name. A delete 404 is successful idempotent deletion.
+New deterministic child names contain the full session UUID. Create sends `name`, `image`, `env`, and optionally `network`; it omits `command` so the image entrypoint runs. The child environment is exactly:
 
-The create API has no registry-authentication fields. The Backend does not run Docker, pull the image itself, accept registry credentials from the browser, store them on sessions, or send them in the QCH request or child environment. QCH receives only the validated configured Docker Hub image reference. An image-pull failure is reported as a generic QCH provisioning failure because it can mean a missing image, a wrong tag or digest, network failure, missing host authentication, rate limiting, or an unsupported architecture; it does not prove the repository is private.
+```text
+DJANGO_SECRET_KEY=<generated per create request>
+GATEWAY_SERVICE_TOKEN=<generated per session>
+NOVNC_PASSWORD=<generated per session>
+IB_USERNAME=<submitted per session>
+IB_PASSWORD=<submitted per session>
+IBC_TRADING_MODE=paper|live
+BROKER_ADAPTER=ib_async
+PORT=8080
+```
 
-Temporary IBKR credentials are encrypted at rest. They survive retryable QCH/network failures and Celery retries, then are deleted after confirmed creation/adoption, final non-retryable failure, final retry exhaustion, or TTL expiry. The periodic monitor requeues stale `CREATING` sessions so a lost task cannot leave one permanently stuck. When managed QCH deployment is not configured, monitoring exits with a disabled result without changing existing sessions; unrelated Celery work continues. If a private child exits or disappears while QCH is available, the Backend records a visible error, disables trading commands, and waits for explicit credential-based recreation; it does not silently replace the failure.
+Managed child URLs are always `http://<child-container-name>:8080/api/v1`. Do not publish child port `8080` or private TWS, VNC, websockify, and Gunicorn listeners. HTTP 409 and ambiguous retryable creates are resolved by listing and adopting only the expected deterministic name. Delete 404 is successful idempotent deletion.
 
-QCH's child API does **not** expose volume mounting, automatic restart policies, or public Traefik routes. Do not document or depend on those capabilities.
+## Docker Hub image policy
 
-## Managed noVNC and proxy requirements
-
-Managed-session noVNC stays behind the Backend ASGI proxy and never uses `https://qfsplatform.com/trading_eng_gateway`. Authorization, `vnc.html`, and `websockify` paths are generated with exactly one Backend prefix. Both platform behaviors are supported: the prefix may remain in the upstream path, or QFS may strip it and send `X-Forwarded-Prefix`.
-
-The QFS outer proxy must forward `Upgrade` and `Connection` for Backend managed-session WebSockets and standalone Gateway websockify. It must also forward `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Prefix`. Repository code cannot recover a WebSocket upgrade discarded by the outer platform proxy.
-
-Browser input never selects an upstream host, URL, scheme, or port. The proxy preserves binary WebSocket frames and close/disconnect events, validates expiring session-specific access tokens, and completes VNC authentication without returning the child noVNC password to the browser.
-
-## Publish the child image
-
-Publication is currently a manual Docker Hub operation. Build the x86-64 image from the `IB_gateway` context, then log in and push a fixed version:
+Build and publish from `IB_gateway` only:
 
 ```bash
 cd IB_gateway
 docker buildx build --platform linux/amd64 --load -t DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0 .
-docker login
 docker push DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
 docker pull docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
 docker image inspect --format='{{index .RepoDigests 0}}' docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
 ```
 
-The Backend requires the explicit `docker.io/` prefix. Set `IBKR_GATEWAY_IMAGE` to `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway@sha256:<64-hex-digest>` for production. A fixed tag such as `docker.io/DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0` is accepted for testing; `latest`, bare repositories, URL-style values, other registries, placeholders, and malformed tags or digests are rejected.
+Production uses the returned `docker.io/<username>/<repository>@sha256:<digest>` reference. Fixed non-`latest` Docker Hub tags remain available for controlled testing. `latest`, placeholders, whitespace/line breaks, malformed references, URL-style values, bare repositories, and other registries are rejected.
 
-### Private-image testing
+For a private Docker Hub repository, authenticate the QCH host with read access outside this repository. For a public repository, QCH needs no registry credentials. Backend behavior is identical and never exposes repository visibility or credentials.
 
-```text
-Docker Hub repository: private
-IBKR_GATEWAY_IMAGE: docker.io/<username>/<repository>:<fixed-version>
-QCH host: authenticated with read permission
-Backend: no Docker Hub credentials
-```
+## Managed noVNC and outer-proxy requirements
 
-Provision Docker Hub read authentication directly on the QCH/Docker host, outside this repository and outside Backend configuration. The host must be able to perform the equivalent of an authenticated Docker pull. Do not place the token in QFS Backend variables, browser requests, broker-session records, QCH request fields, or child environments.
+The Backend ASGI proxy handles noVNC HTTP assets and WebSockets at the broker-session path. Generated URLs contain exactly one Backend prefix. The outer QFS proxy must preserve:
 
-### Public-image server deployment
+- `Upgrade` and `Connection` for WebSockets;
+- `X-Forwarded-Proto` and `X-Forwarded-Host`;
+- `X-Forwarded-Prefix` when it strips the public path.
 
-```text
-Docker Hub repository: public
-IBKR_GATEWAY_IMAGE: docker.io/<username>/<repository>@sha256:<digest>
-QCH host: no registry authentication required
-Backend: unchanged
-```
+Repository code cannot recover an upgrade removed by the outer proxy. Browser input cannot select the child host, scheme, port, or URL. Expiring session tokens authorize noVNC, and the Backend terminates VNC authentication so the child password does not reach the browser.
 
-The Backend cannot detect or control image visibility. Changing the same Docker Hub repository from private to public requires no Backend code change, and the same configured image reference may continue to be used. Only the QCH host's need for registry authentication changes.
+## Access-control production gate
 
-## Build and post-deployment checks
+Health endpoints remain public. Before declaring deployment production-ready, verify that QFS protects both public applications upstream. If it does not, state-changing trading, provider, strategy, and broker-session APIs must not remain anonymously reachable. Use the existing Django staff-session authentication for application-level protection where needed; do not introduce a second authentication system.
 
-From the repository root, the production contexts are exactly:
+## Build and smoke checks
 
 ```bash
 docker build -t trading-engine-backend ./Backend
 docker build -t trading-engine-frontend ./Frontend
 docker buildx build --platform linux/amd64 --load -t trading-engine-gateway ./IB_gateway
-```
-
-Run containers independently with explicit environment variables; production smoke testing does not connect them with Compose. Local Docker Compose remains a separate development option.
-
-Public checks that require no secret:
-
-```bash
 python scripts/qfs_smoke.py
-curl -fsS https://qfsplatform.com/trading_eng_backend/healthz
-curl -fsS https://qfsplatform.com/trading_eng_frontend/healthz
-curl -fsS https://qfsplatform.com/trading_eng_gateway/healthz
 ```
 
-Set `QFS_GATEWAY_SERVICE_TOKEN` only when also checking the standalone authenticated health/session endpoints. Do not print or persist that token. Deleting a managed Gateway container pauses its bound strategies and monitoring, but does not cancel orders already resting at IBKR.
+Compose is a local development tool and is not a production deployment path.

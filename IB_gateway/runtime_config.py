@@ -28,7 +28,6 @@ KNOWN_PLACEHOLDER_HASHES = {
     "4f11327cac97c517854b9b0b86e93c50f03834d805c270cdf8400b8dd39349d3",
     "b0060e76ae3488cac69d2e702fa366537fe241e19382ea731059e758fae07be1",
 }
-SAFE_BASE_PATH = re.compile(r"^[A-Za-z0-9_/-]+$")
 RESTART_TIME = re.compile(r"^(0?[1-9]|1[0-2]):[0-5][0-9] (AM|PM)$")
 
 
@@ -42,15 +41,6 @@ class RuntimeConfigurationError(ValueError):
         if self.invalid:
             details.append(f"invalid variables: {', '.join(self.invalid)}")
         super().__init__("Gateway runtime configuration error; " + "; ".join(details))
-
-
-def normalize_app_base_path(value: object) -> str:
-    path = str(value or "").strip().strip("/")
-    if not path:
-        return ""
-    if not SAFE_BASE_PATH.fullmatch(path) or "//" in path:
-        raise ValueError("APP_BASE_PATH")
-    return f"/{path}"
 
 
 def normalize_broker_adapter(value: object) -> str:
@@ -126,11 +116,6 @@ def validate_environment(environment: Mapping[str, str] | None = None) -> dict[s
             normalized[name] = _positive_integer(environment, name, default, maximum)
         except ValueError:
             invalid.append(name)
-
-    try:
-        normalized["APP_BASE_PATH"] = normalize_app_base_path(environment.get("APP_BASE_PATH", ""))
-    except ValueError:
-        invalid.append("APP_BASE_PATH")
 
     restart_time = str(environment.get("IBC_AUTO_RESTART_TIME", "11:45 PM") or "").strip().upper()
     if not RESTART_TIME.fullmatch(restart_time):

@@ -28,7 +28,7 @@ EXITED_CONTAINER_STATES = {"EXITED", "DEAD", "FAILED", "STOPPED", "REMOVED"}
 
 
 def container_name_for(session_id):
-    return f"trading-engine-ibkr-{str(session_id).replace('-', '')[:20]}"
+    return f"trading-engine-ibkr-{str(session_id).replace('-', '')}"
 
 
 def temporary_secret_expiry():
@@ -47,7 +47,6 @@ def gateway_environment(session, username, password, gateway_token, novnc_passwo
         "NOVNC_PASSWORD": novnc_password,
         "BROKER_ADAPTER": "ib_async",
         "PORT": "8080",
-        "APP_BASE_PATH": "",
     }
 
 
@@ -259,11 +258,12 @@ def provision_session(session_id, *, qch_client=None, sleep=time.sleep):
             gateway_token = decrypt_secret(session.encrypted_gateway_token)
             novnc_password = decrypt_secret(session.encrypted_novnc_password)
             try:
+                network = str(settings.QCH_SUBCONTAINER_NETWORK or "").strip() or None
                 existing = qch.create_container(
                     name=session.child_container_name,
                     image=configured_image,
                     env=gateway_environment(session, username, password, gateway_token, novnc_password),
-                    network=settings.QCH_SUBCONTAINER_NETWORK,
+                    network=network,
                 )
             except QCHError as exc:
                 # A timed-out create can still have succeeded. Resolve the

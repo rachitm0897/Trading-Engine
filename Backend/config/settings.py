@@ -1,5 +1,4 @@
 import os
-import sys
 from pathlib import Path
 import dj_database_url
 from corsheaders.defaults import default_headers
@@ -89,14 +88,8 @@ QCH_APP_ID = os.getenv("QCH_APP_ID", "")
 QCH_API_HOST = os.getenv("QCH_API_HOST", "").rstrip("/")
 QCH_SERVICE_TOKEN = os.getenv("QCH_SERVICE_TOKEN", "")
 QCH_REQUEST_TIMEOUT_SECONDS = float(os.getenv("QCH_REQUEST_TIMEOUT_SECONDS", "10"))
-QCH_SUBCONTAINER_NETWORK = os.getenv("QCH_SUBCONTAINER_NETWORK", "traefik")
+QCH_SUBCONTAINER_NETWORK = os.getenv("QCH_SUBCONTAINER_NETWORK", "")
 IBKR_GATEWAY_IMAGE = os.getenv("IBKR_GATEWAY_IMAGE", "")
-BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED = os.getenv(
-    "BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED",
-    "true" if any("pytest" in value.lower() for value in sys.argv) else "false",
-).lower() == "true"
-STATIC_DEVELOPMENT_IB_GATEWAY_URL = os.getenv("STATIC_DEVELOPMENT_IB_GATEWAY_URL", "http://localhost:8080/api/v1")
-STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN = os.getenv("STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN", "test-token")
 GLOBAL_KILL_SWITCH = os.getenv("GLOBAL_KILL_SWITCH", "false").lower() == "true"
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_CLIENT_ID = os.getenv("KAFKA_CLIENT_ID", "finflock-backend")

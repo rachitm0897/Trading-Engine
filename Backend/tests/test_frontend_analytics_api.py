@@ -10,17 +10,20 @@ from apps.market_streams.models import IndicatorValue, MarketBar
 from apps.oms.models import Order, OrderIntent
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
 from apps.strategies.framework import create_instance, enable_instance, evaluate_instance
+from tests.managed_gateway import bind_managed_gateway
 
 pytestmark = pytest.mark.django_db
 
 
 @pytest.fixture
-def portfolio():
+def portfolio(settings):
     account = BrokerAccount.objects.create(
         account_id="DU-ANALYTICS", net_liquidation=1100, available_cash=100,
         buying_power=2000, daily_pnl=25, is_reconciled=True,
     )
-    return TradingPortfolio.objects.create(name="Analytics", account=account)
+    portfolio = TradingPortfolio.objects.create(name="Analytics", account=account)
+    bind_managed_gateway(portfolio, settings)
+    return portfolio
 
 
 @pytest.fixture
@@ -41,7 +44,7 @@ def make_bar(instrument, bar_id, when, close):
 
 @responses.activate
 def test_dashboard_summary_is_portfolio_scoped_and_partial_gateway_safe(client, portfolio, instrument):
-    responses.get("http://localhost:8080/api/v1/health/", json={
+    responses.get(f"{portfolio.gateway_session.internal_base_url}/health/", json={
         "ok": True, "data": {"connected": True, "reconciled": True, "mode": "paper"}, "error": None, "meta": {},
     })
     body = client.get(f"/api/v1/dashboard/summary/?portfolio={portfolio.pk}").json()

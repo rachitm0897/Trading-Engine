@@ -1,8 +1,7 @@
 # Runtime diagnosis
 
-Diagnosed on 2026-07-13 against the full Docker Compose stack and an authenticated
-IBKR paper Gateway session. This document was written before production code was
-changed.
+Diagnosed on 2026-07-13 against the application stack and a separately validated
+authenticated IBKR paper child. This document records the pre-fix evidence.
 
 ## Baseline
 
@@ -11,10 +10,9 @@ changed.
 - Frontend: `11 passed` across 3 files.
 - Flink calculation tests: `3 passed in 0.07s`.
 - `docker compose config --quiet` passed.
-- `docker compose up --build -d` completed and all eight long-running services
-  started. Backend, Frontend, Gateway, Kafka, PostgreSQL, and Redis reported
-  healthy. All five expected Flink jobs reported `RUNNING` with no failed tasks.
-- The Gateway API reported `connected=true`, `reconciled=true`, and `mode=paper`.
+- The application/infrastructure stack started successfully, and the separately
+  validated broker child reported `connected=true`, `reconciled=true`, and
+  `mode=paper`. All five expected Flink jobs reported `RUNNING` with no failed tasks.
 
 The green unit and container-health results do not exercise the broker-to-Kafka
 market-data path.
@@ -272,8 +270,8 @@ path rather than HTTP/process liveness alone.
 
 ## Post-fix runtime verification
 
-Verified on 2026-07-13 after the phase-by-phase implementation and a clean rebuild
-of every Compose image.
+Verified on 2026-07-13 after the phase-by-phase implementation, an application
+stack rebuild, and separate child-image validation.
 
 ### Confirmed repaired paths
 
@@ -314,8 +312,8 @@ of every Compose image.
   remained 20 final bars, 20 indicators, and 40 consumed events, with no duplicate
   rows. All five Flink jobs returned to `RUNNING` with all tasks running.
 - Final HTTP smoke returned 200 for Backend health, instruments, strategy detail,
-  orders, and streaming health; Frontend root and health; and Gateway health.
-- Compose exposes only Gateway HTTP target port 8080 for `ib_gateway`, not raw TWS
+  orders, and streaming health; Frontend root and health; and separate child health.
+- The historical broker child exposed only HTTP target port 8080, not raw TWS
   paper port 4002. The default execution mode is
   `SHADOW`.
 
@@ -327,7 +325,7 @@ of every Compose image.
   (`478.15 kB` JavaScript bundle, `147.14 kB` gzip).
 - Flink calculation tests: `3 passed in 0.02s`; Python bytecode compilation passed.
 - `docker compose config --quiet` and a full `docker compose build` passed.
-- All long-running Compose services were up; health-enabled services were healthy;
+- All application/infrastructure services were up; health-enabled services were healthy;
   all five Flink jobs were `RUNNING` with all tasks running.
 
 ### Verification boundary and remaining paper-account checks

@@ -25,14 +25,14 @@ def intent():
 
 def test_risk_approval_resize_and_kill_switch(intent):
     policy=PreTradeRiskPolicy.objects.create(portfolio=intent.portfolio,maximum_order_quantity=20)
-    decision, qty, _ = evaluate_intent(intent, {"connected":True, "reconciled":True})
+    decision, qty, _ = evaluate_intent(intent, {"connected":True, "reconciled":True, "mode":"paper"})
     assert (decision, qty) == ("APPROVED", Decimal("10"))
     intent.risk_checks.all().delete()
     policy.maximum_order_quantity=5;policy.save()
-    decision, qty, _ = evaluate_intent(intent, {"connected":True, "reconciled":True})
+    decision, qty, _ = evaluate_intent(intent, {"connected":True, "reconciled":True, "mode":"paper"})
     assert (decision, qty) == ("RESIZED", Decimal("5"))
     intent.portfolio.kill_switch=True; intent.portfolio.save()
-    assert evaluate_intent(intent, {"connected":True, "reconciled":True})[0] == "REJECTED"
+    assert evaluate_intent(intent, {"connected":True, "reconciled":True, "mode":"paper"})[0] == "REJECTED"
 
 
 def test_live_gateway_session_is_always_rejected(intent):
@@ -130,17 +130,17 @@ def test_kill_switch_blocks_only_when_its_scope_matches(intent,scope):
         "INSTRUMENT":str(intent.instrument_id),
     }
     KillSwitch.objects.create(scope=scope,scope_id="unrelated",enabled=True)
-    assert evaluate_intent(intent,{"connected":True,"reconciled":True})[0]=="APPROVED"
+    assert evaluate_intent(intent,{"connected":True,"reconciled":True,"mode":"paper"})[0]=="APPROVED"
     KillSwitch.objects.create(scope=scope,scope_id=matching[scope],enabled=True)
-    assert evaluate_intent(intent,{"connected":True,"reconciled":True})[0]=="REJECTED"
+    assert evaluate_intent(intent,{"connected":True,"reconciled":True,"mode":"paper"})[0]=="REJECTED"
 
 
 def test_concurrent_intents_cannot_reserve_the_same_cash(intent):
     intent.quantity=1;intent.reference_price=600;intent.save(update_fields=["quantity","reference_price"])
     second=OrderIntent.objects.create(portfolio=intent.portfolio,instrument=intent.instrument,side="BUY",quantity=1,
         reference_price=600,idempotency_key="intent-2")
-    first_decision=evaluate_intent(intent,{"connected":True,"reconciled":True})[0]
-    second_decision=evaluate_intent(second,{"connected":True,"reconciled":True})[0]
+    first_decision=evaluate_intent(intent,{"connected":True,"reconciled":True,"mode":"paper"})[0]
+    second_decision=evaluate_intent(second,{"connected":True,"reconciled":True,"mode":"paper"})[0]
     assert first_decision=="APPROVED" and second_decision=="HELD"
     assert CapitalReservation.objects.filter(status="ACTIVE").count()==1
 
@@ -154,7 +154,7 @@ def test_postgresql_row_locks_serialize_competing_capital_reservations(intent):
     barrier=Barrier(2)
     def evaluate(intent_id):
         close_old_connections();barrier.wait()
-        try:return evaluate_intent(OrderIntent.objects.get(pk=intent_id),{"connected":True,"reconciled":True})[0]
+        try:return evaluate_intent(OrderIntent.objects.get(pk=intent_id),{"connected":True,"reconciled":True,"mode":"paper"})[0]
         finally:close_old_connections()
     with ThreadPoolExecutor(max_workers=2) as pool:
         decisions=list(pool.map(evaluate,[intent.pk,second.pk]))
@@ -165,7 +165,7 @@ def test_postgresql_row_locks_serialize_competing_capital_reservations(intent):
 def test_persisted_policy_not_request_values_controls_order_limit(intent):
     intent.reference_price=10;intent.save(update_fields=["reference_price"])
     PreTradeRiskPolicy.objects.create(portfolio=intent.portfolio,maximum_order_quantity=3,maximum_order_notional=100000)
-    decision,quantity,_=evaluate_intent(intent,{"connected":True,"reconciled":True})
+    decision,quantity,_=evaluate_intent(intent,{"connected":True,"reconciled":True,"mode":"paper"})
     assert decision=="RESIZED" and quantity==3
     reservation=CapitalReservation.objects.get(order_intent=intent)
     assert reservation.amount>Decimal("30") and reservation.estimated_fees>0

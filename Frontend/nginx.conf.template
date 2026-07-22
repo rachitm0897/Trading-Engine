@@ -2,12 +2,15 @@ server {
   listen ${PORT};
   server_name _;
   server_tokens off;
+  absolute_redirect off;
   root /usr/share/nginx/html;
   gzip on;
-  location ~ ^(?:${APP_BASE_PATH})?/healthz$ { access_log off; add_header Content-Type text/plain; return 200 'ok'; }
-  location ~ ^(?:${APP_BASE_PATH})?/runtime-config.js$ {
+  location = /trading_eng_frontend { return 301 /trading_eng_frontend/; }
+  location ~ ^(?:/trading_eng_frontend)?/healthz$ { access_log off; default_type text/plain; return 200 'ok'; }
+  location ~ ^(?:/trading_eng_frontend)?/runtime-config.js$ {
     try_files /runtime-config.js =404;
     add_header Cache-Control "no-store";
   }
-  location ~ ^(?:${APP_BASE_PATH})?/(.*)$ { try_files /$1 /index.html; }
+  location ~ ^/trading_eng_frontend/(.*)$ { try_files /$1 /index.html; }
+  location / { try_files $uri $uri/ /index.html; }
 }

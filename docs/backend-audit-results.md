@@ -64,7 +64,7 @@ The first baseline Compose inspection encountered an unavailable Docker Desktop 
 - Manual and Gateway order modification rejects placement-only fields, prices incompatible with the existing order type, and quantity below an already-filled amount.
 - Portfolio/universe/policy/optimization, flow, sizing, rebalance, kill-switch, replay, instrument, and Gateway relationships/payloads are validated before work is queued.
 - Invalid OMS transitions are explicit and leave no status-history side effect.
-- Backend and Gateway fail startup when live mode is requested. Compose fixes the Gateway to paper mode; strategy, rebalance, and optimization APIs accept only observe/shadow/paper behavior.
+- Backend safety gates reject unsupported live execution paths; private child-image validation uses paper mode, and strategy, rebalance, and optimization APIs accept only observe/shadow/paper behavior.
 
 ## Asynchronous and performance changes
 
@@ -149,7 +149,7 @@ The strategy conversion uses prepare, data-migration, reference-removal, and mod
 | `.venv/Scripts/python.exe -m pytest -q streaming` | **3 passed in 0.03s** |
 | `cd Frontend; npm test -- --run` | **3 files passed, 21 tests passed in 8.85s** |
 | `cd Frontend; npm run build` | Passed: TypeScript and Vite production build; 1,662 modules; built in 290ms |
-| `docker compose up -d --build` | Passed; final rebuild/start completed and backend, Gateway, and frontend reported healthy |
+| `docker compose up -d --build` | Historical run passed; the current stack has Backend and Frontend health checks and no broker child service |
 | `docs/compose_smoke.ps1` | Passed: `Compose smoke test passed` |
 | `docs/streaming_recovery_smoke.ps1` | Passed: `Streaming recovery smoke test passed` |
 | Flink JobManager internal overview | Passed: five jobs present and all five `RUNNING` |

@@ -25,6 +25,18 @@ def health(request):
     return response({"status": "healthy", "process": "running", "time": timezone.now().isoformat()})
 
 
+def backend_root(request):
+    invalid = method_guard(request, "GET")
+    if invalid:
+        return invalid
+    prefix = settings.APP_BASE_PATH.rstrip("/")
+    return response({
+        "service": "trading-engine-backend",
+        "health": f"{prefix}/healthz",
+        "system": f"{prefix}/api/v1/system/",
+    })
+
+
 def dashboard_alias(request):
     invalid = method_guard(request, "GET")
     if invalid:
@@ -283,7 +295,8 @@ def orders(request, internal_id=None, action=None):
             if not instrument.active or not instrument.tradable:raise ValueError("Instrument must be active and tradable")
             from apps.core.idempotency import canonical_request_hash, require_matching_request
             request_hash=canonical_request_hash("manual_order",payload)
-            route_id=str(portfolio.gateway_session_id) if portfolio.gateway_session_id else "static-development"
+            gateway=GatewayClient.for_portfolio(portfolio,require_commands=True)
+            route_id=str(portfolio.gateway_session_id)
             intent_key=f"manual:{route_id}:{hashlib.sha256(key.encode('utf-8')).hexdigest()}"
             retry_requested=request.headers.get("Idempotency-Retry","").strip().lower() in {"1","true","yes"}
             with transaction.atomic():
@@ -317,7 +330,6 @@ def orders(request, internal_id=None, action=None):
                     elif intent.operation_status=="PENDING":
                         return response({"intent_id":intent.pk,"status":"PENDING"},status=202)
             try:
-                gateway=GatewayClient.for_portfolio(portfolio,require_commands=True)
                 state=gateway.health()
             except GatewayError as exc:
                 OrderIntent.objects.filter(pk=intent.pk).update(operation_status="FAILED",operation_error=str(exc)[:1000],retryable=True)

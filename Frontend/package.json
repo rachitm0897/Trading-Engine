@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "test:production-build": "npm run build && node scripts/verify-production-build.mjs",
-    "test": "vitest run",
+    "test": "vitest run && node scripts/verify-deployment-config.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {

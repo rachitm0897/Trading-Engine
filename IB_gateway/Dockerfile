@@ -20,8 +20,7 @@ LABEL org.opencontainers.image.source="$OCI_SOURCE" \
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PORT=8080 \
-    APP_BASE_PATH=""
+    PORT=8080
 
 RUN selected_arch="${TARGETARCH:-amd64}" && \
     if [ "$selected_arch" != "amd64" ]; then \

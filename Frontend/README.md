@@ -51,6 +51,10 @@ npm run build
 
 `npm test` runs Vitest and React Testing Library coverage for routes, workflows, responsive shell state, persisted panels, chart normalization, and safety controls. `npm run build` runs TypeScript project compilation before creating the Vite production bundle.
 
-The production Docker build defaults to `VITE_APP_BASE_PATH=/trading_eng_frontend/`; all entry assets and lazy chunks are emitted below that path. At container start, `BACKEND_API_URL` generates `runtime-config.js`, defaulting to `https://qfsplatform.com/trading_eng_backend/api/v1`. Local Vite may override `VITE_API_BASE_URL` and `VITE_APP_BASE_PATH`; no hidden QFS build arguments are required.
+The production Docker build defaults to the normalized Vite base `/trading_eng_frontend/`; React Router reads Vite's resulting `BASE_URL`, so router and asset paths cannot diverge. A real process-level `VITE_APP_BASE_PATH` build override is supported for non-QFS builds. Local Vite may set `VITE_API_BASE_URL`.
 
-Run `docker build -t trading-engine-frontend .` from this directory. Nginx listens on `${PORT:-5173}`, serves every direct route refresh through the SPA shell, and does not depend on `http://backend:8000` or another Docker DNS name. noVNC links come from the Backend session API and never use a Frontend gateway setting. Both unprefixed internal and `/trading_eng_frontend/healthz` probes work.
+Run `docker build -t trading-engine-frontend .` from this directory. The image builds from `Frontend` alone and contains no `.env`. At container start, the validated single-line HTTP(S) `BACKEND_API_URL` generates uncached `runtime-config.js`; production uses `https://qfsplatform.com/trading_eng_backend/api/v1`. Values containing whitespace, line breaks, quotes, or other unsafe JavaScript characters stop container startup.
+
+Nginx listens on `${PORT:-5173}`, permanently redirects the exact `/trading_eng_frontend` path to `/trading_eng_frontend/`, and serves assets, lazy chunks, health, runtime configuration, and SPA deep links whether QFS preserves the prefix or strips it. It does not proxy an API path or use Docker DNS. Managed noVNC links always come from the Backend session API.
+
+The Frontend and Backend are the only public QFS applications. The Gateway source directory builds a private child image and supplies no Frontend deployment variables.

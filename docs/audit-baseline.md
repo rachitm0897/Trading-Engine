@@ -8,7 +8,7 @@ Recorded on 2026-07-15 before behavioural implementation changes.
 - No `AGENTS.md` files were present.
 - The pre-existing Git working tree contained only two untracked user files: `prompt.txt` and `trading_engine_implementation_plan(1).md`.
 - The deployment topology is one Django backend container, one gateway container, one frontend container, and private PostgreSQL, Redis, Kafka, and Flink infrastructure. No additional application service is required by the plan.
-- Compose and the gateway default to paper mode. `ALLOW_LIVE_TRADING` defaults to false and `IBC_TRADING_MODE` defaults to `paper`.
+- Local execution defaults to SHADOW. Private child-image validation defaults to paper mode; `ALLOW_LIVE_TRADING` defaults to false.
 
 ## Baseline checks and tests
 
@@ -51,7 +51,7 @@ Normal backend startup currently runs `adopt_legacy_schema` and `migrate --fake-
 - Kafka topic initialization exited successfully.
 - Flink JobManager and TaskManager were running. The normalization, bar aggregation, indicator, stale-price, and stream-health jobs all reported `RUNNING` after recovery smoke testing.
 - Backend HTTP health returned 200 with a connected database.
-- Frontend and gateway health endpoints returned 200.
+- Frontend and private child-image health endpoints returned 200 during their respective validation runs.
 - Backend process inspection confirmed Gunicorn, a two-process Celery worker, Celery Beat, and `consume_market_streams` were running.
 - Gateway process inspection confirmed the paper-mode IB Gateway/IBC process, the sole broker worker, Gunicorn, and Nginx were running.
 - The Supervisor configuration does not expose a `supervisorctl` control section, so component verification used `docker compose top` and health endpoints.

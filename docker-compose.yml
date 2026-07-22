@@ -106,37 +106,6 @@ services:
       flink-jobmanager: {condition: service_started}
     restart: unless-stopped
 
-  ib_gateway:
-    build: ./IB_gateway
-    environment:
-      PORT: 8080
-      APP_BASE_PATH: ${GATEWAY_APP_BASE_PATH:-}
-      PUBLIC_BASE_URL: ${GATEWAY_PUBLIC_BASE_URL:-http://localhost:${GATEWAY_PORT:-8080}}
-      DJANGO_SECRET_KEY: ${GATEWAY_DJANGO_SECRET_KEY:-gateway-local-insecure}
-      GATEWAY_SERVICE_TOKEN: ${STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN:-local-service-token}
-      NOVNC_PASSWORD: ${NOVNC_PASSWORD:-local-vnc-password}
-      IB_USERNAME: ${IB_USERNAME:-}
-      IB_PASSWORD: ${IB_PASSWORD:-}
-      IBC_TRADING_MODE: ${IBC_TRADING_MODE:-paper}
-      IBKR_CLIENT_ID: ${IBKR_CLIENT_ID:-17}
-      BROKER_ADAPTER: ${BROKER_ADAPTER:-ib_async}
-      BROKER_REFRESH_SECONDS: ${BROKER_REFRESH_SECONDS:-5}
-      GATEWAY_DB_PATH: /data/gateway.sqlite3
-      TWS_MAJOR_VRSN: ${TWS_MAJOR_VRSN:-1045}
-    volumes:
-      - gateway_settings:/home/ibgateway/Jts
-      - gateway_events:/data
-    ports:
-      - "${GATEWAY_PORT:-8080}:8080"
-    networks: [private]
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 20s
-    restart: unless-stopped
-
   backend:
     build: ./Backend
     environment:
@@ -156,10 +125,6 @@ services:
       KAFKA_ENABLED: "true"
       FLINK_REST_URL: http://flink-jobmanager:8081
       NEW_EXECUTION_MODE: ${NEW_EXECUTION_MODE:-SHADOW}
-      # Explicit local-only compatibility route. Production execution always resolves a BrokerGatewaySession.
-      BROKER_STATIC_DEVELOPMENT_GATEWAY_ENABLED: "true"
-      STATIC_DEVELOPMENT_IB_GATEWAY_URL: http://ib_gateway:8080/api/v1
-      STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN: ${STATIC_DEVELOPMENT_GATEWAY_SERVICE_TOKEN:-local-service-token}
       BROKER_SESSION_ENCRYPTION_KEY: ${BROKER_SESSION_ENCRYPTION_KEY:-local-session-encryption-key-change-me}
       BROKER_CREDENTIAL_TTL_SECONDS: ${BROKER_CREDENTIAL_TTL_SECONDS:-900}
       BROKER_SESSION_CREATING_STALE_SECONDS: ${BROKER_SESSION_CREATING_STALE_SECONDS:-60}
@@ -173,7 +138,7 @@ services:
       QCH_API_HOST: ${QCH_API_HOST:-}
       QCH_SERVICE_TOKEN: ${QCH_SERVICE_TOKEN:-}
       QCH_REQUEST_TIMEOUT_SECONDS: ${QCH_REQUEST_TIMEOUT_SECONDS:-10}
-      QCH_SUBCONTAINER_NETWORK: ${QCH_SUBCONTAINER_NETWORK:-traefik}
+      QCH_SUBCONTAINER_NETWORK: ${QCH_SUBCONTAINER_NETWORK:-}
       IBKR_GATEWAY_IMAGE: ${IBKR_GATEWAY_IMAGE:-}
       ALLOW_LIVE_TRADING: "false"
       WARMUP_TIMEOUT_SECONDS: ${WARMUP_TIMEOUT_SECONDS:-300}
@@ -227,7 +192,6 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       kafka: {condition: service_healthy}
-      ib_gateway: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
       interval: 10s
@@ -240,13 +204,11 @@ services:
     build:
       context: ./Frontend
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
+        VITE_API_BASE_URL: http://localhost:${BACKEND_PORT:-8000}/api/v1
         VITE_APP_BASE_PATH: ${VITE_APP_BASE_PATH:-/}
     environment:
       PORT: 5173
-      BACKEND_API_URL: ${VITE_API_BASE_URL:-http://localhost:${BACKEND_PORT:-8000}/api/v1}
-      APP_BASE_PATH: ${FRONTEND_APP_BASE_PATH:-}
-      PUBLIC_BASE_URL: ${FRONTEND_PUBLIC_BASE_URL:-http://localhost:${FRONTEND_PORT:-5173}}
+      BACKEND_API_URL: http://localhost:${BACKEND_PORT:-8000}/api/v1
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
     networks: [private]
@@ -268,5 +230,3 @@ volumes:
   kafka_data:
   flink_checkpoints:
   flink_savepoints:
-  gateway_settings:
-  gateway_events:

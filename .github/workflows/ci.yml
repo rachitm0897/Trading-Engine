@@ -67,4 +67,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build -t trading-engine-backend ./Backend
       - run: docker build -t trading-engine-frontend ./Frontend
-      - run: docker build -t trading-engine-gateway ./IB_gateway
+      - run: docker build --platform linux/amd64 -t trading-engine-gateway ./IB_gateway

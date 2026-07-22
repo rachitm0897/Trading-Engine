@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from runtime_config import RuntimeConfigurationError, normalize_app_base_path, validate_environment
+from runtime_config import RuntimeConfigurationError, validate_environment
 
 
 def valid_real_environment(**updates):
@@ -91,19 +91,13 @@ def test_invalid_numeric_and_timeout_configuration_fails_by_variable_name(name, 
     assert value not in str(error.value)
 
 
-def test_app_base_path_empty_and_prefix_normalization():
-    assert normalize_app_base_path("") == ""
-    assert normalize_app_base_path("///trading_gateway///") == "/trading_gateway"
-    assert validate_environment(valid_real_environment(APP_BASE_PATH=""))["APP_BASE_PATH"] == ""
+def test_backend_child_environment_contract_validates_without_public_base_path():
+    environment = valid_real_environment(PORT="8080")
 
+    configuration = validate_environment(environment)
 
-@pytest.mark.parametrize("value", ["//nested//path", "/bad path", "/bad$path", "../escape"])
-def test_unsafe_app_base_path_is_rejected(value):
-    with pytest.raises((ValueError, RuntimeConfigurationError)):
-        if value == "../escape":
-            normalize_app_base_path(value)
-        else:
-            validate_environment(valid_real_environment(APP_BASE_PATH=value))
+    assert configuration["PORT"] == "8080"
+    assert "APP_BASE_PATH" not in configuration
 
 
 def test_dockerfile_is_registry_neutral_and_has_one_public_port():
@@ -114,7 +108,7 @@ def test_dockerfile_is_registry_neutral_and_has_one_public_port():
     assert "COPY .env.example" not in dockerfile
     assert "COPY . ." not in dockerfile
     assert "qfsplatform.com" not in dockerfile
-    assert "APP_BASE_PATH=/trading_eng_gateway" not in dockerfile
+    assert "APP_BASE_PATH" not in dockerfile
     assert expose_lines == ["EXPOSE 8080"]
     assert 'ENTRYPOINT ["/usr/bin/tini", "--", "./entrypoint.sh"]' in dockerfile
     assert "Unsupported target architecture" in dockerfile
