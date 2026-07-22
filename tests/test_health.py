@@ -103,7 +103,7 @@ def test_system_reports_managed_gateway_unavailable_without_exposing_values(clie
 def test_readiness_reports_invalid_managed_gateway_names_without_values(client, settings, monkeypatch):
     settings.RECOMMENDATION_SYSTEM_ENABLED = False
     settings.BROKER_SESSION_ENCRYPTION_KEY = "test-encryption-key"
-    settings.IBKR_GATEWAY_IMAGE = "ghcr.io/OWNER/trading-engine-ib-gateway@sha256:REPLACE_WITH_DIGEST"
+    settings.IBKR_GATEWAY_IMAGE = "docker.io/OWNER/trading-engine-ib-gateway@sha256:REPLACE_WITH_DIGEST"
     settings.QCH_APP_ID = "configured-app"
     settings.QCH_API_HOST = "https://qch.example"
     settings.QCH_SERVICE_TOKEN = "configured-token"
@@ -120,3 +120,23 @@ def test_readiness_reports_invalid_managed_gateway_names_without_values(client, 
     assert deployment["invalid"] == ["IBKR_GATEWAY_IMAGE"]
     assert "REPLACE_WITH_DIGEST" not in result.content.decode()
     assert "configured-token" not in result.content.decode()
+
+
+def test_managed_gateway_allows_a_fixed_non_latest_development_tag(settings, monkeypatch):
+    from apps.broker_gateway.configuration import managed_broker_deployment_configuration
+
+    settings.BROKER_SESSION_ENCRYPTION_KEY = "test-encryption-key"
+    settings.IBKR_GATEWAY_IMAGE = "docker.io/example/trading-engine-ib-gateway:v1.0.0"
+    settings.QCH_APP_ID = "configured-app"
+    settings.QCH_API_HOST = "https://qch.example"
+    settings.QCH_SERVICE_TOKEN = "configured-token"
+    monkeypatch.setenv("QCH_APP_ID", settings.QCH_APP_ID)
+    monkeypatch.setenv("QCH_API_HOST", settings.QCH_API_HOST)
+    monkeypatch.setenv("QCH_SERVICE_TOKEN", settings.QCH_SERVICE_TOKEN)
+
+    assert managed_broker_deployment_configuration()["available"] is True
+
+    settings.IBKR_GATEWAY_IMAGE = "docker.io/example/trading-engine-ib-gateway:latest"
+    deployment = managed_broker_deployment_configuration()
+    assert deployment["available"] is False
+    assert deployment["invalid"] == ["IBKR_GATEWAY_IMAGE"]
