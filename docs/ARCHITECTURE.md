@@ -77,10 +77,10 @@ but that does not transfer ownership.
 | --- | --- | --- | --- | --- | --- |
 | Market provider | Market Provider Adapter (`IBAsyncBrokerAdapter` or `FinnhubRealtimeWorker`) | Active canonical subscription, qualified contract, provider credentials, provider callbacks/trades | Provider event with canonical subscription identity, provider generation, event time, and stable source event ID | Gateway SQLite: `GatewayEvent` for IBKR callbacks. PostgreSQL: provider health/subscription timestamps through Backend ingestion | None directly |
 | `market.raw.v1` | Backend Market Ingestion (`publish_provider_event` plus transactional outbox publisher) | IBKR `market.raw` Gateway event or Finnhub five-second bar | Versioned `market.raw` envelope keyed by instrument | PostgreSQL: `MarketDataSubscription`, `MarketDataProviderTransition` when providers change, `OutboxEvent` | Produces `market.raw.v1`; uses `instrument.registry.v1` separately for canonical mappings |
-| Flink normalization | Flink `market-normalization-v1` | `market.raw.v1` plus the broadcast instrument registry | Validated, deduplicated canonical market event or dead letter | Flink checkpoint/operator state only; no financial database records | Consumes `market.raw.v1`, `instrument.registry.v1`; produces `market.canonical.v1`, `dead-letter.v1` |
-| Flink bars and indicators | Flink Derived Market Jobs (`bar-aggregation-v2`, `indicator-computation-v2`, `stale-price-detection-v1`) | Canonical events, active `strategy.inputs.v1` requirements, event-time watermarks | Final versioned bars, parameter-hashed indicators, freshness/quality events | Flink checkpoint/operator state only; no financial database records | Consumes `market.canonical.v1`, `market.bars.v1`, `strategy.inputs.v1`; produces `market.bars.v1`, `market.indicators.v1`, `market.quality.v1` |
+| Flink normalization | Flink `market-normalization-v2` | `market.raw.v1` plus the keyed instrument registry | Validated, deterministically identified canonical market event, or a deterministic dead letter after bounded unknown-conId buffering | Flink keyed registry/pending state and TTL-bounded deduplication state only; no financial database records | Consumes `market.raw.v1`, `instrument.registry.v1`; produces `market.canonical.v1`, `dead-letter.v1` |
+| Flink bars and indicators | Flink Derived Market Jobs (`bar-aggregation-v2`, `indicator-computation-v2`, `stale-price-detection-v1`) | Canonical events, active full-identity `strategy.inputs.v1` requirements, event-time watermarks | Final versioned bars, requirement-identified indicators, freshness/quality events, all carrying processing mode | Flink checkpoint/operator state only; no financial database records | Consumes `market.canonical.v1`, `market.bars.v1`, `strategy.inputs.v1`; produces `market.bars.v1`, `market.indicators.v1`, `market.quality.v1` |
 | Kafka derived-market topics | Flink Kafka Sinks | Derived envelopes with deterministic event IDs and causal metadata | Durable transport for Backend consumers | Kafka log only; never financial workflow state | `market.canonical.v1`, `market.bars.v1`, `market.indicators.v1`, `market.quality.v1` |
-| Backend market persistence | Backend Market Persistence Consumer (`consume_market_streams`) | Final bar, indicator, and market-quality envelopes | PostgreSQL market facts, updated readiness, and a durable evaluation job; no plugin execution | PostgreSQL: `ConsumedEvent`, `MarketBar`, `IndicatorValue`, `InstrumentMarketState`, `StrategyEvaluationReadiness`, `StrategyEvaluationJob` | Consumes `market.bars.v1`, `market.indicators.v1`, `market.quality.v1` |
+| Backend market persistence | Backend Market Persistence Consumer (`consume_market_streams`) | Final bar, full-identity indicator, and market-quality envelopes with `LIVE`, `WARMUP`, `REPLAY`, or `BACKFILL` mode | Immutable PostgreSQL market facts; only ordered LIVE facts may update readiness and create a durable evaluation job | PostgreSQL: `ConsumedEvent`, `MarketBar`, `IndicatorValue`, `InstrumentMarketState`, `StrategyEvaluationReadiness`, `StrategyEvaluationJob` | Consumes `market.bars.v1`, `market.indicators.v1`, `market.quality.v1` |
 | `StrategyEvaluationJob` | Backend Strategy Evaluation Scheduler (`coordinate_bar_readiness` and `ensure_strategy_evaluation_job`) | Persisted final bar/version, current strategy version, and exact expected/available input identities | One durable, claimable job per strategy instance, strategy version, bar ID, and bar version | PostgreSQL: `StrategyEvaluationJob` with unique causal key, status, lease timestamps, bounded attempts, next-attempt time, and classified error | None. Database creation is the workflow handoff |
 | Strategy evaluation worker | Backend Strategy Evaluation Worker (`apps.strategies.evaluation_jobs`) | Job claimed with `select_for_update(skip_locked=True)`, immutable strategy version/configuration, persisted bar and indicators | Deterministic strategy decision, signal, optional target, and completed/retry/failed job state | PostgreSQL: `StrategyRun`, `StrategySignal`, `StrategyTarget`, strategy state, `StrategyEvaluationJob`; `OutboxEvent` after commit | Celery queue `strategy_evaluation` wakes the worker; Kafka is not the work queue. May project `strategy.targets.v1` after commit |
 | `StrategyTarget` | Backend Strategy Evaluation Worker, using the plugin target contract | Plugin decision in `SHADOW` or `PAPER` mode | Versioned strategy/instrument target with causal run and event IDs | PostgreSQL: `StrategyTarget` | Optional post-commit projection to `strategy.targets.v1` |
@@ -106,31 +106,40 @@ Kafka is deliberately absent as an authoritative trigger between
    provider generation inside a PostgreSQL transaction. It writes
    `OutboxEvent`; the outbox publisher retries Kafka delivery independently.
 2. Flink derives canonical events, bars, indicators, and quality only. Stable
-   event IDs, operator UIDs, checkpoints, and keyed state make replay safe.
+   UUIDv5 event IDs exclude processing time and Kafka position. Indicator
+   identity includes name, role, parameters, instrument, timeframe, and
+   implementation version. Keyed conId buffering protects registry startup
+   order, and deduplication state has a configured TTL.
 3. The market persistence consumer writes the market fact, readiness, durable
    `StrategyEvaluationJob`, and `ConsumedEvent` atomically. It commits the
    Kafka offset only after that PostgreSQL transaction commits. A job can wait
    durably for missing indicators; the consumer never imports or executes a
    strategy plugin, so plugin failure cannot dead-letter a valid market event.
-4. The evaluation worker claims the job with a PostgreSQL row lock and
+4. Before a LIVE job is made executable, the scheduler locks the strategy and
+   compares event time, bar ID, and version with its last accepted market
+   cursor. Older LIVE facts are quarantined. WARMUP, REPLAY, and BACKFILL facts
+   cannot schedule evaluation or change live strategy state. Backend Kafka
+   replay tooling overwrites the persisted envelope mode to `REPLAY` before
+   invoking any market handler.
+5. The evaluation worker claims the job with a PostgreSQL row lock and
    `skip_locked`. Plugin evaluation and
    `StrategyRun`/`StrategySignal`/`StrategyTarget` writes occur in the job's
    financial transaction. Any Kafka projection is an outbox side effect after
    commit.
-5. Target aggregation snapshots a causal set once. The rebalancer consumes
+6. Target aggregation snapshots a causal set once. The rebalancer consumes
    that immutable snapshot; it must never query a moving set of "latest"
    targets while planning.
-6. PAPER planning persists `OrderIntent`. No planner, plugin, API view, Kafka
+7. PAPER planning persists `OrderIntent`. No planner, plugin, API view, Kafka
    consumer, or Flink job may submit it directly.
-7. The intent execution worker claims the intent, runs all risk checks,
+8. The intent execution worker claims the intent, runs all risk checks,
    creates at most one OMS `Order`, and asks the Gateway to durably enqueue one
    command. Network I/O is outside PostgreSQL transactions.
-8. The Gateway persists `GatewayCommand` before acknowledging the request.
+9. The Gateway persists `GatewayCommand` before acknowledging the request.
    Its sole broker worker owns `ib_async` and the TWS socket.
-9. Broker callbacks are first durable `GatewayEvent` records. Backend advances
+10. Broker callbacks are first durable `GatewayEvent` records. Backend advances
    a per-session `BrokerSyncCursor` only after each event is projected.
    Execution callbacks, not status callbacks, create fills and ledgers.
-10. Reconciliation compares the IBKR paper account with PostgreSQL and blocks
+11. Reconciliation compares the IBKR paper account with PostgreSQL and blocks
     new risk approval while material breaks remain open.
 
 ## Retry and idempotency matrix
@@ -138,7 +147,7 @@ Kafka is deliberately absent as an authoritative trigger between
 | Boundary | Idempotency identity | Retry rule | Ambiguous-outcome rule |
 | --- | --- | --- | --- |
 | Provider -> Backend outbox | Bar: instrument + timeframe + window; tick: instrument + source event ID | Retry publication from `OutboxEvent` with backoff | A repeated provider event resolves to the existing outbox row |
-| Kafka -> Flink | Stable source event ID plus keyed Flink state/checkpoint | Kafka replay and Flink restart are allowed | Deterministic derived event IDs prevent a new logical result |
+| Kafka -> Flink | UUIDv5 over canonical raw/canonical/bar/indicator/quality identities plus keyed Flink state/checkpoint | Normal jobs resume committed offsets and use latest only when a new group has no commit; job-specific earliest/latest overrides support controlled replay. Unknown conIds wait in bounded keyed state before DLQ | Checkpoint replay produces the same IDs; TTL-bounded deduplication and Backend `ConsumedEvent` suppress duplicate effects |
 | Derived topic -> market persistence | `ConsumedEvent(consumer_name, event_id)` plus bar/indicator unique constraints | Failed consumption stays visible and is replayed explicitly from dead letter | Never infer completion from a committed offset alone |
 | Market persistence -> `StrategyEvaluationJob` | Unique constraint: strategy instance + strategy version + bar ID + bar version; separate unique idempotency key | Duplicate events update the same market/readiness identity. Missing-input jobs wait; corrected readiness promotes them once | A completed or terminal job is never reactivated by an event replay |
 | Evaluation job -> `StrategyRun` | Existing strategy idempotency key includes instance, version, instrument, timeframe, source event, and data version | Only infrastructure failures retry, using bounded exponential backoff. Expired `CLAIMED`/`RUNNING` leases recover through the same attempt bound | Plugin, stale-input, invalid-configuration, and data-integrity failures are terminal; plugin failure cannot create or submit an order |
@@ -190,7 +199,7 @@ No candidate is deleted in this phase.
 | File path | Function or class | Why it is a legacy or duplicate entry point | Replacement owner | Planned deletion phase |
 | --- | --- | --- | --- | --- |
 | `Backend/apps/market_streams/models.py` | `StrategyEvaluationReadiness` | It remains a compatibility/input-completeness record; leases, attempts, execution status, and errors now belong to `StrategyEvaluationJob` | Backend Strategy Evaluation Scheduler (`StrategyEvaluationJob`) | Phase 4, after readiness can be derived without compatibility callers |
-| `Backend/apps/market_streams/services.py` | `evaluate_ready_strategies` compatibility alias | Some tests and callers still use this name, but it now schedules durable jobs only. The synchronous `_evaluate_readiness` implementation was removed during the verified worker cutover | Backend Strategy Evaluation Scheduler | Phase 4 |
+| `Backend/apps/market_streams/services.py` | `record_indicator_readiness` and `evaluate_ready_strategies` (**removed**) | These compatibility helpers carried the old parameter-hash readiness boundary. Persistence now invokes full-identity `coordinate_bar_readiness` directly | Backend Strategy Evaluation Scheduler | Completed during deterministic streaming cutover |
 | `Backend/apps/strategies/views.py` | `action(..., action_name="evaluate")` inline call to `evaluate_instance` | Operator evaluation executes in the request process rather than creating the same durable evaluation job | Backend Strategy Evaluation Scheduler and Strategy Evaluation Worker | Phase 4 |
 | `Backend/apps/rebalancing/services.py` | `aggregate_targets` and the no-explicit-target-source branch of `plan_rebalance` | Planning reads a moving "latest target" set and skips an immutable `PortfolioTargetSnapshot` | Backend Portfolio Target Aggregation Service | Phase 3 cutover; delete in Phase 4 |
 | `Backend/apps/allocation/services.py` | `aggregate_targets`, `create_rebalance` | Compatibility aliases expose a second target/rebalance entry point and hard-code PAPER behaviour | Backend Portfolio Target Aggregation Service and Rebalance Planner | Phase 4 |
