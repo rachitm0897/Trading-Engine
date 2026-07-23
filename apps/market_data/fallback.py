@@ -101,11 +101,13 @@ def _canonical_outbox_key(payload):
 
 
 def _create_outbox(payload):
+    from apps.event_bus.identity import deterministic_event_id, raw_event_key
+    stable_key=raw_event_key(payload)
     event, created = OutboxEvent.objects.get_or_create(
         idempotency_key=_canonical_outbox_key(payload),
         defaults={"topic": "market.raw.v1", "event_type": "market.raw", "aggregate_type": "instrument",
                   "aggregate_id": str(payload["instrument_id"]), "partition_key": str(payload["instrument_id"]),
-                  "payload": payload},
+                  "event_id":deterministic_event_id("market.raw",stable_key),"payload": payload},
     )
     return event, created
 
@@ -159,7 +161,13 @@ def publish_provider_event(payload, *, received_at=None):
         except (ValueError,TypeError,AttributeError):
             _metric_increment("events_dropped",provider=provider,reason="GENERATION_INVALID")
             return {"accepted":False,"reason":"GENERATION_INVALID"}
-        payload = {**payload, "provider": provider, "provider_generation": str(generation)}
+        from apps.event_bus.identity import processing_mode
+        try:mode=processing_mode(payload.get("processing_mode"))
+        except ValueError:
+            _metric_increment("events_dropped",provider=provider,reason="PROCESSING_MODE_INVALID")
+            return {"accepted":False,"reason":"PROCESSING_MODE_INVALID"}
+        payload = {**payload, "provider": provider, "provider_generation": str(generation),
+            "processing_mode":mode}
         parsed_window_start=parsed_window_end=None
         if payload.get("event_kind", "").upper()=="BAR":
             try:
@@ -254,6 +262,7 @@ def _historical_payload(subscription, mapping, generation, candle, reason):
         "low": str(candle.low), "close": str(candle.close), "volume": str(candle.volume), "is_final": True,
         "source": "finnhub_historical", "provider": "FINNHUB", "provider_symbol": mapping.provider_symbol,
         "provider_generation": str(generation), "fallback_reason": str(reason),
+        "processing_mode": "WARMUP",
     }
 
 

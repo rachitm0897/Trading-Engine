@@ -1,4 +1,5 @@
 import uuid
+from copy import deepcopy
 from datetime import timedelta
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -131,7 +132,14 @@ def replay_envelopes(replay_request, envelopes, handler):
     processed = 0
     try:
         for envelope in envelopes:
-            handler(replay_request.consumer_name, envelope)
+            replay_envelope = deepcopy(envelope)
+            if replay_request.topic in {
+                "market.bars.v1",
+                "market.indicators.v1",
+                "market.quality.v1",
+            }:
+                replay_envelope.setdefault("payload", {})["processing_mode"] = "REPLAY"
+            handler(replay_request.consumer_name, replay_envelope)
             processed += 1
         replay_request.status = "COMPLETED"; replay_request.processed_count = processed
         replay_request.completed_at = timezone.now()

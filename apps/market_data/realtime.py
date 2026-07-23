@@ -166,6 +166,7 @@ class FinnhubRealtimeWorker:
                     "source": "finnhub_live", "provider": "FINNHUB", "provider_symbol": bar.provider_symbol,
                     "provider_generation": str(subscription["provider_generation"]),
                     "fallback_reason": subscription["fallback_reason"], "provider_trade_count": bar.trade_count,
+                    "processing_mode": "LIVE",
                 }
                 publish_provider_event(payload)
 

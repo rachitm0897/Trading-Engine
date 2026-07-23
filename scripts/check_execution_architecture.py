@@ -183,9 +183,41 @@ def check_market_persistence_isolation() -> None:
                 "market persistence must create durable strategy evaluation jobs: "
                 f"{path.relative_to(ROOT).as_posix()}"
             )
+        for required in ("requirement_identity_hash", 'mode=="LIVE"'):
+            if required not in source:
+                fail(
+                    "market persistence is missing deterministic identity/mode protection: "
+                    f"{path.relative_to(ROOT).as_posix()} -> {required}"
+                )
+        if "parameters_hash" in source:
+            fail(
+                "market persistence still contains parameter-only readiness matching: "
+                f"{path.relative_to(ROOT).as_posix()}"
+            )
     backend_checkout = (ROOT / "Backend" / "manage.py").is_file() or (ROOT / "manage.py").is_file()
     if backend_checkout and not found:
         fail("market persistence service is missing")
+
+
+def check_streaming_restart_contract() -> None:
+    normalizer = ROOT / "streaming" / "flink" / "jobs" / "market_normalization.py"
+    if not normalizer.is_file():
+        return
+    source = normalizer.read_text(encoding="utf-8")
+    for required in (
+        "UNKNOWN_CONID_BUFFER_TIMEOUT_MS",
+        "UNKNOWN_CONID_BUFFER_MAX_EVENTS",
+        "DEDUPLICATION_STATE_TTL_SECONDS",
+        "StateTtlConfig",
+        "KeyedCoProcessFunction",
+    ):
+        if required not in source:
+            fail(f"streaming restart contract is missing: {required}")
+    indicator = (
+        ROOT / "streaming" / "flink" / "jobs" / "indicator_computation.py"
+    ).read_text(encoding="utf-8")
+    if "requirement_identity_hash" not in indicator or "parameters_hash" in indicator:
+        fail("indicator computation must use the full requirement identity")
 
 
 def main() -> None:
@@ -193,6 +225,7 @@ def main() -> None:
     check_plugin_isolation()
     check_backend_submission_sites()
     check_market_persistence_isolation()
+    check_streaming_restart_contract()
     print("automatic execution architecture checks passed")
 
 
