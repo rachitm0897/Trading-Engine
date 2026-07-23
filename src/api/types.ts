@@ -321,8 +321,9 @@ export interface InputRequirement {
   identity_hash?: string
   input_type: string
   name: string
+  role?: string
   parameters: JsonRecord
-  parameters_hash?: string
+  implementation_version?: number
   warmup_bars: number
   shared_by?: number
   active?: boolean

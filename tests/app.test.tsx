@@ -27,7 +27,7 @@ const strategy = {
     last_canonical_event: '2026-07-13T01:00:02Z', last_final_bar: '2026-07-13T01:00:00Z', warmup_progress: 22,
     warmup_required: 22, last_indicator: '2026-07-13T01:00:03Z', last_strategy_run: '2026-07-13T01:00:04Z', last_error: '', missing: [], stale_after_seconds: 1800},
   versions: [{id: 2, version: 2, parameter_hash: 'abcdef1234567890', configuration_snapshot: {}, created_at: '2026-07-13T00:00:00Z', activated_at: '2026-07-13T00:05:00Z', retired_at: null}],
-  requirements: [{identity_hash: 'input-1', input_type: 'INDICATOR', name: 'channel', parameters: {window: 21}, parameters_hash: 'hash', warmup_bars: 22, shared_by: 1, active: true}],
+  requirements: [{identity_hash: 'input-1', input_type: 'INDICATOR', name: 'channel', role: '', parameters: {window: 21}, implementation_version: 1, warmup_bars: 22, shared_by: 1, active: true}],
 }
 
 const constructionPlan = {
