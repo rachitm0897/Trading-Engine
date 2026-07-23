@@ -103,6 +103,29 @@ def completed_orders(request):
     invalid=_method(request,"GET")
     return invalid or response(_latest("snapshot.completed_orders",[]))
 @protected
+def order_state(request, internal_id):
+    invalid=_method(request,"GET")
+    if invalid:return invalid
+    commands=[]
+    for command in GatewayCommand.objects.filter(
+            command_type__in=["PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER"]).order_by("id"):
+        if str((command.payload or {}).get("internal_id") or "") != str(internal_id):
+            continue
+        commands.append({"command_id":command.pk,"command_type":command.command_type,
+            "status":command.status,"result":command.result,"last_error":command.last_error,
+            "retryable":command.retryable,"attempt_count":command.attempt_count,
+            "completed_at":command.completed_at})
+    reference=GatewayOrderReference.objects.filter(internal_id=internal_id).values(
+        "internal_id","broker_order_id","permanent_id","last_status","updated_at").first()
+    broker_order=None
+    for row in [*_latest("snapshot.open_orders",[]),*_latest("snapshot.completed_orders",[])]:
+        if str(row.get("internal_id") or "") == str(internal_id):
+            broker_order=row
+            break
+    return response({"internal_id":internal_id,"commands":commands,"reference":reference or {},
+        "broker_order":broker_order or {},
+        "non_submission_established":not commands and reference is None and broker_order is None})
+@protected
 def executions(request):
     invalid=_method(request,"GET")
     return invalid or response(_latest("snapshot.executions",[]))

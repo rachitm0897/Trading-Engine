@@ -10,11 +10,12 @@ from .models import Order, OrderStatusHistory
 
 ALLOWED = {
  "CREATED": {"RISK_APPROVED", "REJECTED", "BROKER_BLOCKED"}, "RISK_APPROVED": {"QUEUED"},
- "QUEUED": {"SUBMITTED", "BROKER_BLOCKED", "REJECTED", "CANCEL_PENDING"}, "BROKER_BLOCKED": {"QUEUED", "REJECTED"},
+ "QUEUED": {"SUBMITTED", "BROKER_BLOCKED", "REJECTED", "CANCEL_PENDING", "UNKNOWN"}, "BROKER_BLOCKED": {"QUEUED", "REJECTED", "UNKNOWN"},
  "SUBMITTED": {"ACKNOWLEDGED", "PARTIALLY_FILLED", "FILLED", "REJECTED", "UNKNOWN", "CANCEL_PENDING"},
  "ACKNOWLEDGED": {"PARTIALLY_FILLED", "FILLED", "CANCEL_PENDING", "CANCELLED", "EXPIRED", "UNKNOWN"},
  "PARTIALLY_FILLED": {"PARTIALLY_FILLED", "FILLED", "CANCEL_PENDING", "CANCELLED", "UNKNOWN"},
- "CANCEL_PENDING": {"CANCELLED", "FILLED", "UNKNOWN"}, "UNKNOWN": {"ACKNOWLEDGED", "PARTIALLY_FILLED", "FILLED", "CANCELLED"},
+ "CANCEL_PENDING": {"QUEUED", "SUBMITTED", "ACKNOWLEDGED", "PARTIALLY_FILLED", "CANCEL_PENDING", "CANCELLED", "FILLED", "UNKNOWN"},
+ "UNKNOWN": {"QUEUED", "BROKER_BLOCKED", "SUBMITTED", "ACKNOWLEDGED", "PARTIALLY_FILLED", "FILLED", "CANCEL_PENDING", "CANCELLED"},
 }
 
 
@@ -77,7 +78,9 @@ def apply_execution(order, execution):
     old_qty = order.filled_quantity; new_qty = old_qty + fill.quantity
     order.average_fill_price = ((order.average_fill_price * old_qty) + (fill.price * fill.quantity)) / new_qty
     order.filled_quantity = new_qty; order.save(update_fields=["filled_quantity", "average_fill_price", "updated_at"])
-    status = "FILLED" if new_qty >= order.quantity else "PARTIALLY_FILLED"
+    status = "FILLED" if new_qty >= order.quantity else (
+        "CANCEL_PENDING" if order.status == "CANCEL_PENDING" else "PARTIALLY_FILLED"
+    )
     transition(order, status, "execution", f"execution:{fill.execution_id}")
     signed_qty = fill.quantity if order.intent.side == "BUY" else -fill.quantity
     cash = -(signed_qty * fill.price) - fill.commission

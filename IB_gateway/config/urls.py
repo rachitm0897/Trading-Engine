@@ -7,7 +7,7 @@ api=[
  path("market-data/history/",views.historical_data),
  path("market-data/schedule/",views.historical_schedule),
  path("market-data/subscriptions/",views.market_subscription),path("market-data/subscriptions/cancel/",views.market_subscription,{"action":"cancel"}),
- path("orders/",views.orders),path("orders/<str:internal_id>/",views.orders),path("orders/<str:internal_id>/cancel/",views.cancel),
+ path("orders/",views.orders),path("orders/<str:internal_id>/state/",views.order_state),path("orders/<str:internal_id>/",views.orders),path("orders/<str:internal_id>/cancel/",views.cancel),
  path("events/",views.events),path("events/ack/",views.ack),path("kill-switch/",views.kill_switch),
 ]
 urlpatterns = [

@@ -65,25 +65,24 @@ def test_manual_order_calls_gateway_outside_database_transactions(client,monkeyp
     assert client.post("/api/v1/orders/",json.dumps(payload),content_type="application/json",HTTP_IDEMPOTENCY_KEY="outside-tx").status_code==201
 
 
-def test_retryable_manual_order_failure_requires_explicit_retry(client,monkeypatch,settings):
+def test_manual_order_persists_command_without_calling_gateway(client,monkeypatch,settings):
     account=BrokerAccount.objects.create(account_id="DU1",available_cash=10000,is_reconciled=True)
     portfolio=TradingPortfolio.objects.create(name="Paper",account=account)
     bind_managed_gateway(portfolio, settings)
     instrument=Instrument.objects.create(symbol="AAPL")
-    from apps.broker_gateway.client import GatewayClient, GatewayError
+    from apps.broker_gateway.client import GatewayClient
     monkeypatch.setattr(GatewayClient,"health",lambda self:{"connected":True,"reconciled":True,"mode":"paper"})
     calls={"count":0}
     def place(self,payload,key):
         calls["count"]+=1
-        if calls["count"]==1:raise GatewayError("temporary gateway failure")
         return {"command_id":1,"status":"PENDING"}
     monkeypatch.setattr(GatewayClient,"place_order",place)
     payload={"portfolio_id":portfolio.pk,"instrument_id":instrument.pk,"side":"BUY","order_type":"MKT","quantity":"5","reference_price":"100","time_in_force":"DAY"}
     first=client.post("/api/v1/orders/",json.dumps(payload),content_type="application/json",HTTP_IDEMPOTENCY_KEY="retry-order")
     stored=client.post("/api/v1/orders/",json.dumps(payload),content_type="application/json",HTTP_IDEMPOTENCY_KEY="retry-order")
-    retried=client.post("/api/v1/orders/",json.dumps(payload),content_type="application/json",HTTP_IDEMPOTENCY_KEY="retry-order",HTTP_IDEMPOTENCY_RETRY="true")
-    assert first.status_code==503 and stored.status_code==503 and retried.status_code==201
-    assert calls["count"]==2
+    assert first.status_code==201 and stored.status_code==200
+    assert calls["count"]==0
+    assert first.json()["data"]["broker_command"]["status"]=="PENDING"
 
 
 def _manual_order_case():
@@ -169,4 +168,6 @@ def test_concurrent_duplicate_manual_order_requests_submit_once(monkeypatch):
     with ThreadPoolExecutor(max_workers=2) as pool:
         statuses=list(pool.map(lambda _value:submit(),range(2)))
     assert all(status in {200,201,202} for status in statuses)
-    assert calls["place"]==1 and OrderIntent.objects.count()==1 and Order.objects.count()==1
+    from apps.execution.models import BrokerCommand
+    assert calls["place"]==0 and OrderIntent.objects.count()==1 and Order.objects.count()==1
+    assert BrokerCommand.objects.count()==1

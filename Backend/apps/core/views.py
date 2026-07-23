@@ -228,12 +228,15 @@ def rebalances(request):
 def orders(request, internal_id=None, action=None):
     from decimal import Decimal, InvalidOperation
     from django.db import transaction
-    from apps.broker_gateway.client import GatewayClient, GatewayError
+    from apps.execution.dispatch import (
+        command_summary,
+        execute_order_intent,
+        request_order_cancellation,
+        request_order_modification,
+    )
     from apps.instruments.models import Instrument
     from apps.oms.models import Order, OrderIntent
-    from apps.oms.services import create_order, transition
     from apps.portfolios.models import TradingPortfolio
-    from apps.risk.services import evaluate_intent
     from apps.core.validation import decimal_field, validate_order_payload
     if request.method == "GET":
         if internal_id and action=="detail":
@@ -295,89 +298,45 @@ def orders(request, internal_id=None, action=None):
             if not instrument.active or not instrument.tradable:raise ValueError("Instrument must be active and tradable")
             from apps.core.idempotency import canonical_request_hash, require_matching_request
             request_hash=canonical_request_hash("manual_order",payload)
-            gateway=GatewayClient.for_portfolio(portfolio,require_commands=True)
+            if not portfolio.gateway_session_id:
+                raise ValueError("Portfolio is not bound to a Gateway session")
             route_id=str(portfolio.gateway_session_id)
             intent_key=f"manual:{route_id}:{hashlib.sha256(key.encode('utf-8')).hexdigest()}"
-            retry_requested=request.headers.get("Idempotency-Retry","").strip().lower() in {"1","true","yes"}
             with transaction.atomic():
-                from apps.audit.models import OperationAttempt
                 intent,created=OrderIntent.objects.select_for_update().get_or_create(idempotency_key=intent_key,defaults={
                     "request_hash":request_hash,
                     "portfolio":portfolio,"instrument":instrument,"side":side,"quantity":quantity,"order_type":order_type,
                     "limit_price":validated["limit_price"],"stop_price":validated["stop_price"],
                     "reference_price":reference or None,"time_in_force":tif,
                     "mode":portfolio.gateway_session.mode.upper() if portfolio.gateway_session else "PAPER"})
-                if created:
-                    OperationAttempt.objects.create(operation_type="MANUAL_ORDER",operation_id=str(intent.pk),
-                        attempt_number=intent.attempt_count,request_hash=intent.request_hash)
-                else:
+                if not created:
                     require_matching_request(intent.request_hash,request_hash)
                     if not intent.request_hash:
                         intent.request_hash=request_hash;intent.save(update_fields=["request_hash"])
-                    if intent.operation_status=="FAILED":
-                        if not retry_requested or not intent.retryable:
-                            return response(status=503,error={"code":"STORED_ORDER_FAILURE",
-                                "message":intent.operation_error or "Order operation failed","details":{"retryable":intent.retryable}})
-                        intent.operation_status="PENDING";intent.operation_error="";intent.retryable=False
-                        intent.attempt_count+=1;intent.save(update_fields=["operation_status","operation_error","retryable","attempt_count"])
-                        OperationAttempt.objects.create(operation_type="MANUAL_ORDER",operation_id=str(intent.pk),
-                            attempt_number=intent.attempt_count,request_hash=intent.request_hash)
-                    elif hasattr(intent,"order"):
-                        return response({"internal_id":intent.order.internal_id,"status":intent.order.status},status=200)
-                    elif intent.operation_status=="RISK_REJECTED":
+                    if hasattr(intent,"order"):
+                        existing=intent.order.broker_commands.order_by("-pk").first()
+                        return response({"internal_id":intent.order.internal_id,"status":intent.order.status,
+                            "broker_command":command_summary(existing) if existing else None},status=200)
+                    if intent.operation_status=="RISK_REJECTED":
                         return response(status=422,error={"code":"RISK_REJECTED","message":intent.operation_error,
                             "details":{"decision":"REJECTED"}})
-                    elif intent.operation_status=="PENDING":
-                        return response({"intent_id":intent.pk,"status":"PENDING"},status=202)
-            try:
-                state=gateway.health()
-            except GatewayError as exc:
-                OrderIntent.objects.filter(pk=intent.pk).update(operation_status="FAILED",operation_error=str(exc)[:1000],retryable=True)
-                OperationAttempt.objects.filter(operation_type="MANUAL_ORDER",operation_id=str(intent.pk),
-                    attempt_number=intent.attempt_count).update(status="FAILED",retryable=True,error=str(exc)[:1000],completed_at=timezone.now())
-                raise
-            with transaction.atomic():
-                intent=OrderIntent.objects.select_for_update().get(pk=intent.pk)
-                decision,approved,_=evaluate_intent(intent,state)
-                if decision not in {"APPROVED","RESIZED"}:
-                    intent.operation_status="RISK_REJECTED";intent.operation_error="Order did not pass pre-trade risk"
-                    intent.retryable=False;intent.save(update_fields=["operation_status","operation_error","retryable"])
-                    OperationAttempt.objects.filter(operation_type="MANUAL_ORDER",operation_id=str(intent.pk),
-                        attempt_number=intent.attempt_count).update(status="FAILED",retryable=False,error=intent.operation_error,
-                        completed_at=timezone.now())
-                    risk_rejected=True;order=None
-                else:
-                    risk_rejected=False
-                    order=create_order(intent,approved);order=transition(order,"QUEUED","oms",f"order:{order.internal_id}:queued")
-                    intent.operation_status="SUBMITTING";intent.save(update_fields=["operation_status"])
-            if risk_rejected:
-                return response(status=422,error={"code":f"RISK_{decision}","message":"Order did not pass pre-trade risk","details":{"decision":decision}})
-            gateway_payload={"internal_id":order.internal_id,"account":portfolio.account.account_id,
-                "symbol":instrument.symbol,"asset_class":instrument.asset_class,"exchange":instrument.exchange,
-                "currency":instrument.currency,"side":side,"quantity":str(approved),"order_type":order_type,
-                "limit_price":str(intent.limit_price) if intent.limit_price else None,
-                "stop_price":str(intent.stop_price) if intent.stop_price else None,"time_in_force":tif}
-            try:
-                command=gateway.place_order(gateway_payload,f"gateway:place:{order.internal_id}")
-            except GatewayError as exc:
-                OrderIntent.objects.filter(pk=intent.pk).update(operation_status="FAILED",operation_error=str(exc)[:1000],retryable=True)
-                OperationAttempt.objects.filter(operation_type="MANUAL_ORDER",operation_id=str(intent.pk),
-                    attempt_number=intent.attempt_count).update(status="FAILED",retryable=True,error=str(exc)[:1000],completed_at=timezone.now())
-                raise
-            OrderIntent.objects.filter(pk=intent.pk).update(operation_status="QUEUED",operation_error="",retryable=False)
-            OperationAttempt.objects.filter(operation_type="MANUAL_ORDER",operation_id=str(intent.pk),
-                attempt_number=intent.attempt_count).update(status="COMPLETED",result={"order_id":order.internal_id,
-                "gateway_command_id":command.get("command_id")},completed_at=timezone.now())
-            return response({"internal_id":order.internal_id,"status":order.status,"decision":decision,
-                "approved_quantity":approved,"gateway_command":command},status=201)
+            command=execute_order_intent(intent.pk)
+            intent.refresh_from_db()
+            if intent.operation_status=="RISK_REJECTED":
+                return response(status=422,error={"code":"RISK_REJECTED",
+                    "message":intent.operation_error,"details":{"decision":"REJECTED"}})
+            if command is None:
+                return response({"intent_id":intent.pk,"status":intent.operation_status,
+                    "retryable":intent.retryable},status=202)
+            order=command.order
+            return response({"internal_id":order.internal_id,"status":order.status,
+                "approved_quantity":order.quantity,"broker_command":command_summary(command)},status=201)
         order=Order.objects.select_related("intent__portfolio__account","intent__portfolio__gateway_session").get(internal_id=internal_id)
         if action=="cancel":
-            if order.status not in {"QUEUED","SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED","UNKNOWN"}: raise ValueError("Order cannot be cancelled in its current state")
             payload=json.loads(request.body or b"{}");operator_reason=str(payload.get("reason") or "")[:255]
-            order=transition(order,"CANCEL_PENDING","operator",f"order:{order.internal_id}:cancel:{key}",operator_reason,
-                reason_code="OPERATOR_CANCEL_REQUEST",details={"operator_reason":operator_reason},operator_requested=True)
-            gateway=GatewayClient.for_order(order,require_commands=True)
-            command=gateway.cancel_order(order.internal_id,key); return response({"internal_id":order.internal_id,"status":order.status,"gateway_command":command},status=202)
+            command=request_order_cancellation(order,key,operator_reason);order.refresh_from_db()
+            return response({"internal_id":order.internal_id,"status":order.status,
+                "broker_command":command_summary(command)},status=202)
         payload=json.loads(request.body or b"{}")
         if order.status not in {"QUEUED","SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED"}: raise ValueError("Order cannot be modified in its current state")
         permitted={"quantity","limit_price","stop_price","time_in_force"}
@@ -399,14 +358,13 @@ def orders(request, internal_id=None, action=None):
         if "time_in_force" in allowed:
             allowed["time_in_force"]=str(allowed["time_in_force"]).upper()
             if allowed["time_in_force"] not in {"DAY","GTC"}:raise ValueError("time_in_force must be DAY or GTC")
-        gateway=GatewayClient.for_order(order,require_commands=True)
-        command=gateway.modify_order(order.internal_id,allowed,key); return response({"internal_id":order.internal_id,"status":order.status,"gateway_command":command},status=202)
+        command=request_order_modification(order,allowed,key)
+        return response({"internal_id":order.internal_id,"status":order.status,
+            "broker_command":command_summary(command)},status=202)
     except IdempotencyConflict as exc:
         return response(status=409,error={"code":"IDEMPOTENCY_CONFLICT","message":str(exc),"details":{}})
     except (KeyError,ValueError,InvalidOperation,TradingPortfolio.DoesNotExist,Instrument.DoesNotExist,Order.DoesNotExist) as exc:
         return response(status=400,error={"code":"INVALID_ORDER","message":str(exc),"details":{}})
-    except GatewayError as exc:
-        return response(status=503,error={"code":"GATEWAY_UNAVAILABLE","message":str(exc),"details":{}})
 
 def executions(request):
     invalid=method_guard(request,"GET")

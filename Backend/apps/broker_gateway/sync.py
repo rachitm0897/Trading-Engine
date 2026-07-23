@@ -296,6 +296,8 @@ def sync_order_event(row, gateway_session=None):
     order.broker_order_id=str(row.get("broker_order_id") or order.broker_order_id)
     order.broker_permanent_id=str(row.get("permanent_id") or order.broker_permanent_id)
     order.save(update_fields=["broker_order_id","broker_permanent_id","updated_at"])
+    from apps.execution.dispatch import record_broker_order_observation
+    record_broker_order_observation(order,row)
     source_id=str(row.get("source_event_id") or "")
     if not source_id:
         source_id=hashlib.sha256(json.dumps(row,sort_keys=True,default=str).encode()).hexdigest()
@@ -304,6 +306,9 @@ def sync_order_event(row, gateway_session=None):
     return _record_broker_status(order,row,event_key[:128])
 
 def record_gateway_command_failure(payload, gateway_session=None):
+    from apps.execution.dispatch import record_gateway_command_failed
+    command=record_gateway_command_failed(payload,gateway_session)
+    if command is not None:return
     command_payload=payload.get("payload") or {};internal_id=str(command_payload.get("internal_id") or "")
     order=_order_query(gateway_session).filter(internal_id=internal_id).first()
     if not order:return
@@ -383,6 +388,9 @@ def process_snapshot(event, gateway_session=None):
                 subscription.state="ACTIVE"
                 subscription.save(update_fields=["state","updated_at"])
         return
+    if event_type in {"command.place_order.completed","command.modify_order.completed","command.cancel_order.completed"}:
+        from apps.execution.dispatch import record_gateway_command_completed
+        record_gateway_command_completed(payload,gateway_session);return
     if event_type=="command.failed" and payload.get("command_type") in {"SUBSCRIBE_MARKET_DATA","CANCEL_MARKET_DATA"}:
         command_payload=payload.get("payload") or {};key=str(command_payload.get("subscription_key") or "")
         if ":" in key:

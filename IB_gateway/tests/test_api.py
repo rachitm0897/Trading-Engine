@@ -69,6 +69,18 @@ def test_completed_orders_snapshot_endpoint(client):
     body=client.get("/api/v1/completed-orders/",**AUTH).json()
     assert body["data"][0]["broker_order_id"]=="1"
 
+
+def test_order_state_reports_durable_command_and_negative_submission_proof(client):
+    payload={"internal_id":"I-STATE","account":"DU1","symbol":"AAPL","side":"BUY","quantity":"1"}
+    queued=client.post("/api/v1/orders/",json.dumps(payload),content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="state-command",**AUTH)
+    body=client.get("/api/v1/orders/I-STATE/state/",**AUTH).json()["data"]
+    assert body["commands"][0]["command_id"]==queued.json()["data"]["command_id"]
+    assert body["non_submission_established"] is False
+    missing=client.get("/api/v1/orders/NEVER-SUBMITTED/state/",**AUTH).json()["data"]
+    assert missing["commands"]==[]
+    assert missing["non_submission_established"] is True
+
 def test_contract_search_and_command_detail(client):
     response=client.post("/api/v1/contracts/search/",json.dumps({"query":"BHP"}),content_type="application/json",HTTP_IDEMPOTENCY_KEY="search:BHP",**AUTH)
     assert response.status_code==202
