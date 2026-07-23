@@ -154,10 +154,45 @@ def check_backend_submission_sites() -> None:
         fail(f"Backend place_order allowlist mismatch: {sorted(call_sites)}")
 
 
+def check_market_persistence_isolation() -> None:
+    service_paths = [
+        ROOT / "Backend" / "apps" / "market_streams" / "services.py",
+        ROOT / "apps" / "market_streams" / "services.py",
+    ]
+    found = False
+    for path in service_paths:
+        if not path.is_file():
+            continue
+        found = True
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        forbidden_calls = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {"evaluate_instance", "get_plugin"}
+        }
+        if forbidden_calls:
+            fail(
+                "market persistence may not execute strategy plugins: "
+                f"{path.relative_to(ROOT).as_posix()} -> {sorted(forbidden_calls)}"
+            )
+        if "ensure_strategy_evaluation_job" not in source:
+            fail(
+                "market persistence must create durable strategy evaluation jobs: "
+                f"{path.relative_to(ROOT).as_posix()}"
+            )
+    backend_checkout = (ROOT / "Backend" / "manage.py").is_file() or (ROOT / "manage.py").is_file()
+    if backend_checkout and not found:
+        fail("market persistence service is missing")
+
+
 def main() -> None:
     check_document()
     check_plugin_isolation()
     check_backend_submission_sites()
+    check_market_persistence_isolation()
     print("automatic execution architecture checks passed")
 
 
