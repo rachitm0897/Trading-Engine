@@ -10,10 +10,10 @@ from apps.oms.services import apply_execution
 from apps.portfolios.models import TradingPortfolio
 from apps.rebalancing.services import aggregate_targets, plan_rebalance
 from apps.market_streams.models import IndicatorValue, MarketBar, MarketDataSubscription, StrategyEvaluationReadiness
-from apps.market_streams.services import evaluate_ready_strategies, persist_bar
+from apps.market_streams.services import coordinate_bar_readiness, persist_bar
 from apps.strategies.evaluation_jobs import process_strategy_evaluation_jobs
 from apps.strategies.framework import create_instance, enable_instance, evaluate_instance, pause_instance, update_instance
-from apps.strategies.models import StrategyAttributedPosition, StrategyDefinition, StrategyInputRequirement, StrategyTarget, StrategyVersion
+from apps.strategies.models import StrategyAttributedPosition, StrategyDefinition, StrategyTarget, StrategyVersion
 
 pytestmark=pytest.mark.django_db
 
@@ -95,8 +95,9 @@ def test_strategy_portability_separate_state_and_shared_indicator(portfolio):
     rsi2=make(portfolio,tsla,"RSI_MEAN_REVERSION","TSLA_RSI_B",{"window":14,"entry_threshold":25,"exit_threshold":70,"direction":"LONG"})
     sma=make(portfolio,tsla,"SMA_CROSSOVER","TSLA_SMA",{"fast_window":20,"slow_window":50,"direction":"LONG"})
     enable_instance(rsi1);enable_instance(rsi2)
-    shared=StrategyInputRequirement.objects.get(instrument=tsla,input_type="INDICATOR",name="rsi",parameters_hash=rsi1.input_bindings.get(requirement__name="rsi").requirement.parameters_hash)
+    shared=rsi1.input_bindings.get(requirement__name="rsi").requirement
     assert shared.active_ref_count==2
+    assert rsi2.input_bindings.get(requirement__name="rsi").requirement_id==shared.pk
     enable_instance(sma)
     evaluate_instance(rsi1,bar={"bar_id":"r","close":"100","is_final":True},indicators={"rsi":"31"},previous_indicators={"rsi":"29"},event_id="r")
     evaluate_instance(sma,bar={"bar_id":"s","close":"100","is_final":True},indicators={"sma_fast":"11","sma_slow":"10"},previous_indicators={"sma_fast":"9","sma_slow":"10"},event_id="s")
@@ -152,21 +153,26 @@ def test_persisted_final_inputs_trigger_once_and_corrected_bar_gets_new_namespac
         return MarketBar.objects.create(instrument=tsla,bar_id="stable",interval="5m",window_start=now,window_end=now,
             open=100,high=101,low=99,close=101,volume=10,version=version,is_final=True,source_event_count=1,produced_at=now)
     first=bar(1);requirements={x.requirement.parameters["role"]:x.requirement for x in item.input_bindings.filter(requirement__input_type="INDICATOR")}
-    IndicatorValue.objects.create(instrument=tsla,indicator="sma_fast",value=11,previous_value=9,parameters=requirements["fast"].parameters,
-        parameters_hash=requirements["fast"].parameters_hash,timeframe="5m",source_bar_id="stable",source_bar_version=1,event_time=now,source_key="fast-1")
-    assert evaluate_ready_strategies(first)==0
-    IndicatorValue.objects.create(instrument=tsla,indicator="sma_slow",value=10,previous_value=10,parameters=requirements["slow"].parameters,
-        parameters_hash=requirements["slow"].parameters_hash,timeframe="5m",source_bar_id="stable",source_bar_version=1,event_time=now,source_key="slow-1")
-    assert evaluate_ready_strategies(first)==1 and evaluate_ready_strategies(first)==0 and item.runs.count()==0
+    IndicatorValue.objects.create(instrument=tsla,indicator="sma_fast",indicator_name="sma",indicator_role="fast",
+        implementation_version=1,requirement_identity_hash=requirements["fast"].identity_hash,
+        value=11,previous_value=9,parameters=requirements["fast"].parameters,timeframe="5m",
+        source_bar_id="stable",source_bar_version=1,event_time=now,source_key="fast-1")
+    assert coordinate_bar_readiness(first)==0
+    IndicatorValue.objects.create(instrument=tsla,indicator="sma_slow",indicator_name="sma",indicator_role="slow",
+        implementation_version=1,requirement_identity_hash=requirements["slow"].identity_hash,
+        value=10,previous_value=10,parameters=requirements["slow"].parameters,timeframe="5m",
+        source_bar_id="stable",source_bar_version=1,event_time=now,source_key="slow-1")
+    assert coordinate_bar_readiness(first)==1 and coordinate_bar_readiness(first)==0 and item.runs.count()==0
     assert process_strategy_evaluation_jobs()["completed"]==1 and item.runs.count()==1
     assert StrategyEvaluationReadiness.objects.get(bar=first).status=="COMPLETED"
     corrected=bar(2)
     for role,value in [("fast",12),("slow",10)]:
         requirement=requirements[role]
-        IndicatorValue.objects.create(instrument=tsla,indicator=f"sma_{role}",value=value,previous_value=value,
-            parameters=requirement.parameters,parameters_hash=requirement.parameters_hash,timeframe="5m",source_bar_id="stable",
+        IndicatorValue.objects.create(instrument=tsla,indicator=f"sma_{role}",indicator_name="sma",
+            indicator_role=role,implementation_version=1,requirement_identity_hash=requirement.identity_hash,
+            value=value,previous_value=value,parameters=requirement.parameters,timeframe="5m",source_bar_id="stable",
             source_bar_version=2,event_time=now,source_key=f"{role}-2")
-    assert evaluate_ready_strategies(corrected)==1
+    assert coordinate_bar_readiness(corrected)==1
     assert process_strategy_evaluation_jobs()["completed"]==1 and item.runs.count()==2
 
 

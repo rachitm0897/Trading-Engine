@@ -11,7 +11,8 @@ from apps.market_streams.models import (
     StrategyEvaluationReadiness,
 )
 from apps.strategies.framework import evaluate_instance
-from apps.strategies.models import StrategyInputBinding
+from apps.strategies.input_identity import indicator_output_name
+from apps.strategies.models import StrategyInputBinding, StrategyInstance
 from apps.strategies.plugins import get_plugin
 
 
@@ -61,13 +62,6 @@ def _job_key(instance_id, version_id, market_bar_id, bar_version):
     return f"strategy-evaluation:{hashlib.sha256(identity.encode()).hexdigest()}"
 
 
-def _indicator_output_name(requirement):
-    role = requirement.parameters.get("role")
-    if requirement.name == "donchian":
-        return "donchian_upper" if role == "entry" else "donchian_lower"
-    return f"{requirement.name}_{role}" if role else requirement.name
-
-
 @transaction.atomic
 def ensure_strategy_evaluation_job(
     readiness,
@@ -80,6 +74,7 @@ def ensure_strategy_evaluation_job(
     readiness = StrategyEvaluationReadiness.objects.select_for_update().select_related(
         "strategy_instance", "strategy_version", "bar",
     ).get(pk=readiness.pk)
+    instance = StrategyInstance.objects.select_for_update().get(pk=readiness.strategy_instance_id)
     bar = readiness.bar
     stable_event_id = str(event_id or f"{bar.bar_id}:{bar.version}")
     identity = {
@@ -97,6 +92,7 @@ def ensure_strategy_evaluation_job(
             "event_id": stable_event_id,
             "event_time": bar.window_end,
             "source_data_version": bar.version,
+            "processing_mode": bar.processing_mode,
             "expected_input_identity_hashes": sorted(expected_input_identity_hashes),
             "status": desired_status,
             "error_code": "" if ready else "MISSING_INPUT",
@@ -111,6 +107,44 @@ def ensure_strategy_evaluation_job(
         },
     )
     became_ready = created and ready
+    incoming_order = (bar.window_end, bar.bar_id, bar.version)
+    last_order = (
+        instance.last_market_event_at,
+        instance.last_market_bar_id,
+        instance.last_market_bar_version,
+    ) if instance.last_market_event_at else None
+    stale_live_event = bar.processing_mode != "LIVE" or (
+        last_order is not None and incoming_order < last_order
+    )
+    if stale_live_event and job.status in {"WAITING_FOR_INPUT", "PENDING", "RETRY"}:
+        job.status = "FAILED"
+        job.error_code = "STALE_INPUT"
+        job.error_details = {
+            "message": "Live market event is older than the strategy market cursor",
+            "incoming": [bar.window_end.isoformat(), bar.bar_id, bar.version],
+            "last_accepted": [
+                instance.last_market_event_at.isoformat() if instance.last_market_event_at else None,
+                instance.last_market_bar_id,
+                instance.last_market_bar_version,
+            ],
+            "processing_mode": bar.processing_mode,
+        }
+        job.completed_at = timezone.now()
+        job.save(update_fields=[
+            "status", "error_code", "error_details", "completed_at", "updated_at",
+        ])
+        readiness.status = "ERROR"
+        readiness.completed_at = job.completed_at
+        readiness.last_error = job.error_details["message"]
+        readiness.save(update_fields=["status", "completed_at", "last_error", "updated_at"])
+        return job, False
+    if last_order is None or incoming_order > last_order:
+        instance.last_market_event_at = bar.window_end
+        instance.last_market_bar_id = bar.bar_id
+        instance.last_market_bar_version = bar.version
+        instance.save(update_fields=[
+            "last_market_event_at", "last_market_bar_id", "last_market_bar_version", "updated_at",
+        ])
     if not created:
         if job.bar_id != bar.pk:
             raise DataIntegrityEvaluationError(
@@ -208,6 +242,8 @@ def _load_evaluation_inputs(job_id):
         or bar.bar_id != job.market_bar_id
         or bar.version != job.bar_version
         or job.source_data_version != bar.version
+        or job.processing_mode != "LIVE"
+        or bar.processing_mode != "LIVE"
     ):
         raise StaleInputError(
             "The final bar identity no longer matches the evaluation job",
@@ -215,6 +251,7 @@ def _load_evaluation_inputs(job_id):
                 "market_bar_id": bar.bar_id,
                 "bar_version": bar.version,
                 "is_final": bar.is_final,
+                "processing_mode": bar.processing_mode,
             },
         )
     if bar.instrument_id != instance.instrument_id or bar.interval != instance.timeframe:
@@ -251,7 +288,7 @@ def _load_evaluation_inputs(job_id):
     indicator_bindings = [
         binding for binding in bindings if binding.requirement.input_type == "INDICATOR"
     ]
-    parameter_hashes = {binding.requirement.parameters_hash for binding in indicator_bindings}
+    identity_hashes = {binding.requirement.identity_hash for binding in indicator_bindings}
     values_by_hash = {}
     for value in IndicatorValue.objects.filter(
         instrument=instance.instrument,
@@ -259,13 +296,14 @@ def _load_evaluation_inputs(job_id):
         source_bar_id=bar.bar_id,
         source_bar_version=bar.version,
         is_final=True,
-        parameters_hash__in=parameter_hashes,
-    ).order_by("parameters_hash", "-created_at"):
-        values_by_hash.setdefault(value.parameters_hash, value)
+        processing_mode="LIVE",
+        requirement_identity_hash__in=identity_hashes,
+    ).order_by("requirement_identity_hash", "-created_at"):
+        values_by_hash.setdefault(value.requirement_identity_hash, value)
     missing = [
         binding.requirement.identity_hash
         for binding in indicator_bindings
-        if binding.requirement.parameters_hash not in values_by_hash
+        if binding.requirement.identity_hash not in values_by_hash
     ]
     if missing:
         raise MissingInputError(
@@ -275,7 +313,7 @@ def _load_evaluation_inputs(job_id):
     values = {}
     previous = {}
     for binding in indicator_bindings:
-        value = values_by_hash[binding.requirement.parameters_hash]
+        value = values_by_hash[binding.requirement.identity_hash]
         if value.event_time != job.event_time:
             raise StaleInputError(
                 "Indicator event time does not match the final bar",
@@ -285,7 +323,7 @@ def _load_evaluation_inputs(job_id):
                     "job_event_time": job.event_time.isoformat(),
                 },
             )
-        name = _indicator_output_name(binding.requirement)
+        name = indicator_output_name(binding.requirement.name, binding.requirement.role)
         values[name] = value.value
         previous[name] = value.previous_value
     payload = {
@@ -302,6 +340,7 @@ def _load_evaluation_inputs(job_id):
         "volume": str(bar.volume),
         "version": bar.version,
         "is_final": True,
+        "processing_mode": "LIVE",
     }
     return job, instance, bar, values, previous, payload
 

@@ -118,15 +118,20 @@ def deactivate_inputs(instance):
 
 @transaction.atomic
 def register_inputs(instance, version=None):
+    from .input_identity import requirement_identity_hash
     version=version or current_version(instance);plugin=get_plugin(instance.definition)
     requirements=[]
     for declared in plugin.required_stream_inputs(instance.parameters):
-        identity={"instrument_id":instance.instrument_id,"timeframe":instance.timeframe,"type":declared.input_type,
-            "name":declared.name,"parameters":declared.parameters}
-        digest=_json_hash(identity);parameters_hash=_json_hash(declared.parameters)
+        parameters=dict(declared.parameters or {})
+        role=declared.role or parameters.get("role","")
+        implementation_version=int(declared.implementation_version)
+        digest=requirement_identity_hash(input_type=declared.input_type,name=declared.name,role=role,
+            parameters=parameters,instrument_id=instance.instrument_id,timeframe=instance.timeframe,
+            implementation_version=implementation_version)
         requirement,_=StrategyInputRequirement.objects.get_or_create(identity_hash=digest,defaults={"instrument":instance.instrument,
-            "timeframe":instance.timeframe,"input_type":declared.input_type,"name":declared.name,"parameters":declared.parameters,
-            "parameters_hash":parameters_hash,"required_bar_fields":list(declared.bar_fields),"warmup_bars":declared.warmup_bars})
+            "timeframe":instance.timeframe,"input_type":declared.input_type,"name":declared.name,"role":role,
+            "parameters":parameters,"implementation_version":implementation_version,
+            "required_bar_fields":list(declared.bar_fields),"warmup_bars":declared.warmup_bars})
         binding,_=StrategyInputBinding.objects.get_or_create(strategy_instance=instance,strategy_version=version,requirement=requirement,
             defaults={"active":instance.enabled})
         if binding.active!=instance.enabled:binding.active=instance.enabled;binding.save(update_fields=["active"])
@@ -137,7 +142,8 @@ def register_inputs(instance, version=None):
         "topic":"strategy.inputs.v1","event_type":"strategy.inputs.changed","aggregate_type":"strategy_instance",
         "aggregate_id":str(instance.pk),"partition_key":str(instance.instrument_id),"payload":{"strategy_instance_id":instance.pk,
         "strategy_version":version.version,"instrument_id":instance.instrument_id,"timeframe":instance.timeframe,
-        "requirements":[{"identity_hash":x.identity_hash,"input_type":x.input_type,"name":x.name,"parameters":x.parameters,
+        "requirements":[{"identity_hash":x.identity_hash,"input_type":x.input_type,"name":x.name,"role":x.role,
+        "parameters":x.parameters,"implementation_version":x.implementation_version,
         "warmup_bars":x.warmup_bars} for x in requirements] if instance.enabled else [],"removed_requirement_hashes":[]}})
     return requirements
 
@@ -185,6 +191,8 @@ def evaluate_instance(instance, *, bar, indicators, previous_indicators=None, ev
         raise ValueError("Strategy instance is not ready for evaluation")
     if not bar.get("is_final",True):
         raise ValueError("Strategies evaluate final bars only")
+    if str(bar.get("processing_mode","LIVE")).upper()!="LIVE":
+        raise ValueError("Historical processing modes cannot mutate live strategy state")
     version=current_version(instance);event_id=str(event_id or bar.get("event_id") or bar.get("bar_id") or _json_hash(bar))
     key=f"strategy:{instance.pk}:v{version.version}:{instance.instrument_id}:{instance.timeframe}:{event_id}:{source_data_version}"
     existing=StrategyRun.objects.select_for_update().filter(idempotency_key=key).first()

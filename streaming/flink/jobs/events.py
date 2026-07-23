@@ -1,7 +1,9 @@
-import uuid
 from datetime import datetime, timezone
 
-NAMESPACE=uuid.UUID("8d0ddbee-cd38-49ad-bc36-3c758d8fbd2b")
+try:
+    from .identity import deterministic_event_id
+except ImportError:
+    from jobs.identity import deterministic_event_id
 
 
 def payload_of(message):
@@ -10,7 +12,7 @@ def payload_of(message):
 
 def envelope(event_type,aggregate_type,aggregate_id,payload,stable_key,source=None,occurred_at=None):
     source=source or {}
-    event_id=str(uuid.uuid5(NAMESPACE,f"{event_type}:{stable_key}"))
+    event_id=deterministic_event_id(event_type,stable_key)
     now=datetime.now(timezone.utc).isoformat()
     return {"event_id":event_id,"event_type":event_type,"schema_version":1,
         "occurred_at":occurred_at or now,"produced_at":now,"producer":"flink",

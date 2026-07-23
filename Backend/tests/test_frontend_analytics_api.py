@@ -75,8 +75,9 @@ def test_strategy_chart_maps_persisted_market_and_strategy_facts(client, portfol
     )
     enable_instance(instance)
     IndicatorValue.objects.create(
-        instrument=instrument, bar=bar, indicator="sma", value=99, parameters={"window": 2},
-        parameters_hash="chart", timeframe="5m", source_bar_id=bar.bar_id, source_bar_version=1,
+        instrument=instrument, bar=bar, indicator="sma", indicator_name="sma", indicator_role="",
+        implementation_version=1, requirement_identity_hash="c"*64, value=99, parameters={"window": 2},
+        timeframe="5m", source_bar_id=bar.bar_id, source_bar_version=1,
         event_time=now, source_key="chart-indicator",
     )
     evaluate_instance(instance, bar={"bar_id": bar.bar_id, "close": "100", "is_final": True}, indicators={}, event_id="chart-evaluation", event_time=now)
