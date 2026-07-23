@@ -24,6 +24,10 @@ class GatewayTransportError(GatewayError):
     pass
 
 
+class GatewayCommandRejected(GatewayError):
+    pass
+
+
 @dataclass(frozen=True)
 class GatewayRoute:
     session_id: str
@@ -129,6 +133,16 @@ class GatewayClient:
                 if response.status_code >= 500 and safe and attempt < retries:
                     time.sleep(0.05 * (2 ** attempt))
                     continue
+                if 400 <= response.status_code < 500:
+                    try:
+                        body = response.json()
+                        error = body.get("error") or {}
+                        message = error.get("message") if isinstance(error, dict) else error
+                    except (TypeError, ValueError):
+                        message = response.text
+                    raise GatewayCommandRejected(
+                        str(message or f"Gateway rejected request with HTTP {response.status_code}")
+                    )
                 response.raise_for_status()
                 body = response.json()
                 if not body.get("ok", False):
@@ -167,6 +181,9 @@ class GatewayClient:
 
     def completed_orders(self):
         return self.request("GET", "completed-orders/")
+
+    def order_state(self, internal_id):
+        return self.request("GET", f"orders/{internal_id}/state/")
 
     def command(self, command_id):
         return self.request("GET", f"commands/{int(command_id)}/")

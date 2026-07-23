@@ -61,6 +61,17 @@ PORTFOLIO_TARGET_COORDINATION_DEBOUNCE_SECONDS = int(
 PORTFOLIO_TARGET_COORDINATION_BATCH_SIZE = int(
     os.getenv("PORTFOLIO_TARGET_COORDINATION_BATCH_SIZE", "50")
 )
+ORDER_INTENT_BATCH_SIZE = int(os.getenv("ORDER_INTENT_BATCH_SIZE", "50"))
+BROKER_COMMAND_BATCH_SIZE = int(os.getenv("BROKER_COMMAND_BATCH_SIZE", "50"))
+BROKER_COMMAND_RETRY_BASE_SECONDS = int(
+    os.getenv("BROKER_COMMAND_RETRY_BASE_SECONDS", "5")
+)
+BROKER_COMMAND_RETRY_MAX_SECONDS = int(
+    os.getenv("BROKER_COMMAND_RETRY_MAX_SECONDS", "300")
+)
+BROKER_COMMAND_CLAIM_TIMEOUT_SECONDS = int(
+    os.getenv("BROKER_COMMAND_CLAIM_TIMEOUT_SECONDS", "120")
+)
 CELERY_BEAT_SCHEDULE = {
     "reconcile": {"task": "apps.reconciliation.tasks.run_scheduled_reconciliation", "schedule": 60.0},
     "sync-broker": {"task": "apps.broker_gateway.tasks.sync_broker_events", "schedule": 5.0},
@@ -73,6 +84,9 @@ CELERY_BEAT_SCHEDULE = {
     "instrument-registry": {"task": "apps.instruments.tasks.publish_instrument_registry_snapshot", "schedule": 60.0},
     "recover-rebalances": {"task": "apps.rebalancing.tasks.recover_incomplete_rebalances", "schedule": 60.0},
     "coordinate-portfolio-targets": {"task": "apps.rebalancing.tasks.coordinate_portfolio_targets", "schedule": 1.0},
+    "execute-order-intents": {"task": "apps.execution.tasks.execute_order_intents", "schedule": 1.0},
+    "dispatch-broker-commands": {"task": "apps.execution.tasks.dispatch_broker_commands", "schedule": 1.0},
+    "recover-broker-commands": {"task": "apps.execution.tasks.recover_broker_commands", "schedule": 30.0},
     "sync-finnhub-history": {"task": "apps.market_data.tasks.sync_active_finnhub_universes", "schedule": 21600.0},
     "check-finnhub-history": {"task": "apps.market_data.tasks.check_finnhub_history_staleness", "schedule": 21600.0},
     "verify-finnhub-mappings": {"task": "apps.market_data.tasks.verify_pending_finnhub_mappings", "schedule": 21600.0},
@@ -200,8 +214,14 @@ REBALANCING_TASK_ROUTES = {
     "apps.rebalancing.tasks.coordinate_portfolio_targets": {"queue": "target_coordination"},
     "apps.rebalancing.tasks.recover_incomplete_rebalances": {"queue": "target_coordination"},
 }
+EXECUTION_TASK_ROUTES = {
+    "apps.execution.tasks.execute_order_intents": {"queue": "intent_execution"},
+    "apps.execution.tasks.dispatch_broker_commands": {"queue": "broker_commands"},
+    "apps.execution.tasks.recover_broker_commands": {"queue": "broker_commands"},
+}
 CELERY_TASK_ROUTES = {
     **RESEARCH_TASK_ROUTES,
     **STRATEGY_EVALUATION_TASK_ROUTES,
     **REBALANCING_TASK_ROUTES,
+    **EXECUTION_TASK_ROUTES,
 }
