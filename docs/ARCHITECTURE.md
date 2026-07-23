@@ -3,8 +3,8 @@
 ## Status and scope
 
 This document is the ownership contract for automatic strategy execution.
-Durable strategy evaluation and portfolio target coordination are implemented;
-components still labelled **planned** do not exist yet.
+Durable strategy evaluation, portfolio target coordination, intent execution,
+and broker-command dispatch are implemented.
 
 The only supported automatic order path is:
 
@@ -62,9 +62,10 @@ Consequently:
   risk, the Gateway client, `ib_async`, or any broker adapter.
 - Only the Backend owns target aggregation, allocation, rebalancing, sizing,
   risk, OMS state, fills, ledgers, and reconciliation.
-- Only the Gateway owns durable broker commands, the single `ib_async`
-  connection, and callback buffering. It accepts already-approved order
-  commands and cannot resize, allocate, or approve them.
+- Backend PostgreSQL owns the financial `BrokerCommand` and its relationship to
+  OMS state. The Gateway owns a second local durable `GatewayCommand`, the
+  single `ib_async` connection, and callback buffering. It accepts
+  already-approved order commands and cannot resize, allocate, or approve them.
 
 ## Pipeline ownership matrix
 
@@ -85,10 +86,10 @@ but that does not transfer ownership.
 | `PortfolioTargetSnapshot` | Backend Target Coordinator (`apps.rebalancing.coordinator`) | Event-time-latest eligible `StrategyTarget` per allocated instance, active strategy versions, lifecycle policy, attributed positions, account/portfolio NAV, cash, positions, active broker orders, reserved intents, prices, reconciliation generation, and causal cut-off | Immutable net portfolio target, constituent attribution, target ages/rejections, projected exposure, and explicit portfolio order/risk policy | PostgreSQL: `PortfolioTargetSnapshot`, `PortfolioTargetCoordination` | Celery queue `target_coordination` wakes a database-backed worker; Kafka delivery is not required |
 | `RebalanceRun` | Backend Rebalance Planner | One immutable `PortfolioTargetSnapshot`, persisted positions/prices, `RebalancePolicy`, NAV and available cash | Auditable target positions, drift/cost suppressions, phase and mode | PostgreSQL: `RebalanceRun`, `TargetPortfolioPosition`; `OutboxEvent` | Produces informational `portfolio.rebalance.planned.v1` after commit |
 | `OrderIntent` | Backend Rebalance Planner | Unsuppressed PAPER trades from one `RebalanceRun` | Eligible, netted, idempotent intent with strategy-version attribution | PostgreSQL: `OrderIntent`, `OrderIntentAttribution`, `PositionSizingDecision` when configured | `order.intents.v1` is an optional projection only; it is not the work queue |
-| Intent execution worker (**planned**) | Backend Intent Execution Service | Eligible PAPER `OrderIntent` claimed from PostgreSQL | Terminal hold/rejection, or one risk-approved OMS order followed by one Gateway command request | PostgreSQL: intent attempt/status, `OperationAttempt`, risk and OMS records; stores returned Gateway command identity | May project intent/order status after commit; never consumes Kafka as authority |
+| Intent execution worker | Backend Intent Execution Service (`apps.execution.dispatch`) | Eligible PAPER `OrderIntent` claimed from PostgreSQL | Terminal hold/rejection, or one risk-approved OMS order and one durable PLACE command | PostgreSQL: intent attempt/status, `OperationAttempt`, risk and OMS records, `BrokerCommand` | Celery queue `intent_execution`; never consumes Kafka as authority |
 | Risk checks | Backend Pre-Trade Risk Service (`evaluate_intent`) | Locked intent, persisted account/portfolio/strategy policy, sizing decision, kill switches, market freshness, Gateway health, reconciliation state | `APPROVED`, `RESIZED`, `HELD`, or `REJECTED` with approved quantity | PostgreSQL: `RiskCheckResult`, `CapitalReservation`, intent status, `OutboxEvent` | Produces informational `risk.decisions.v1` |
 | OMS `Order` | Backend OMS | Approved quantity and exactly one `OrderIntent` | Internal order identity and append-only status transitions | PostgreSQL: `Order`, `OrderStatusHistory`, `OutboxEvent` | Produces informational `orders.events.v1` |
-| Durable `BrokerCommand` | Gateway Command API (concrete record: `GatewayCommand`) | Authenticated, risk-approved order payload with internal OMS order ID and idempotency key | Durable `PENDING` command acknowledged to Backend before broker I/O | Gateway SQLite: `GatewayCommand`, later `GatewayCommandAttempt` and `GatewayOrderReference` | None |
+| Durable `BrokerCommand` | Backend Broker Command Dispatcher (`apps.execution.dispatch`) | Risk-approved OMS PLACE, or approved MODIFY/CANCEL request, with stable internal order ID and command idempotency key | Safely claimed dispatch, explicit acknowledgement/retry/failure, or `UNCERTAIN` pending Gateway-and-broker reconciliation | PostgreSQL: `BrokerCommand`; Gateway SQLite after acknowledged handoff: `GatewayCommand`, later `GatewayCommandAttempt` and `GatewayOrderReference` | Celery queue `broker_commands`; Kafka is not the command queue |
 | Gateway | Gateway Broker Worker (`broker_worker`) | Claimed `GatewayCommand` | One broker API call or an explicitly `UNKNOWN` outcome; durable callback events | Gateway SQLite: command attempt/result and `GatewayEvent`; no portfolio or risk records | None |
 | IBKR paper account | IBKR paper brokerage | Qualified contract and approved broker order | Broker acknowledgement, status, execution and account snapshots | External broker system | None |
 | Broker events | Gateway Broker Event Capture | `ib_async` callbacks and periodic snapshots | Ordered, idempotent Gateway events consumed through a per-session Backend cursor | Gateway SQLite: `GatewayEvent`; PostgreSQL: `BrokerSyncCursor`, broker IDs/status history, `BrokerPositionSnapshot` | Backend may project order/execution events only after PostgreSQL commit |
@@ -129,15 +130,26 @@ Kafka is deliberately absent as an authoritative trigger between
    targets while planning.
 7. PAPER planning persists `OrderIntent`. No planner, plugin, API view, Kafka
    consumer, or Flink job may submit it directly.
-8. The intent execution worker claims the intent, runs all risk checks,
-   creates at most one OMS `Order`, and asks the Gateway to durably enqueue one
-   command. Network I/O is outside PostgreSQL transactions.
-9. The Gateway persists `GatewayCommand` before acknowledging the request.
-   Its sole broker worker owns `ib_async` and the TWS socket.
-10. Broker callbacks are first durable `GatewayEvent` records. Backend advances
+8. The intent execution worker claims the intent, runs all risk checks, creates
+   at most one OMS `Order`, and atomically creates one PostgreSQL
+   `BrokerCommand`. No unsafe Gateway call occurs in that transaction.
+9. The broker-command dispatcher claims with
+   `select_for_update(skip_locked=True)`, repeats the kill-switch and
+   reconciliation gates, marks `SENDING`, and calls the portfolio's bound
+   Gateway outside the database transaction. A transport timeout becomes
+   `UNCERTAIN`, never a blind retry.
+10. The Gateway persists `GatewayCommand` before acknowledging the request.
+   Its sole broker worker owns `ib_async` and the TWS socket. IBKR receives the
+   immutable OMS internal order ID as `orderRef`.
+11. For an uncertain PLACE, the dispatcher queries the Gateway command ledger,
+   Gateway order reference, and open/completed broker snapshots by internal
+   order ID. It attaches an existing order when present, accepts an already
+   durable Gateway command, or retries only when the Gateway explicitly proves
+   that neither command nor broker order exists.
+12. Broker callbacks are first durable `GatewayEvent` records. Backend advances
    a per-session `BrokerSyncCursor` only after each event is projected.
    Execution callbacks, not status callbacks, create fills and ledgers.
-11. Reconciliation compares the IBKR paper account with PostgreSQL and blocks
+13. Reconciliation compares the IBKR paper account with PostgreSQL and blocks
     new risk approval while material breaks remain open.
 
 ## Retry and idempotency matrix
@@ -152,8 +164,8 @@ Kafka is deliberately absent as an authoritative trigger between
 | Targets -> `PortfolioTargetSnapshot` | Content hash over the causal cut-off, contributing target/version set, positions, orders, reservations, prices, account state, lifecycle decisions, and policy | The coordinator debounces durable portfolio marks. Rebuild only as a new snapshot; snapshot rows reject updates | A `RebalanceRun` retains its exact snapshot ID and embedded planning inputs |
 | Snapshot -> `RebalanceRun` | Unique `RebalanceRun.idempotency_key` plus canonical request hash | Stored retryable failures require explicit retry | Same key with different inputs is a conflict |
 | `RebalanceRun` -> `OrderIntent` | Rebalance + instrument + planning version; unique intent key | Recovery may recreate only a provably missing intent with a new recovery version | Existing intent/order is reused, never duplicated |
-| Intent worker -> risk/OMS | Claimed intent attempt; one-to-one `Order.intent` | `HELD` is reevaluated deliberately; rejection is terminal unless policy defines a new intent | An existing OMS order prevents a second order |
-| Backend -> Gateway | `gateway:place:<internal OMS order id>` scoped to Gateway session, plus request hash | Retry only when the Gateway reports a stored retryable pre-submission failure | Timeout/unknown submission is reconciled by internal order ID; it is not blindly resubmitted |
+| Intent worker -> risk/OMS/command | Claimed intent attempt; one-to-one `Order.intent`; unique PLACE command key | `HELD` is reevaluated deliberately; rejection is terminal unless policy defines a new intent | Existing OMS order and command rows prevent duplicate creation |
+| Backend `BrokerCommand` -> Gateway | Unique command key plus request hash, scoped by the bound Gateway session; PLACE always carries internal OMS order ID | Pre-send routing/health holds use bounded backoff; recovered `CLAIMED` is safe to reclaim | `SENDING` lease expiry or HTTP timeout becomes `UNCERTAIN`; Gateway command/reference and broker state must reconcile before retry |
 | Gateway -> IBKR | Durable `GatewayCommand`, attempt lease, internal order ID in IBKR `orderRef` | Expired pre-submission lease may be reclaimed | Post-submission uncertainty becomes `UNKNOWN` until broker lookup/reconciliation |
 | Broker event -> fill/ledger | Gateway event key, Backend sync cursor, broker execution ID, ledger idempotency keys | Reprocessing is safe | Status alone never manufactures a fill |
 | Reconciliation | Account + Gateway session + broker snapshot/run | Scheduled and operator runs may repeat | Material breaks keep the account unreconciled and block new approval |
@@ -169,14 +181,11 @@ Kafka is deliberately absent as an authoritative trigger between
 `LIVE` is not a supported automatic execution mode. Mode gates may stop a
 pipeline early, but they may not bypass a stage.
 
-## Current implementation and planned cutover
+## Current implementation and cutover
 
-The target boundaries above are intentionally ahead of the current code in
-one place:
-
-| Gap | Current implementation | Required replacement |
-| --- | --- | --- |
-| Common intent execution | PAPER rebalancing persists intents, but the complete risk/OMS/Gateway orchestration exists inline only in the manual orders API | Add one Intent Execution Service/worker and route every automatic intent through it; the manual API should enqueue an intent into the same service |
+The complete documented PAPER path now has a durable database handoff at every
+financial boundary. The manual order API uses the same intent service, while
+automatic PAPER intents are claimed by its Celery worker.
 
 Planned delivery phases:
 
@@ -188,8 +197,10 @@ Planned delivery phases:
   portfolio, selects targets by event time and active version, freezes projected
   exposure in `PortfolioTargetSnapshot`, and permits one active automatic
   `RebalanceRun`.
-- **Phase 3 - remaining worker:** implement the common intent execution service
-  and compare its results in OBSERVE/SHADOW before PAPER is enabled broadly.
+- **Completed - durable execution cutover:** the common intent service creates
+  risk/OMS state and a PostgreSQL `BrokerCommand`; the dedicated dispatcher
+  owns all PLACE/MODIFY/CANCEL Gateway calls, uncertainty reconciliation, and
+  stuck-command recovery.
 - **Phase 4 - legacy removal:** after parity, restart, retry, and paper-broker
   verification, remove the candidates below and their compatibility tests.
 
@@ -202,13 +213,14 @@ Planned delivery phases:
 | `Backend/apps/strategies/views.py` | `action(..., action_name="evaluate")` inline call to `evaluate_instance` | Operator evaluation executes in the request process rather than creating the same durable evaluation job | Backend Strategy Evaluation Scheduler and Strategy Evaluation Worker | Phase 4 |
 | `Backend/apps/rebalancing/services.py` | `aggregate_targets` (**removed**) and the former moving-target branch of `plan_rebalance` (**replaced**) | Planning previously read a moving "latest target" set | Backend Target Coordinator | Completed after snapshot/coordinator tests |
 | `Backend/apps/allocation/services.py` | `aggregate_targets`, `create_rebalance` (**removed**) | Compatibility aliases exposed a second target/rebalance entry point and hard-coded PAPER behaviour | Backend Target Coordinator and Rebalance Planner | Completed after snapshot/coordinator tests |
-| `Backend/apps/core/views.py` | `orders` POST branch (`evaluate_intent` -> `create_order` -> `GatewayClient.place_order`) | Risk, OMS creation, and Gateway submission are orchestrated inline in an HTTP request instead of by the common intent service | Backend Intent Execution Service | Phase 3 cutover; delete inline orchestration in Phase 4 |
+| `Backend/apps/core/views.py` | Former inline `orders` POST/PATCH/cancel Gateway calls (**removed**) | The view previously coupled API availability, risk/OMS mutation, and unsafe Gateway I/O | Backend Intent Execution Service and Broker Command Dispatcher | Completed during durable command cutover |
 
 The following similarly named paths are not legacy automatic submission
 entries:
 
-- `GatewayClient.place_order` is the authenticated Backend-to-Gateway
-  transport and remains behind the common intent service.
+- `GatewayClient.place_order`, `modify_order`, and `cancel_order` are
+  authenticated Backend-to-Gateway transports and remain callable only by the
+  Broker Command Dispatcher.
 - Gateway `orders`/`enqueue`, `GatewayCommand`, and `broker_worker` are the
   required durable command and sole broker-connection boundary.
 - `_external_order` in `broker_gateway.sync` imports an order already found at
