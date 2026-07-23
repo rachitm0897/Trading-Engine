@@ -3,10 +3,8 @@
 ## Status and scope
 
 This document is the ownership contract for automatic strategy execution.
-Durable strategy evaluation is implemented; components still labelled
-**planned** do not exist yet. The evaluation cutover changes process ownership
-and failure isolation, not strategy decisions, target semantics, risk, sizing,
-OMS, Gateway, or broker behaviour.
+Durable strategy evaluation and portfolio target coordination are implemented;
+components still labelled **planned** do not exist yet.
 
 The only supported automatic order path is:
 
@@ -84,7 +82,7 @@ but that does not transfer ownership.
 | `StrategyEvaluationJob` | Backend Strategy Evaluation Scheduler (`coordinate_bar_readiness` and `ensure_strategy_evaluation_job`) | Persisted final bar/version, current strategy version, and exact expected/available input identities | One durable, claimable job per strategy instance, strategy version, bar ID, and bar version | PostgreSQL: `StrategyEvaluationJob` with unique causal key, status, lease timestamps, bounded attempts, next-attempt time, and classified error | None. Database creation is the workflow handoff |
 | Strategy evaluation worker | Backend Strategy Evaluation Worker (`apps.strategies.evaluation_jobs`) | Job claimed with `select_for_update(skip_locked=True)`, immutable strategy version/configuration, persisted bar and indicators | Deterministic strategy decision, signal, optional target, and completed/retry/failed job state | PostgreSQL: `StrategyRun`, `StrategySignal`, `StrategyTarget`, strategy state, `StrategyEvaluationJob`; `OutboxEvent` after commit | Celery queue `strategy_evaluation` wakes the worker; Kafka is not the work queue. May project `strategy.targets.v1` after commit |
 | `StrategyTarget` | Backend Strategy Evaluation Worker, using the plugin target contract | Plugin decision in `SHADOW` or `PAPER` mode | Versioned strategy/instrument target with causal run and event IDs | PostgreSQL: `StrategyTarget` | Optional post-commit projection to `strategy.targets.v1` |
-| `PortfolioTargetSnapshot` (**planned**) | Backend Portfolio Target Aggregation Service | Latest eligible `StrategyTarget` per enabled instance, `StrategyAllocation`, portfolio NAV, strategy versions, and causal cut-off | Immutable net portfolio target plus constituent attribution | PostgreSQL: planned `PortfolioTargetSnapshot` and constituent rows | None required. An informational outbox projection may be added after the database commit |
+| `PortfolioTargetSnapshot` | Backend Target Coordinator (`apps.rebalancing.coordinator`) | Event-time-latest eligible `StrategyTarget` per allocated instance, active strategy versions, lifecycle policy, attributed positions, account/portfolio NAV, cash, positions, active broker orders, reserved intents, prices, reconciliation generation, and causal cut-off | Immutable net portfolio target, constituent attribution, target ages/rejections, projected exposure, and explicit portfolio order/risk policy | PostgreSQL: `PortfolioTargetSnapshot`, `PortfolioTargetCoordination` | Celery queue `target_coordination` wakes a database-backed worker; Kafka delivery is not required |
 | `RebalanceRun` | Backend Rebalance Planner | One immutable `PortfolioTargetSnapshot`, persisted positions/prices, `RebalancePolicy`, NAV and available cash | Auditable target positions, drift/cost suppressions, phase and mode | PostgreSQL: `RebalanceRun`, `TargetPortfolioPosition`; `OutboxEvent` | Produces informational `portfolio.rebalance.planned.v1` after commit |
 | `OrderIntent` | Backend Rebalance Planner | Unsuppressed PAPER trades from one `RebalanceRun` | Eligible, netted, idempotent intent with strategy-version attribution | PostgreSQL: `OrderIntent`, `OrderIntentAttribution`, `PositionSizingDecision` when configured | `order.intents.v1` is an optional projection only; it is not the work queue |
 | Intent execution worker (**planned**) | Backend Intent Execution Service | Eligible PAPER `OrderIntent` claimed from PostgreSQL | Terminal hold/rejection, or one risk-approved OMS order followed by one Gateway command request | PostgreSQL: intent attempt/status, `OperationAttempt`, risk and OMS records; stores returned Gateway command identity | May project intent/order status after commit; never consumes Kafka as authority |
@@ -151,7 +149,7 @@ Kafka is deliberately absent as an authoritative trigger between
 | Derived topic -> market persistence | `ConsumedEvent(consumer_name, event_id)` plus bar/indicator unique constraints | Failed consumption stays visible and is replayed explicitly from dead letter | Never infer completion from a committed offset alone |
 | Market persistence -> `StrategyEvaluationJob` | Unique constraint: strategy instance + strategy version + bar ID + bar version; separate unique idempotency key | Duplicate events update the same market/readiness identity. Missing-input jobs wait; corrected readiness promotes them once | A completed or terminal job is never reactivated by an event replay |
 | Evaluation job -> `StrategyRun` | Existing strategy idempotency key includes instance, version, instrument, timeframe, source event, and data version | Only infrastructure failures retry, using bounded exponential backoff. Expired `CLAIMED`/`RUNNING` leases recover through the same attempt bound | Plugin, stale-input, invalid-configuration, and data-integrity failures are terminal; plugin failure cannot create or submit an order |
-| Targets -> `PortfolioTargetSnapshot` | Planned unique causal cut-off per portfolio and contributing target/version set | Rebuild only as a new snapshot, never mutate a consumed snapshot | A `RebalanceRun` always retains its exact snapshot identity |
+| Targets -> `PortfolioTargetSnapshot` | Content hash over the causal cut-off, contributing target/version set, positions, orders, reservations, prices, account state, lifecycle decisions, and policy | The coordinator debounces durable portfolio marks. Rebuild only as a new snapshot; snapshot rows reject updates | A `RebalanceRun` retains its exact snapshot ID and embedded planning inputs |
 | Snapshot -> `RebalanceRun` | Unique `RebalanceRun.idempotency_key` plus canonical request hash | Stored retryable failures require explicit retry | Same key with different inputs is a conflict |
 | `RebalanceRun` -> `OrderIntent` | Rebalance + instrument + planning version; unique intent key | Recovery may recreate only a provably missing intent with a new recovery version | Existing intent/order is reused, never duplicated |
 | Intent worker -> risk/OMS | Claimed intent attempt; one-to-one `Order.intent` | `HELD` is reevaluated deliberately; rejection is terminal unless policy defines a new intent | An existing OMS order prevents a second order |
@@ -174,11 +172,10 @@ pipeline early, but they may not bypass a stage.
 ## Current implementation and planned cutover
 
 The target boundaries above are intentionally ahead of the current code in
-two places:
+one place:
 
 | Gap | Current implementation | Required replacement |
 | --- | --- | --- |
-| Immutable portfolio target | `aggregate_targets` dynamically reads the latest target while `plan_rebalance` is running | Add `PortfolioTargetSnapshot` with constituent attribution; require its ID on the automatic strategy rebalance path |
 | Common intent execution | PAPER rebalancing persists intents, but the complete risk/OMS/Gateway orchestration exists inline only in the manual orders API | Add one Intent Execution Service/worker and route every automatic intent through it; the manual API should enqueue an intent into the same service |
 
 Planned delivery phases:
@@ -186,23 +183,25 @@ Planned delivery phases:
 - **Completed - durable evaluation cutover:** `StrategyEvaluationJob`, the
   dedicated worker/queue, failure classification, bounded retry, and stuck-job
   recovery now isolate market persistence from plugin execution.
-- **Phase 3 - remaining workers and shadow cutover:** implement the target
-  snapshot service and common intent execution service; compare legacy and new
-  results in OBSERVE/SHADOW before PAPER is enabled.
+- **Completed - portfolio target coordination:** strategy completion marks
+  durable portfolio state; the debounced `target_coordination` worker locks the
+  portfolio, selects targets by event time and active version, freezes projected
+  exposure in `PortfolioTargetSnapshot`, and permits one active automatic
+  `RebalanceRun`.
+- **Phase 3 - remaining worker:** implement the common intent execution service
+  and compare its results in OBSERVE/SHADOW before PAPER is enabled broadly.
 - **Phase 4 - legacy removal:** after parity, restart, retry, and paper-broker
   verification, remove the candidates below and their compatibility tests.
 
-## Legacy candidates: retain until replacement is verified
-
-No candidate is deleted in this phase.
+## Legacy candidates and completed removals
 
 | File path | Function or class | Why it is a legacy or duplicate entry point | Replacement owner | Planned deletion phase |
 | --- | --- | --- | --- | --- |
 | `Backend/apps/market_streams/models.py` | `StrategyEvaluationReadiness` | It remains a compatibility/input-completeness record; leases, attempts, execution status, and errors now belong to `StrategyEvaluationJob` | Backend Strategy Evaluation Scheduler (`StrategyEvaluationJob`) | Phase 4, after readiness can be derived without compatibility callers |
 | `Backend/apps/market_streams/services.py` | `record_indicator_readiness` and `evaluate_ready_strategies` (**removed**) | These compatibility helpers carried the old parameter-hash readiness boundary. Persistence now invokes full-identity `coordinate_bar_readiness` directly | Backend Strategy Evaluation Scheduler | Completed during deterministic streaming cutover |
 | `Backend/apps/strategies/views.py` | `action(..., action_name="evaluate")` inline call to `evaluate_instance` | Operator evaluation executes in the request process rather than creating the same durable evaluation job | Backend Strategy Evaluation Scheduler and Strategy Evaluation Worker | Phase 4 |
-| `Backend/apps/rebalancing/services.py` | `aggregate_targets` and the no-explicit-target-source branch of `plan_rebalance` | Planning reads a moving "latest target" set and skips an immutable `PortfolioTargetSnapshot` | Backend Portfolio Target Aggregation Service | Phase 3 cutover; delete in Phase 4 |
-| `Backend/apps/allocation/services.py` | `aggregate_targets`, `create_rebalance` | Compatibility aliases expose a second target/rebalance entry point and hard-code PAPER behaviour | Backend Portfolio Target Aggregation Service and Rebalance Planner | Phase 4 |
+| `Backend/apps/rebalancing/services.py` | `aggregate_targets` (**removed**) and the former moving-target branch of `plan_rebalance` (**replaced**) | Planning previously read a moving "latest target" set | Backend Target Coordinator | Completed after snapshot/coordinator tests |
+| `Backend/apps/allocation/services.py` | `aggregate_targets`, `create_rebalance` (**removed**) | Compatibility aliases exposed a second target/rebalance entry point and hard-coded PAPER behaviour | Backend Target Coordinator and Rebalance Planner | Completed after snapshot/coordinator tests |
 | `Backend/apps/core/views.py` | `orders` POST branch (`evaluate_intent` -> `create_order` -> `GatewayClient.place_order`) | Risk, OMS creation, and Gateway submission are orchestrated inline in an HTTP request instead of by the common intent service | Backend Intent Execution Service | Phase 3 cutover; delete inline orchestration in Phase 4 |
 
 The following similarly named paths are not legacy automatic submission
@@ -220,6 +219,44 @@ entries:
 - Strategy flatten is an explicit operator action that may create a target; it
   cannot submit an order and must proceed through snapshot, rebalance, and the
   common intent service.
+
+## Target coordination policy
+
+The coordinator serializes automatic work with a `TradingPortfolio` row lock
+and a conditional database uniqueness constraint on active automatic
+rebalances. A target arriving during `QUEUED`, `CALCULATING`,
+`INTENTS_CREATED`, or `EXECUTING` marks `pending_recalculation`; it cannot open
+a concurrent run. Terminal order handling releases the active run and makes
+the pending portfolio immediately eligible for another snapshot.
+
+Selection uses target event time, then record creation time and primary key as
+deterministic tie-breakers. A target is rejected if it is expired, stale, or
+does not reference the instance's active immutable version. Any such rejection
+makes that snapshot non-executable. Strategy lifecycle policy is explicit:
+
+- `PAUSED` retains strategy-attributed exposure unless its risk-policy
+  configuration says `FLATTEN`.
+- `DISABLED` makes no new decision and retains attributed exposure by default.
+- `FLATTEN_REQUESTED` contributes zero.
+- `KILLED` stops new decisions and uses configured `killed_behavior`, defaulting
+  to `HOLD`.
+- `ERROR` uses configured `error_behavior`, defaulting to `HOLD`.
+
+For every instrument, projected quantity is:
+
+```text
+filled quantity
++ remaining signed active broker orders
++ reserved signed order intents that do not already have an active broker order
+```
+
+The rebalance compares target quantity with that projected quantity. Individual
+strategy targets are checked against their own strategy risk policy before
+aggregation. The net order is checked against portfolio order quantity,
+notional, cash, turnover, and drift limits. When multiple strategies
+contribute, the order policy belonging to the lowest-priority-number
+`StrategyAllocation` wins, with strategy ID as the deterministic tie-breaker;
+that choice is stored in the immutable snapshot.
 
 ## Architecture verification
 
