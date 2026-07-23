@@ -1,0 +1,510 @@
+import hashlib
+from datetime import timedelta
+
+from django.conf import settings
+from django.db import DataError, IntegrityError, InterfaceError, OperationalError, transaction
+from django.utils import timezone
+
+from apps.market_streams.models import (
+    IndicatorValue,
+    StrategyEvaluationJob,
+    StrategyEvaluationReadiness,
+)
+from apps.strategies.framework import evaluate_instance
+from apps.strategies.models import StrategyInputBinding
+from apps.strategies.plugins import get_plugin
+
+
+ACTIVE_STRATEGY_STATES = {
+    "WARMING_UP", "FLAT", "ENTRY_PENDING", "PARTIALLY_LONG", "LONG", "EXIT_PENDING",
+    "PARTIALLY_SHORT", "SHORT",
+}
+
+
+class EvaluationJobError(Exception):
+    error_code = "PLUGIN_LOGIC_ERROR"
+    retryable = False
+
+    def __init__(self, message, *, details=None, strategy_run_id=None):
+        super().__init__(message)
+        self.details = details or {}
+        self.strategy_run_id = strategy_run_id
+
+
+class RetryableInfrastructureError(EvaluationJobError):
+    error_code = "INFRASTRUCTURE_RETRYABLE"
+    retryable = True
+
+
+class MissingInputError(EvaluationJobError):
+    error_code = "MISSING_INPUT"
+
+
+class StaleInputError(EvaluationJobError):
+    error_code = "STALE_INPUT"
+
+
+class InvalidConfigurationError(EvaluationJobError):
+    error_code = "INVALID_CONFIGURATION"
+
+
+class PluginLogicError(EvaluationJobError):
+    error_code = "PLUGIN_LOGIC_ERROR"
+
+
+class DataIntegrityEvaluationError(EvaluationJobError):
+    error_code = "DATA_INTEGRITY_ERROR"
+
+
+def _job_key(instance_id, version_id, market_bar_id, bar_version):
+    identity = f"{instance_id}:{version_id}:{market_bar_id}:{bar_version}"
+    return f"strategy-evaluation:{hashlib.sha256(identity.encode()).hexdigest()}"
+
+
+def _indicator_output_name(requirement):
+    role = requirement.parameters.get("role")
+    if requirement.name == "donchian":
+        return "donchian_upper" if role == "entry" else "donchian_lower"
+    return f"{requirement.name}_{role}" if role else requirement.name
+
+
+@transaction.atomic
+def ensure_strategy_evaluation_job(
+    readiness,
+    *,
+    expected_input_identity_hashes,
+    ready,
+    event_id=None,
+):
+    """Create/update durable work without evaluating strategy code."""
+    readiness = StrategyEvaluationReadiness.objects.select_for_update().select_related(
+        "strategy_instance", "strategy_version", "bar",
+    ).get(pk=readiness.pk)
+    bar = readiness.bar
+    stable_event_id = str(event_id or f"{bar.bar_id}:{bar.version}")
+    identity = {
+        "strategy_instance": readiness.strategy_instance,
+        "strategy_version": readiness.strategy_version,
+        "market_bar_id": bar.bar_id,
+        "bar_version": bar.version,
+    }
+    desired_status = "PENDING" if ready else "WAITING_FOR_INPUT"
+    missing_details = {"message": "Required persisted indicator inputs are not complete"}
+    job, created = StrategyEvaluationJob.objects.get_or_create(
+        **identity,
+        defaults={
+            "bar": bar,
+            "event_id": stable_event_id,
+            "event_time": bar.window_end,
+            "source_data_version": bar.version,
+            "expected_input_identity_hashes": sorted(expected_input_identity_hashes),
+            "status": desired_status,
+            "error_code": "" if ready else "MISSING_INPUT",
+            "error_details": {} if ready else missing_details,
+            "next_attempt_at": timezone.now(),
+            "idempotency_key": _job_key(
+                readiness.strategy_instance_id,
+                readiness.strategy_version_id,
+                bar.bar_id,
+                bar.version,
+            ),
+        },
+    )
+    became_ready = created and ready
+    if not created:
+        if job.bar_id != bar.pk:
+            raise DataIntegrityEvaluationError(
+                "Strategy evaluation job points to a different persisted bar",
+                details={"job_bar_id": job.bar_id, "readiness_bar_id": bar.pk},
+            )
+        fields = []
+        expected = sorted(expected_input_identity_hashes)
+        if job.expected_input_identity_hashes != expected:
+            job.expected_input_identity_hashes = expected
+            fields.append("expected_input_identity_hashes")
+        if not job.event_id:
+            job.event_id = stable_event_id
+            fields.append("event_id")
+        if job.status in {"WAITING_FOR_INPUT", "PENDING", "RETRY"}:
+            if ready and job.status == "WAITING_FOR_INPUT":
+                job.status = "PENDING"
+                job.next_attempt_at = timezone.now()
+                job.error_code = ""
+                job.error_details = {}
+                fields.extend(["status", "next_attempt_at", "error_code", "error_details"])
+                became_ready = True
+            elif not ready and job.status in {"PENDING", "RETRY"}:
+                job.status = "WAITING_FOR_INPUT"
+                job.error_code = "MISSING_INPUT"
+                job.error_details = missing_details
+                fields.extend(["status", "error_code", "error_details"])
+        if fields:
+            job.save(update_fields=[*dict.fromkeys(fields), "updated_at"])
+    return job, became_ready
+
+
+@transaction.atomic
+def claim_next_strategy_evaluation_job(now=None):
+    now = now or timezone.now()
+    job = (
+        StrategyEvaluationJob.objects.select_for_update(skip_locked=True)
+        .filter(status__in=["PENDING", "RETRY"], next_attempt_at__lte=now)
+        .order_by("next_attempt_at", "created_at", "pk")
+        .first()
+    )
+    if job is None:
+        return None
+    job.status = "CLAIMED"
+    job.claimed_at = now
+    job.completed_at = None
+    job.attempt_count += 1
+    job.save(update_fields=["status", "claimed_at", "completed_at", "attempt_count", "updated_at"])
+    StrategyEvaluationReadiness.objects.filter(
+        strategy_instance_id=job.strategy_instance_id,
+        strategy_version_id=job.strategy_version_id,
+        bar_id=job.bar_id,
+    ).update(status="EVALUATING", claimed_at=now, completed_at=None, last_error="")
+    return job.pk
+
+
+@transaction.atomic
+def _mark_running(job_id):
+    job = StrategyEvaluationJob.objects.select_for_update().filter(pk=job_id).first()
+    if job is None or job.status != "CLAIMED":
+        return False
+    job.status = "RUNNING"
+    job.save(update_fields=["status", "updated_at"])
+    return True
+
+
+def _load_evaluation_inputs(job_id):
+    job = StrategyEvaluationJob.objects.select_related(
+        "strategy_instance__definition",
+        "strategy_instance__instrument",
+        "strategy_instance__portfolio",
+        "strategy_version",
+        "bar",
+    ).get(pk=job_id)
+    instance = job.strategy_instance
+    version = job.strategy_version
+    bar = job.bar
+    if (
+        not instance.enabled
+        or instance.state not in ACTIVE_STRATEGY_STATES
+        or instance.version != version.version
+        or version.retired_at is not None
+    ):
+        raise StaleInputError(
+            "Strategy instance or version is no longer eligible for this evaluation",
+            details={
+                "enabled": instance.enabled,
+                "state": instance.state,
+                "instance_version": instance.version,
+                "job_version": version.version,
+            },
+        )
+    if (
+        not bar.is_final
+        or bar.bar_id != job.market_bar_id
+        or bar.version != job.bar_version
+        or job.source_data_version != bar.version
+    ):
+        raise StaleInputError(
+            "The final bar identity no longer matches the evaluation job",
+            details={
+                "market_bar_id": bar.bar_id,
+                "bar_version": bar.version,
+                "is_final": bar.is_final,
+            },
+        )
+    if bar.instrument_id != instance.instrument_id or bar.interval != instance.timeframe:
+        raise DataIntegrityEvaluationError(
+            "Evaluation job bar does not match the strategy instrument and timeframe",
+            details={
+                "bar_instrument_id": bar.instrument_id,
+                "strategy_instrument_id": instance.instrument_id,
+                "bar_interval": bar.interval,
+                "strategy_timeframe": instance.timeframe,
+            },
+        )
+    bindings = list(
+        StrategyInputBinding.objects.filter(
+            strategy_instance=instance,
+            strategy_version=version,
+            active=True,
+        ).select_related("requirement")
+    )
+    current_identities = sorted(binding.requirement.identity_hash for binding in bindings)
+    if current_identities != sorted(job.expected_input_identity_hashes):
+        raise StaleInputError(
+            "Strategy input requirements changed after the evaluation job was scheduled",
+            details={
+                "expected": sorted(job.expected_input_identity_hashes),
+                "current": current_identities,
+            },
+        )
+    try:
+        plugin = get_plugin(instance.definition)
+        plugin.validate_configuration(instance.parameters, instance.target_configuration)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise InvalidConfigurationError(str(exc)) from exc
+    indicator_bindings = [
+        binding for binding in bindings if binding.requirement.input_type == "INDICATOR"
+    ]
+    parameter_hashes = {binding.requirement.parameters_hash for binding in indicator_bindings}
+    values_by_hash = {}
+    for value in IndicatorValue.objects.filter(
+        instrument=instance.instrument,
+        timeframe=instance.timeframe,
+        source_bar_id=bar.bar_id,
+        source_bar_version=bar.version,
+        is_final=True,
+        parameters_hash__in=parameter_hashes,
+    ).order_by("parameters_hash", "-created_at"):
+        values_by_hash.setdefault(value.parameters_hash, value)
+    missing = [
+        binding.requirement.identity_hash
+        for binding in indicator_bindings
+        if binding.requirement.parameters_hash not in values_by_hash
+    ]
+    if missing:
+        raise MissingInputError(
+            "Persisted indicator inputs are incomplete",
+            details={"missing_input_identity_hashes": sorted(missing)},
+        )
+    values = {}
+    previous = {}
+    for binding in indicator_bindings:
+        value = values_by_hash[binding.requirement.parameters_hash]
+        if value.event_time != job.event_time:
+            raise StaleInputError(
+                "Indicator event time does not match the final bar",
+                details={
+                    "input_identity_hash": binding.requirement.identity_hash,
+                    "indicator_event_time": value.event_time.isoformat(),
+                    "job_event_time": job.event_time.isoformat(),
+                },
+            )
+        name = _indicator_output_name(binding.requirement)
+        values[name] = value.value
+        previous[name] = value.previous_value
+    payload = {
+        "bar_id": bar.bar_id,
+        "event_id": job.event_id,
+        "instrument_id": bar.instrument_id,
+        "interval": bar.interval,
+        "window_start": bar.window_start.isoformat(),
+        "window_end": bar.window_end.isoformat(),
+        "open": str(bar.open),
+        "high": str(bar.high),
+        "low": str(bar.low),
+        "close": str(bar.close),
+        "volume": str(bar.volume),
+        "version": bar.version,
+        "is_final": True,
+    }
+    return job, instance, bar, values, previous, payload
+
+
+@transaction.atomic
+def _complete_job(job_id, run_id):
+    job = StrategyEvaluationJob.objects.select_for_update().get(pk=job_id)
+    if job.status == "COMPLETED":
+        return job
+    if job.status != "RUNNING":
+        raise DataIntegrityEvaluationError(
+            f"Cannot complete strategy evaluation job in {job.status}",
+            details={"job_id": job.pk, "status": job.status},
+        )
+    now = timezone.now()
+    job.status = "COMPLETED"
+    job.strategy_run_id = run_id
+    job.completed_at = now
+    job.error_code = ""
+    job.error_details = {}
+    job.save(update_fields=[
+        "status", "strategy_run", "completed_at", "error_code", "error_details", "updated_at",
+    ])
+    StrategyEvaluationReadiness.objects.filter(
+        strategy_instance_id=job.strategy_instance_id,
+        strategy_version_id=job.strategy_version_id,
+        bar_id=job.bar_id,
+    ).update(status="COMPLETED", strategy_run_id=run_id, completed_at=now, last_error="")
+    return job
+
+
+def _backoff_seconds(attempt_count):
+    base = int(getattr(settings, "STRATEGY_EVALUATION_RETRY_BASE_SECONDS", 5))
+    maximum = int(getattr(settings, "STRATEGY_EVALUATION_RETRY_MAX_SECONDS", 300))
+    return min(maximum, base * (2 ** max(0, attempt_count - 1)))
+
+
+def classify_evaluation_failure(exc):
+    if isinstance(exc, EvaluationJobError):
+        return exc
+    if isinstance(exc, (OperationalError, InterfaceError, ConnectionError, TimeoutError)):
+        return RetryableInfrastructureError(
+            str(exc),
+            details={"exception_type": type(exc).__name__},
+        )
+    if isinstance(exc, (IntegrityError, DataError)):
+        return DataIntegrityEvaluationError(
+            str(exc),
+            details={"exception_type": type(exc).__name__},
+        )
+    return PluginLogicError(
+        str(exc),
+        details={"exception_type": type(exc).__name__},
+    )
+
+
+@transaction.atomic
+def _record_failure(job_id, raw_error):
+    error = classify_evaluation_failure(raw_error)
+    job = StrategyEvaluationJob.objects.select_for_update().get(pk=job_id)
+    if job.status == "COMPLETED":
+        return job
+    now = timezone.now()
+    maximum_attempts = int(getattr(settings, "STRATEGY_EVALUATION_MAX_ATTEMPTS", 5))
+    message = str(error)[:1000]
+    details = {
+        "message": message,
+        "retryable": error.retryable,
+        **error.details,
+    }
+    if error.error_code == "MISSING_INPUT":
+        job.status = "WAITING_FOR_INPUT"
+        job.completed_at = None
+    elif error.retryable and job.attempt_count < maximum_attempts:
+        job.status = "RETRY"
+        job.next_attempt_at = now + timedelta(seconds=_backoff_seconds(job.attempt_count))
+        job.completed_at = None
+    else:
+        job.status = "FAILED"
+        job.completed_at = now
+        if error.retryable:
+            details["maximum_attempts_exhausted"] = True
+    job.error_code = error.error_code
+    job.error_details = details
+    if error.strategy_run_id:
+        job.strategy_run_id = error.strategy_run_id
+    job.save(update_fields=[
+        "status", "next_attempt_at", "completed_at", "error_code", "error_details",
+        "strategy_run", "updated_at",
+    ])
+    readiness_status = "ERROR" if job.status == "FAILED" else "PENDING"
+    StrategyEvaluationReadiness.objects.filter(
+        strategy_instance_id=job.strategy_instance_id,
+        strategy_version_id=job.strategy_version_id,
+        bar_id=job.bar_id,
+    ).update(
+        status=readiness_status,
+        strategy_run_id=job.strategy_run_id,
+        completed_at=job.completed_at,
+        last_error=message,
+    )
+    if job.status == "FAILED" and error.error_code in {
+        "INVALID_CONFIGURATION", "PLUGIN_LOGIC_ERROR", "DATA_INTEGRITY_ERROR",
+    }:
+        job.strategy_instance.__class__.objects.filter(pk=job.strategy_instance_id).update(
+            state="ERROR", block_reason=message[:255],
+        )
+    return job
+
+
+def execute_strategy_evaluation_job(job_id):
+    if not _mark_running(job_id):
+        return "SKIPPED"
+    try:
+        job, instance, bar, values, previous, payload = _load_evaluation_inputs(job_id)
+        try:
+            run = evaluate_instance(
+                instance,
+                bar=payload,
+                indicators=values,
+                previous_indicators=previous,
+                event_id=job.event_id,
+                source_data_version=job.source_data_version,
+                event_time=job.event_time,
+            )
+        except (OperationalError, InterfaceError, ConnectionError, TimeoutError):
+            raise
+        if run.status == "ERROR":
+            raise PluginLogicError(
+                run.error or "Strategy plugin evaluation failed",
+                strategy_run_id=run.pk,
+            )
+        _complete_job(job_id, run.pk)
+        return "COMPLETED"
+    except Exception as exc:
+        return _record_failure(job_id, exc).status
+
+
+def process_strategy_evaluation_jobs(limit=None):
+    limit = int(limit or getattr(settings, "STRATEGY_EVALUATION_BATCH_SIZE", 50))
+    results = {
+        "claimed": 0,
+        "completed": 0,
+        "retry": 0,
+        "waiting_for_input": 0,
+        "failed": 0,
+    }
+    for _ in range(max(0, limit)):
+        job_id = claim_next_strategy_evaluation_job()
+        if job_id is None:
+            break
+        results["claimed"] += 1
+        status = execute_strategy_evaluation_job(job_id)
+        key = status.lower()
+        if key in results:
+            results[key] += 1
+    return results
+
+
+def recover_stuck_strategy_evaluation_jobs(now=None):
+    now = now or timezone.now()
+    timeout = int(getattr(settings, "STRATEGY_EVALUATION_CLAIM_TIMEOUT_SECONDS", 300))
+    cutoff = now - timedelta(seconds=timeout)
+    maximum_attempts = int(getattr(settings, "STRATEGY_EVALUATION_MAX_ATTEMPTS", 5))
+    recovered = 0
+    while True:
+        with transaction.atomic():
+            job = (
+                StrategyEvaluationJob.objects.select_for_update(skip_locked=True)
+                .filter(status__in=["CLAIMED", "RUNNING"], claimed_at__lte=cutoff)
+                .order_by("claimed_at", "pk")
+                .first()
+            )
+            if job is None:
+                break
+            details = {
+                "message": "Strategy evaluation worker lease expired",
+                "retryable": True,
+                "previous_status": job.status,
+            }
+            job.error_code = "INFRASTRUCTURE_RETRYABLE"
+            job.error_details = details
+            if job.attempt_count < maximum_attempts:
+                job.status = "RETRY"
+                job.next_attempt_at = now + timedelta(seconds=_backoff_seconds(job.attempt_count))
+                job.completed_at = None
+                readiness_status = "PENDING"
+            else:
+                job.status = "FAILED"
+                job.completed_at = now
+                job.error_details = {**details, "maximum_attempts_exhausted": True}
+                readiness_status = "ERROR"
+            job.save(update_fields=[
+                "status", "next_attempt_at", "completed_at", "error_code", "error_details", "updated_at",
+            ])
+            StrategyEvaluationReadiness.objects.filter(
+                strategy_instance_id=job.strategy_instance_id,
+                strategy_version_id=job.strategy_version_id,
+                bar_id=job.bar_id,
+            ).update(
+                status=readiness_status,
+                completed_at=job.completed_at,
+                last_error=details["message"],
+            )
+            recovered += 1
+    return recovered
