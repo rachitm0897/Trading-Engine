@@ -139,6 +139,18 @@ def publish_provider_event(payload, *, received_at=None):
     received_at = received_at or timezone.now()
     session_id,instrument_id, subscription_timeframe = _parse_subscription_key(payload)
     provider = str(payload.get("provider") or ("FINNHUB" if str(payload.get("source", "")).startswith("finnhub") else "IBKR")).upper()
+    StreamHealthMetric.objects.update_or_create(
+        component="market-raw-producer",
+        metric="heartbeat",
+        defaults={
+            "status": "HEALTHY",
+            "value": {
+                "provider": provider,
+                "stage": "received",
+                "source_event_id": str(payload.get("source_event_id") or ""),
+            },
+        },
+    )
     _metric_increment("events_received",provider=provider)
     with transaction.atomic():
         subscription = MarketDataSubscription.objects.select_for_update(of=("self",)).select_related(
@@ -236,6 +248,18 @@ def publish_provider_event(payload, *, received_at=None):
         subscription.last_error = ""
         subscription.save()
     _metric_increment("events_published" if created else "duplicate_events", provider=provider)
+    StreamHealthMetric.objects.update_or_create(
+        component="market-raw-producer",
+        metric="heartbeat",
+        defaults={
+            "status": "HEALTHY",
+            "value": {
+                "provider": provider,
+                "stage": "published" if created else "duplicate",
+                "source_event_id": str(payload.get("source_event_id") or ""),
+            },
+        },
+    )
     _unblock_strategies(subscription)
     return {"accepted": True, "created": created, "provider": provider}
 

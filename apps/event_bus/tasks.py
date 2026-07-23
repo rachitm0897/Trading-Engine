@@ -15,7 +15,6 @@ def publish_outbox_events():
 def compact_operational_records():
     from apps.audit.models import OutboxEvent
     from apps.broker_gateway.models import BrokerPositionSnapshot
-    from apps.market_streams.models import StrategyEvaluationReadiness
     from apps.event_bus.models import StreamHealthMetric
     now=timezone.now();limit=settings.OPERATIONAL_COMPACTION_BATCH_SIZE
     rules=[
@@ -23,8 +22,6 @@ def compact_operational_records():
             published_at__lt=now-timedelta(days=settings.OUTBOX_RETENTION_DAYS))),
         ("completed_broker_snapshots",BrokerPositionSnapshot.objects.filter(status="COMPLETED",
             completed_at__lt=now-timedelta(days=settings.BROKER_SNAPSHOT_RETENTION_DAYS))),
-        ("strategy_readiness",StrategyEvaluationReadiness.objects.filter(status__in=["COMPLETED","ERROR"],
-            completed_at__lt=now-timedelta(days=settings.READINESS_RETENTION_DAYS))),
         ("stale_stream_health",StreamHealthMetric.objects.filter(
             observed_at__lt=now-timedelta(days=settings.STREAM_HEALTH_RETENTION_DAYS))),
     ]

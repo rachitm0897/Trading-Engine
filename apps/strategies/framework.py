@@ -10,7 +10,7 @@ from apps.oms.models import Order
 from .models import (StrategyAllocation, StrategyAttributedPosition, StrategyDefinition, StrategyInputBinding,
     StrategyInputRequirement, StrategyInstance, StrategyRun, StrategySignal, StrategyTarget, StrategyVersion)
 from .plugins import get_plugin
-from .plugins.base import EvaluationContext
+from .plugins.base import EvaluationContext, StreamInput
 
 
 def _json_hash(value):
@@ -22,7 +22,10 @@ def configuration_snapshot(instance):
         "instrument_id":instance.instrument_id,"portfolio_id":instance.portfolio_id,"timeframe":instance.timeframe,
         "parameters":instance.parameters,"target_configuration":instance.target_configuration,
         "risk_policy_id":instance.risk_policy_id,"order_policy_id":instance.order_policy_id,
-        "execution_mode":instance.execution_mode}
+        "execution_mode":instance.execution_mode,
+        "execution_input_configuration":{
+            "average_volume_window":int(getattr(settings,"EXECUTION_AVERAGE_VOLUME_WINDOW",20)),
+        } if instance.execution_mode=="PAPER" else {}}
 
 
 def current_version(instance):
@@ -121,7 +124,16 @@ def register_inputs(instance, version=None):
     from .input_identity import requirement_identity_hash
     version=version or current_version(instance);plugin=get_plugin(instance.definition)
     requirements=[]
-    for declared in plugin.required_stream_inputs(instance.parameters):
+    declared_inputs=list(plugin.required_stream_inputs(instance.parameters))
+    if instance.execution_mode=="PAPER" and not any(
+        item.input_type=="INDICATOR" and item.name=="average_volume"
+        for item in declared_inputs
+    ):
+        window=int(getattr(settings,"EXECUTION_AVERAGE_VOLUME_WINDOW",20))
+        declared_inputs.append(StreamInput(
+            "INDICATOR","average_volume",{"window":window},warmup_bars=window,
+        ))
+    for declared in declared_inputs:
         parameters=dict(declared.parameters or {})
         role=declared.role or parameters.get("role","")
         implementation_version=int(declared.implementation_version)

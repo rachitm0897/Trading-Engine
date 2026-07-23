@@ -63,6 +63,25 @@ def test_partial_fill_recalculation_and_restart_do_not_duplicate():
     count=OrderIntent.objects.count();recover_incomplete();recover_incomplete();assert OrderIntent.objects.count()==count
 
 
+def test_recovery_advances_terminal_rebalance_without_synthesizing_replacement_intents():
+    account,portfolio,old,new,policy=setup_case()
+    PortfolioPosition.objects.filter(portfolio=portfolio,instrument=old).update(quantity=0)
+    account.available_cash=1000;account.save(update_fields=["available_cash"])
+    run=plan_rebalance(portfolio,"MANUAL","recover-existing-only",prices={old.pk:100,new.pk:100},
+        nav=1000,mode="PAPER",strict_market_state=False)
+    intent=OrderIntent.objects.get(rebalance=run,side="BUY")
+    Order.objects.create(intent=intent,internal_id="cancelled-buy",status="CANCELLED",
+        quantity=intent.quantity,filled_quantity=0)
+    count=OrderIntent.objects.count()
+
+    assert recover_incomplete()==1
+    run.refresh_from_db()
+
+    assert OrderIntent.objects.count()==count
+    assert run.phase=="BLOCKED"
+    assert run.status=="FAILED"
+
+
 @pytest.mark.parametrize("status,filled,expected_phase,expected_status",[
     ("REJECTED",0,"BLOCKED","FAILED"),
     ("CANCELLED",5,"BLOCKED","PARTIALLY_COMPLETED"),

@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
 from apps.audit.models import OperationAttempt
@@ -50,7 +50,7 @@ def _command_key(prefix, internal_id, key):
 @transaction.atomic
 def enqueue_broker_command(order, command_type, payload, idempotency_key):
     order = (
-        Order.objects.select_for_update()
+        Order.objects.select_for_update(of=("self",))
         .select_related("intent__portfolio__gateway_session")
         .get(pk=order.pk)
     )
@@ -641,11 +641,16 @@ def recover_stuck_broker_commands(now=None):
 def claim_next_order_intent():
     intent = (
         OrderIntent.objects.select_for_update(skip_locked=True)
+        .annotate(
+            _has_order=Exists(
+                Order.objects.filter(intent_id=OuterRef("pk"))
+            )
+        )
         .filter(
             operation_status="PENDING",
             eligible=True,
             mode="PAPER",
-            order__isnull=True,
+            _has_order=False,
         )
         .order_by("execution_priority", "created_at", "pk")
         .first()
@@ -667,6 +672,76 @@ def claim_next_order_intent():
         request_hash=intent.request_hash,
     )
     return intent.pk
+
+
+@transaction.atomic
+def recover_stuck_order_intents(now=None):
+    """Return intents to the queue when a worker died after claiming them."""
+    now = now or timezone.now()
+    cutoff = now - timedelta(
+        seconds=int(getattr(settings, "ORDER_INTENT_CLAIM_TIMEOUT_SECONDS", 120))
+    )
+    attempts = list(
+        OperationAttempt.objects.select_for_update()
+        .filter(
+            operation_type="ORDER_INTENT",
+            status="PROCESSING",
+            started_at__lte=cutoff,
+        )
+        .order_by("started_at", "pk")
+    )
+    recovered = 0
+    for attempt in attempts:
+        try:
+            intent_id = int(attempt.operation_id)
+        except (TypeError, ValueError):
+            attempt.status = "FAILED"
+            attempt.retryable = False
+            attempt.error = "Invalid order-intent operation identifier"
+            attempt.completed_at = now
+            attempt.save(
+                update_fields=[
+                    "status",
+                    "retryable",
+                    "error",
+                    "completed_at",
+                ]
+            )
+            continue
+        intent = (
+            OrderIntent.objects.select_for_update()
+            .filter(
+                pk=intent_id,
+                operation_status="CLAIMED",
+            )
+            .first()
+        )
+        if intent is None or Order.objects.filter(intent_id=intent_id).exists():
+            continue
+        intent.operation_status = "PENDING"
+        intent.operation_error = "Recovered intent whose worker lease expired"
+        intent.retryable = True
+        intent.save(
+            update_fields=[
+                "operation_status",
+                "operation_error",
+                "retryable",
+            ]
+        )
+        attempt.status = "FAILED"
+        attempt.retryable = True
+        attempt.error = intent.operation_error
+        attempt.completed_at = now
+        attempt.save(
+            update_fields=[
+                "status",
+                "retryable",
+                "error",
+                "completed_at",
+            ]
+        )
+        recovered += 1
+    return recovered
 
 
 def execute_order_intent(intent_id):
