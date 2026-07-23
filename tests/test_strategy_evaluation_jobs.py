@@ -12,7 +12,6 @@ from apps.instruments.models import BrokerContract, Instrument
 from apps.market_streams.models import (
     IndicatorValue,
     StrategyEvaluationJob,
-    StrategyEvaluationReadiness,
 )
 from apps.market_streams.services import consume_market_event
 from apps.portfolios.models import TradingPortfolio
@@ -372,5 +371,5 @@ def test_recovery_reuses_strategy_run_after_crash_before_job_completion(
     assert process_strategy_evaluation_jobs()["completed"] == 1
     job.refresh_from_db()
     assert job.strategy_run_id == first_run_id
+    assert job.status == "COMPLETED"
     assert StrategyRun.objects.filter(strategy_instance=instance).count() == 1
-    assert StrategyEvaluationReadiness.objects.get().status == "COMPLETED"

@@ -102,7 +102,7 @@ def test_replay_status_endpoint_is_pollable(client):
     assert client.post(f"/api/v1/streaming/replay/{request.pk}/").status_code==405
 
 
-@override_settings(OUTBOX_RETENTION_DAYS=1,BROKER_SNAPSHOT_RETENTION_DAYS=1,READINESS_RETENTION_DAYS=1,STREAM_HEALTH_RETENTION_DAYS=1,
+@override_settings(OUTBOX_RETENTION_DAYS=1,BROKER_SNAPSHOT_RETENTION_DAYS=1,STREAM_HEALTH_RETENTION_DAYS=1,
     OPERATIONAL_COMPACTION_BATCH_SIZE=100)
 def test_compaction_deletes_only_expired_operational_records():
     old=timezone.now()-timedelta(days=2)

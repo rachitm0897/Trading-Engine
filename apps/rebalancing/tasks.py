@@ -1,18 +1,43 @@
+import socket
+
 from celery import shared_task
 from django.utils import timezone
+from apps.execution.readiness import record_worker_heartbeat
 from apps.portfolios.models import TradingPortfolio
 from .coordinator import process_target_coordination
 from .services import plan_rebalance, recover_incomplete
 
 
+def _run_with_heartbeat(callback):
+    role = "target_coordination"
+    worker = socket.gethostname()
+    record_worker_heartbeat(role, status="RUNNING", worker=worker)
+    try:
+        result = callback()
+    except Exception as exc:
+        record_worker_heartbeat(
+            role,
+            status="DEGRADED",
+            worker=worker,
+            details={"error": str(exc)[:255]},
+        )
+        raise
+    record_worker_heartbeat(
+        role,
+        worker=worker,
+        details={"last_result": result},
+    )
+    return result
+
+
 @shared_task
 def recover_incomplete_rebalances():
-    return recover_incomplete()
+    return _run_with_heartbeat(recover_incomplete)
 
 
 @shared_task
 def coordinate_portfolio_targets():
-    return process_target_coordination()
+    return _run_with_heartbeat(process_target_coordination)
 
 
 @shared_task

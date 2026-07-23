@@ -110,27 +110,6 @@ class IndicatorValue(models.Model):
         ]
 
 
-class StrategyEvaluationReadiness(models.Model):
-    STATUSES = [(value, value) for value in ["PENDING", "EVALUATING", "COMPLETED", "ERROR"]]
-    strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.CASCADE, related_name="evaluation_readiness")
-    strategy_version = models.ForeignKey("strategies.StrategyVersion", on_delete=models.CASCADE)
-    bar = models.ForeignKey(MarketBar, on_delete=models.CASCADE, related_name="strategy_readiness")
-    status = models.CharField(max_length=16, choices=STATUSES, default="PENDING")
-    strategy_run = models.ForeignKey("strategies.StrategyRun", on_delete=models.SET_NULL, null=True, blank=True)
-    claimed_at = models.DateTimeField(null=True, blank=True)
-    completed_at = models.DateTimeField(null=True, blank=True)
-    last_error = models.CharField(max_length=1000, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        constraints = [models.UniqueConstraint(
-            fields=["strategy_instance", "strategy_version", "bar"],
-            name="unique_strategy_bar_readiness",
-        )]
-        indexes = [models.Index(fields=["status", "updated_at"], name="strategy_ready_status_idx")]
-
-
 class StrategyEvaluationJob(models.Model):
     STATUSES = [(value, value) for value in [
         "WAITING_FOR_INPUT", "PENDING", "CLAIMED", "RUNNING", "RETRY", "COMPLETED", "FAILED",

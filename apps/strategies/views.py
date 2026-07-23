@@ -13,7 +13,7 @@ from .deletion import (
     audit_strategy_deletion_rejection,
     delete_strategy_instance,
 )
-from .framework import create_instance, enable_instance, evaluate_instance, flatten_instance, pause_instance, update_instance
+from .framework import create_instance, enable_instance, flatten_instance, pause_instance, update_instance
 from .models import (OrderPolicy, StrategyAction, StrategyAttributedPosition, StrategyDefinition,
     StrategyInputBinding, StrategyInstance, StrategyRiskPolicy, StrategyRun)
 from .models import StrategyVersion
@@ -199,7 +199,7 @@ def action(request, instance_id, action_name):
     if not key:return response(status=400,error={"code":"IDEMPOTENCY_KEY_REQUIRED","message":"Idempotency-Key header is required","details":{}})
     try:
         item=_get(instance_id);payload=json.loads(request.body or b"{}")
-        if action_name not in {"enable","pause","evaluate","flatten"}:
+        if action_name not in {"enable","pause","flatten"}:
             return response(status=404,error={"code":"NOT_FOUND","message":"Unknown action","details":{}})
         request_hash=canonical_request_hash("strategy_action",{"strategy_instance_id":instance_id,"action":action_name,"payload":payload})
         retry_requested=request.headers.get("Idempotency-Retry","").strip().lower() in {"1","true","yes"}
@@ -231,16 +231,10 @@ def action(request, instance_id, action_name):
             StrategyAction.objects.filter(pk=operation.pk).update(status="COMPLETED",result={"strategy_instance_id":item.pk},
                 completed_at=timezone.now(),last_error="",retryable=False)
             return response(_instance(_get(item.pk),True))
-        if action_name in {"evaluate","flatten"}:
-            if action_name=="flatten":
-                run=flatten_instance(item,event_id=payload.get("event_id"))
-            else:
-                run=evaluate_instance(item,bar=payload.get("bar",{"is_final":True}),indicators=payload.get("indicators",{}),
-                    previous_indicators=payload.get("previous_indicators",{}),event_id=payload.get("event_id"),
-                    source_data_version=int(payload.get("source_data_version",1)),force=bool(payload.get("force",False)),
-                    retry_failed=retry_requested)
+        if action_name=="flatten":
+            run=flatten_instance(item,event_id=payload.get("event_id"))
             if run.status=="ERROR":raise RuntimeError(run.error or "Strategy evaluation failed")
-            if action_name=="flatten" and payload.get("reason"):
+            if payload.get("reason"):
                 from apps.audit.models import AuditEvent
                 AuditEvent.objects.get_or_create(idempotency_key=f"audit:strategy:{item.pk}:flatten:{run.pk}",defaults={
                     "event_type":"strategy.flatten.requested","actor":"frontend_operator","aggregate_type":"strategy_instance",

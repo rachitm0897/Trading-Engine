@@ -5,7 +5,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from apps.event_bus.identity import processing_mode
 from apps.event_bus.services import consume_once
-from .models import IndicatorValue, InstrumentMarketState, MarketBar, StrategyEvaluationReadiness
+from .models import IndicatorValue, InstrumentMarketState, MarketBar
 
 
 def _dt(value):
@@ -167,16 +167,14 @@ def _active_instances_for_bar(bar):
 
 
 def coordinate_bar_readiness(bar, event_id=None):
-    """Persist exact input readiness and schedule each strategy/bar/version at most once."""
+    """Schedule durable work for each ready strategy/bar/version at most once."""
     if not bar.is_final or bar.processing_mode!="LIVE":return 0
     from apps.strategies.evaluation_jobs import ensure_strategy_evaluation_job
     instances=_active_instances_for_bar(bar)
     available=set(IndicatorValue.objects.filter(instrument=bar.instrument,timeframe=bar.interval,
         source_bar_id=bar.bar_id,source_bar_version=bar.version,is_final=True,processing_mode="LIVE"
         ).values_list("requirement_identity_hash",flat=True))
-    existing={(row.strategy_instance_id,row.strategy_version_id):row for row in
-        StrategyEvaluationReadiness.objects.filter(bar=bar,strategy_instance_id__in=[item.pk for item in instances])}
-    creates=[];job_inputs={}
+    scheduled=0
     for instance in instances:
         version=next((binding.strategy_version for binding in instance.ready_bindings
             if binding.strategy_version.version==instance.version),None)
@@ -187,23 +185,12 @@ def coordinate_bar_readiness(bar, event_id=None):
             if binding.strategy_version_id==version.pk and binding.requirement.input_type=="INDICATOR"}
         identities={binding.requirement.identity_hash for binding in instance.ready_bindings
             if binding.strategy_version_id==version.pk}
-        job_inputs[(instance.pk,version.pk)]=(sorted(identities),expected.issubset(available))
-        readiness=existing.get((instance.pk,version.pk))
-        if readiness is None:
-            creates.append(StrategyEvaluationReadiness(strategy_instance=instance,strategy_version=version,bar=bar))
-    if creates:StrategyEvaluationReadiness.objects.bulk_create(creates,ignore_conflicts=True)
-    readiness_rows=StrategyEvaluationReadiness.objects.filter(
-        bar=bar,
-        strategy_instance_id__in=[item.pk for item in instances],
-    )
-    scheduled=0
-    for readiness in readiness_rows:
-        inputs=job_inputs.get((readiness.strategy_instance_id,readiness.strategy_version_id))
-        if inputs is None:continue
         _,became_ready=ensure_strategy_evaluation_job(
-            readiness,
-            expected_input_identity_hashes=inputs[0],
-            ready=inputs[1],
+            instance,
+            version,
+            bar,
+            expected_input_identity_hashes=sorted(identities),
+            ready=expected.issubset(available),
             event_id=event_id,
         )
         scheduled+=int(became_ready)

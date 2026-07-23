@@ -1,6 +1,12 @@
 # Trading Engine Backend
 
-This branch is the standalone Django/ASGI execution service. The image runs Gunicorn, Celery workers, Celery Beat, the market-stream consumer, and the Finnhub consumer under Supervisor. Startup applies Django migrations before serving traffic.
+This branch is the standalone Django/ASGI execution service. The image runs
+Gunicorn, Celery Beat, the market-stream and Finnhub consumers, and dedicated
+Celery workers for `strategy_evaluation`, `target_coordination`,
+`intent_execution`, and `broker_commands` under Supervisor. Intent execution
+and broker dispatch use separate processes so readiness can prove each
+financial handoff is staffed. Startup applies Django migrations before serving
+traffic.
 
 It contains its own application source, migrations, tests, research bundle, and packaged Kafka schemas. A normal clone of this branch is sufficient to build and test the Backend; no Frontend, Gateway-image, streaming-infrastructure, sibling checkout, or repository-parent build context is required.
 
@@ -63,13 +69,20 @@ With the production prefix, prepend `/trading_eng_backend` to these routes:
 - `GET /` returns service and route metadata.
 - `GET /healthz` reports process liveness for the QFS health check.
 - `GET /readyz` reports database and recommendation-cache readiness.
+- `GET /api/v1/execution/readiness/` reports fail-closed automatic PAPER
+  readiness and returns 503 with named blockers when execution must stop.
 - `GET /metrics` exposes service metrics.
 - `/api/v1/system/`, `/api/v1/accounts/`, `/api/v1/instruments/`, `/api/v1/portfolios/`, `/api/v1/positions/`, `/api/v1/orders/`, `/api/v1/executions/`, `/api/v1/risk/`, `/api/v1/audit/`, and `/api/v1/reconciliation/` expose the core operational API.
 - `/api/v1/broker-sessions/` manages private Gateway children and proxies their noVNC sessions.
 - `/api/v1/strategy-*`, `/api/v1/allocations/`, `/api/v1/rebalancing/`, `/api/v1/position-sizing/`, `/api/v1/portfolio-optimization/`, and `/api/v1/portfolio-construction/` expose trading workflows.
 - `/api/v1/streaming/`, `/api/v1/data-providers/`, and `/api/v1/research/` expose streaming, provider, and research operations.
 
-API responses retain the `{ok,data,error,meta}` envelope. Liveness and readiness are intentionally distinct: `/healthz` proves the process can serve requests, while `/readyz` checks required stateful dependencies.
+API responses retain the `{ok,data,error,meta}` envelope. Liveness and
+readiness are intentionally distinct: `/healthz` proves the process can serve
+requests, `/readyz` checks required application dependencies, and
+`/api/v1/execution/readiness/` verifies the stricter Flink, Kafka, worker,
+market, Gateway, reconciliation, backlog, and uncertain-order gates for
+automatic PAPER execution.
 
 ## Tests and checks
 

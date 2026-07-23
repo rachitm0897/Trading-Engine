@@ -10,7 +10,7 @@ from apps.oms.services import apply_execution
 from apps.portfolios.models import TradingPortfolio
 from apps.rebalancing.coordinator import build_portfolio_target_snapshot
 from apps.rebalancing.services import plan_rebalance
-from apps.market_streams.models import IndicatorValue, MarketBar, MarketDataSubscription, StrategyEvaluationReadiness
+from apps.market_streams.models import IndicatorValue, MarketBar, MarketDataSubscription, StrategyEvaluationJob
 from apps.market_streams.services import coordinate_bar_readiness, persist_bar
 from apps.strategies.evaluation_jobs import process_strategy_evaluation_jobs
 from apps.strategies.framework import create_instance, enable_instance, evaluate_instance, pause_instance, update_instance
@@ -167,7 +167,7 @@ def test_persisted_final_inputs_trigger_once_and_corrected_bar_gets_new_namespac
         source_bar_id="stable",source_bar_version=1,event_time=now,source_key="slow-1")
     assert coordinate_bar_readiness(first)==1 and coordinate_bar_readiness(first)==0 and item.runs.count()==0
     assert process_strategy_evaluation_jobs()["completed"]==1 and item.runs.count()==1
-    assert StrategyEvaluationReadiness.objects.get(bar=first).status=="COMPLETED"
+    assert StrategyEvaluationJob.objects.get(bar=first).status=="COMPLETED"
     corrected=bar(2)
     for role,value in [("fast",12),("slow",10)]:
         requirement=requirements[role]

@@ -87,6 +87,44 @@ def bar_event(instrument, *, bar_id, window_end, mode="LIVE", version=1):
     }
 
 
+def persist_required_indicators(instance, instrument, *, bar_id, event_time, version=1):
+    """Supply the full persisted input identity required by a PAPER strategy."""
+    requirements = (
+        instance.input_bindings.filter(
+            active=True,
+            strategy_version__version=instance.version,
+            requirement__input_type="INDICATOR",
+        )
+        .select_related("requirement")
+        .order_by("requirement__identity_hash")
+    )
+    for binding in requirements:
+        requirement = binding.requirement
+        persist_indicator({
+            "payload": {
+                "source_key": (
+                    f"{bar_id}:{version}:{requirement.identity_hash}:"
+                    f"{requirement.implementation_version}"
+                ),
+                "instrument_id": instrument.pk,
+                "indicator": requirement.name,
+                "indicator_name": requirement.name,
+                "indicator_role": requirement.role,
+                "implementation_version": requirement.implementation_version,
+                "requirement_identity_hash": requirement.identity_hash,
+                "value": "100",
+                "previous_value": "100",
+                "parameters": requirement.parameters,
+                "timeframe": instance.timeframe,
+                "source_bar_id": bar_id,
+                "source_bar_version": version,
+                "event_time": event_time,
+                "is_final": True,
+                "processing_mode": "LIVE",
+            },
+        })
+
+
 def test_delayed_older_live_bar_is_quarantined(portfolio, instrument):
     instance = strategy(portfolio, instrument)
     persist_bar(bar_event(
@@ -94,6 +132,12 @@ def test_delayed_older_live_bar_is_quarantined(portfolio, instrument):
         bar_id="newer-live-bar",
         window_end="2026-07-23T00:10:00Z",
     ))
+    persist_required_indicators(
+        instance,
+        instrument,
+        bar_id="newer-live-bar",
+        event_time="2026-07-23T00:10:00Z",
+    )
     persist_bar(bar_event(
         instrument,
         bar_id="older-live-bar",
@@ -132,6 +176,12 @@ def test_replay_does_not_modify_live_strategy_state(portfolio, instrument):
         bar_id="accepted-live",
         window_end="2026-07-23T00:10:00Z",
     ))
+    persist_required_indicators(
+        instance,
+        instrument,
+        bar_id="accepted-live",
+        event_time="2026-07-23T00:10:00Z",
+    )
     assert process_strategy_evaluation_jobs()["completed"] == 1
     instance.refresh_from_db()
     live_state = instance.state
@@ -177,6 +227,12 @@ def test_later_live_delivery_promotes_matching_replay_fact(portfolio, instrument
         "payload": {**replay["payload"], "processing_mode": "LIVE"},
     }
     persist_bar(live)
+    persist_required_indicators(
+        instance,
+        instrument,
+        bar_id="replayed-before-live",
+        event_time="2026-07-23T00:15:00Z",
+    )
 
     instance.refresh_from_db()
     assert instance.last_market_bar_id == "replayed-before-live"
