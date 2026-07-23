@@ -49,6 +49,11 @@ REST_FRAMEWORK = {"DEFAULT_AUTHENTICATION_CLASSES": [], "DEFAULT_PERMISSION_CLAS
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/1")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
+STRATEGY_EVALUATION_MAX_ATTEMPTS = int(os.getenv("STRATEGY_EVALUATION_MAX_ATTEMPTS", "5"))
+STRATEGY_EVALUATION_RETRY_BASE_SECONDS = int(os.getenv("STRATEGY_EVALUATION_RETRY_BASE_SECONDS", "5"))
+STRATEGY_EVALUATION_RETRY_MAX_SECONDS = int(os.getenv("STRATEGY_EVALUATION_RETRY_MAX_SECONDS", "300"))
+STRATEGY_EVALUATION_CLAIM_TIMEOUT_SECONDS = int(os.getenv("STRATEGY_EVALUATION_CLAIM_TIMEOUT_SECONDS", "300"))
+STRATEGY_EVALUATION_BATCH_SIZE = int(os.getenv("STRATEGY_EVALUATION_BATCH_SIZE", "50"))
 CELERY_BEAT_SCHEDULE = {
     "reconcile": {"task": "apps.reconciliation.tasks.run_scheduled_reconciliation", "schedule": 60.0},
     "sync-broker": {"task": "apps.broker_gateway.tasks.sync_broker_events", "schedule": 5.0},
@@ -56,6 +61,8 @@ CELERY_BEAT_SCHEDULE = {
     "stream-health": {"task": "apps.event_bus.tasks.check_stream_health", "schedule": 30.0},
     "restore-market-subscriptions": {"task": "apps.market_streams.tasks.restore_active_market_subscriptions", "schedule": 15.0},
     "warmup-timeouts": {"task": "apps.market_streams.tasks.check_warmup_timeouts", "schedule": 30.0},
+    "strategy-evaluation": {"task": "apps.strategies.tasks.execute_strategy_evaluation_jobs", "schedule": 1.0},
+    "recover-strategy-evaluation": {"task": "apps.strategies.tasks.recover_strategy_evaluation_jobs", "schedule": 30.0},
     "instrument-registry": {"task": "apps.instruments.tasks.publish_instrument_registry_snapshot", "schedule": 60.0},
     "recover-rebalances": {"task": "apps.rebalancing.tasks.recover_incomplete_rebalances", "schedule": 60.0},
     "sync-finnhub-history": {"task": "apps.market_data.tasks.sync_active_finnhub_universes", "schedule": 21600.0},
@@ -177,4 +184,8 @@ RESEARCH_TASK_ROUTES = {
     "apps.research.tasks.warm_recommendation_cache": {"queue": "recommendation_cache"},
     "apps.research.tasks.generate_recommendation_batch": {"queue": "recommendations"},
 }
-CELERY_TASK_ROUTES = RESEARCH_TASK_ROUTES
+STRATEGY_EVALUATION_TASK_ROUTES = {
+    "apps.strategies.tasks.execute_strategy_evaluation_jobs": {"queue": "strategy_evaluation"},
+    "apps.strategies.tasks.recover_strategy_evaluation_jobs": {"queue": "strategy_evaluation"},
+}
+CELERY_TASK_ROUTES = {**RESEARCH_TASK_ROUTES, **STRATEGY_EVALUATION_TASK_ROUTES}

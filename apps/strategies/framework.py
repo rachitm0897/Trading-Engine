@@ -2,7 +2,7 @@ import hashlib
 import json
 from decimal import Decimal
 from django.conf import settings
-from django.db import transaction
+from django.db import InterfaceError, OperationalError, transaction
 from django.utils import timezone
 from apps.audit.models import OutboxEvent
 from apps.instruments.services import resolve_instrument
@@ -228,6 +228,8 @@ def evaluate_instance(instance, *, bar, indicators, previous_indicators=None, ev
                 "target_ids":list(run.targets.values_list("pk",flat=True)),"execution_mode":instance.execution_mode},
                 idempotency_key=f"strategy-run:{run.pk}:completed")
         return run
+    except (OperationalError, InterfaceError, ConnectionError, TimeoutError):
+        raise
     except Exception as exc:
         run=StrategyRun.objects.get(pk=run.pk)
         instance=StrategyInstance.objects.get(pk=instance.pk)

@@ -2,10 +2,11 @@
 
 ## Status and scope
 
-This document is the ownership contract for automatic strategy execution. It
-describes the intended minimal pipeline before any financial behaviour is
-changed. Components labelled **planned** do not exist yet; this phase adds no
-models, migrations, workers, routing changes, or broker behaviour.
+This document is the ownership contract for automatic strategy execution.
+Durable strategy evaluation is implemented; components still labelled
+**planned** do not exist yet. The evaluation cutover changes process ownership
+and failure isolation, not strategy decisions, target semantics, risk, sizing,
+OMS, Gateway, or broker behaviour.
 
 The only supported automatic order path is:
 
@@ -79,9 +80,9 @@ but that does not transfer ownership.
 | Flink normalization | Flink `market-normalization-v1` | `market.raw.v1` plus the broadcast instrument registry | Validated, deduplicated canonical market event or dead letter | Flink checkpoint/operator state only; no financial database records | Consumes `market.raw.v1`, `instrument.registry.v1`; produces `market.canonical.v1`, `dead-letter.v1` |
 | Flink bars and indicators | Flink Derived Market Jobs (`bar-aggregation-v2`, `indicator-computation-v2`, `stale-price-detection-v1`) | Canonical events, active `strategy.inputs.v1` requirements, event-time watermarks | Final versioned bars, parameter-hashed indicators, freshness/quality events | Flink checkpoint/operator state only; no financial database records | Consumes `market.canonical.v1`, `market.bars.v1`, `strategy.inputs.v1`; produces `market.bars.v1`, `market.indicators.v1`, `market.quality.v1` |
 | Kafka derived-market topics | Flink Kafka Sinks | Derived envelopes with deterministic event IDs and causal metadata | Durable transport for Backend consumers | Kafka log only; never financial workflow state | `market.canonical.v1`, `market.bars.v1`, `market.indicators.v1`, `market.quality.v1` |
-| Backend market persistence | Backend Market Persistence Consumer (`consume_market_streams`) | Final bar, indicator, and market-quality envelopes | PostgreSQL market facts and a request to schedule evaluation when the exact input set is complete | PostgreSQL: `ConsumedEvent`, `MarketBar`, `IndicatorValue`, `InstrumentMarketState`; planned `StrategyEvaluationJob` creation | Consumes `market.bars.v1`, `market.indicators.v1`, `market.quality.v1` |
-| `StrategyEvaluationJob` (**planned**) | Backend Strategy Evaluation Scheduler | Persisted final bar/version, current strategy version, completed required indicator hashes | One durable, claimable evaluation job per strategy version and source bar version | PostgreSQL: planned `StrategyEvaluationJob` with unique causal key, status, lease, attempt count, and error | None. Database creation is the workflow handoff |
-| Strategy evaluation worker (**planned**) | Backend Strategy Evaluation Worker | Claimed `StrategyEvaluationJob`, immutable strategy version/configuration, persisted bar and indicators, isolated strategy state | Deterministic strategy decision, signal, optional target, completed/failed job | PostgreSQL: `StrategyRun`, `StrategySignal`, `StrategyTarget`, strategy state, `StrategyEvaluationJob`; `OutboxEvent` after commit | May project `strategy.run.completed.v1` and `strategy.targets.v1`; these events do not drive order submission |
+| Backend market persistence | Backend Market Persistence Consumer (`consume_market_streams`) | Final bar, indicator, and market-quality envelopes | PostgreSQL market facts, updated readiness, and a durable evaluation job; no plugin execution | PostgreSQL: `ConsumedEvent`, `MarketBar`, `IndicatorValue`, `InstrumentMarketState`, `StrategyEvaluationReadiness`, `StrategyEvaluationJob` | Consumes `market.bars.v1`, `market.indicators.v1`, `market.quality.v1` |
+| `StrategyEvaluationJob` | Backend Strategy Evaluation Scheduler (`coordinate_bar_readiness` and `ensure_strategy_evaluation_job`) | Persisted final bar/version, current strategy version, and exact expected/available input identities | One durable, claimable job per strategy instance, strategy version, bar ID, and bar version | PostgreSQL: `StrategyEvaluationJob` with unique causal key, status, lease timestamps, bounded attempts, next-attempt time, and classified error | None. Database creation is the workflow handoff |
+| Strategy evaluation worker | Backend Strategy Evaluation Worker (`apps.strategies.evaluation_jobs`) | Job claimed with `select_for_update(skip_locked=True)`, immutable strategy version/configuration, persisted bar and indicators | Deterministic strategy decision, signal, optional target, and completed/retry/failed job state | PostgreSQL: `StrategyRun`, `StrategySignal`, `StrategyTarget`, strategy state, `StrategyEvaluationJob`; `OutboxEvent` after commit | Celery queue `strategy_evaluation` wakes the worker; Kafka is not the work queue. May project `strategy.targets.v1` after commit |
 | `StrategyTarget` | Backend Strategy Evaluation Worker, using the plugin target contract | Plugin decision in `SHADOW` or `PAPER` mode | Versioned strategy/instrument target with causal run and event IDs | PostgreSQL: `StrategyTarget` | Optional post-commit projection to `strategy.targets.v1` |
 | `PortfolioTargetSnapshot` (**planned**) | Backend Portfolio Target Aggregation Service | Latest eligible `StrategyTarget` per enabled instance, `StrategyAllocation`, portfolio NAV, strategy versions, and causal cut-off | Immutable net portfolio target plus constituent attribution | PostgreSQL: planned `PortfolioTargetSnapshot` and constituent rows | None required. An informational outbox projection may be added after the database commit |
 | `RebalanceRun` | Backend Rebalance Planner | One immutable `PortfolioTargetSnapshot`, persisted positions/prices, `RebalancePolicy`, NAV and available cash | Auditable target positions, drift/cost suppressions, phase and mode | PostgreSQL: `RebalanceRun`, `TargetPortfolioPosition`; `OutboxEvent` | Produces informational `portfolio.rebalance.planned.v1` after commit |
@@ -106,11 +107,13 @@ Kafka is deliberately absent as an authoritative trigger between
    `OutboxEvent`; the outbox publisher retries Kafka delivery independently.
 2. Flink derives canonical events, bars, indicators, and quality only. Stable
    event IDs, operator UIDs, checkpoints, and keyed state make replay safe.
-3. The market persistence consumer writes the market fact and `ConsumedEvent`
-   atomically. It commits the Kafka offset only after the PostgreSQL commit.
-   Once all exact inputs exist it creates, but does not execute, a
-   `StrategyEvaluationJob`.
-4. The evaluation worker claims the job in PostgreSQL. Plugin evaluation and
+3. The market persistence consumer writes the market fact, readiness, durable
+   `StrategyEvaluationJob`, and `ConsumedEvent` atomically. It commits the
+   Kafka offset only after that PostgreSQL transaction commits. A job can wait
+   durably for missing indicators; the consumer never imports or executes a
+   strategy plugin, so plugin failure cannot dead-letter a valid market event.
+4. The evaluation worker claims the job with a PostgreSQL row lock and
+   `skip_locked`. Plugin evaluation and
    `StrategyRun`/`StrategySignal`/`StrategyTarget` writes occur in the job's
    financial transaction. Any Kafka projection is an outbox side effect after
    commit.
@@ -137,8 +140,8 @@ Kafka is deliberately absent as an authoritative trigger between
 | Provider -> Backend outbox | Bar: instrument + timeframe + window; tick: instrument + source event ID | Retry publication from `OutboxEvent` with backoff | A repeated provider event resolves to the existing outbox row |
 | Kafka -> Flink | Stable source event ID plus keyed Flink state/checkpoint | Kafka replay and Flink restart are allowed | Deterministic derived event IDs prevent a new logical result |
 | Derived topic -> market persistence | `ConsumedEvent(consumer_name, event_id)` plus bar/indicator unique constraints | Failed consumption stays visible and is replayed explicitly from dead letter | Never infer completion from a committed offset alone |
-| Market persistence -> `StrategyEvaluationJob` | Planned unique key: strategy instance + strategy version + bar ID + bar version | Lease expiry permits reclaim before completion; explicit retry for a stored retryable failure | A completed job is never evaluated again |
-| Evaluation job -> `StrategyRun` | Existing strategy idempotency key includes instance, version, instrument, timeframe, source event, and data version | Retry uses the same immutable input/configuration snapshot | Plugin failure cannot create or submit an order |
+| Market persistence -> `StrategyEvaluationJob` | Unique constraint: strategy instance + strategy version + bar ID + bar version; separate unique idempotency key | Duplicate events update the same market/readiness identity. Missing-input jobs wait; corrected readiness promotes them once | A completed or terminal job is never reactivated by an event replay |
+| Evaluation job -> `StrategyRun` | Existing strategy idempotency key includes instance, version, instrument, timeframe, source event, and data version | Only infrastructure failures retry, using bounded exponential backoff. Expired `CLAIMED`/`RUNNING` leases recover through the same attempt bound | Plugin, stale-input, invalid-configuration, and data-integrity failures are terminal; plugin failure cannot create or submit an order |
 | Targets -> `PortfolioTargetSnapshot` | Planned unique causal cut-off per portfolio and contributing target/version set | Rebuild only as a new snapshot, never mutate a consumed snapshot | A `RebalanceRun` always retains its exact snapshot identity |
 | Snapshot -> `RebalanceRun` | Unique `RebalanceRun.idempotency_key` plus canonical request hash | Stored retryable failures require explicit retry | Same key with different inputs is a conflict |
 | `RebalanceRun` -> `OrderIntent` | Rebalance + instrument + planning version; unique intent key | Recovery may recreate only a provably missing intent with a new recovery version | Existing intent/order is reused, never duplicated |
@@ -162,22 +165,21 @@ pipeline early, but they may not bypass a stage.
 ## Current implementation and planned cutover
 
 The target boundaries above are intentionally ahead of the current code in
-three places:
+two places:
 
 | Gap | Current implementation | Required replacement |
 | --- | --- | --- |
-| Durable evaluation work | `StrategyEvaluationReadiness` is written by market persistence, and the same consumer process immediately invokes strategy evaluation | Add `StrategyEvaluationJob`; market persistence schedules only, and a separate Strategy Evaluation Worker evaluates |
 | Immutable portfolio target | `aggregate_targets` dynamically reads the latest target while `plan_rebalance` is running | Add `PortfolioTargetSnapshot` with constituent attribution; require its ID on the automatic strategy rebalance path |
 | Common intent execution | PAPER rebalancing persists intents, but the complete risk/OMS/Gateway orchestration exists inline only in the manual orders API | Add one Intent Execution Service/worker and route every automatic intent through it; the manual API should enqueue an intent into the same service |
 
 Planned delivery phases:
 
-- **Phase 2 - workflow persistence:** add `StrategyEvaluationJob` and
-  `PortfolioTargetSnapshot` schemas, constraints, migrations, and recovery
-  queries without enabling automatic PAPER execution.
-- **Phase 3 - workers and shadow cutover:** implement the evaluation worker,
-  target snapshot service, and common intent execution service; compare legacy
-  and new results in OBSERVE/SHADOW before PAPER is enabled.
+- **Completed - durable evaluation cutover:** `StrategyEvaluationJob`, the
+  dedicated worker/queue, failure classification, bounded retry, and stuck-job
+  recovery now isolate market persistence from plugin execution.
+- **Phase 3 - remaining workers and shadow cutover:** implement the target
+  snapshot service and common intent execution service; compare legacy and new
+  results in OBSERVE/SHADOW before PAPER is enabled.
 - **Phase 4 - legacy removal:** after parity, restart, retry, and paper-broker
   verification, remove the candidates below and their compatibility tests.
 
@@ -187,8 +189,8 @@ No candidate is deleted in this phase.
 
 | File path | Function or class | Why it is a legacy or duplicate entry point | Replacement owner | Planned deletion phase |
 | --- | --- | --- | --- | --- |
-| `Backend/apps/market_streams/models.py` | `StrategyEvaluationReadiness` | It combines input readiness with execution status and has no durable worker lease/attempt boundary | Backend Strategy Evaluation Scheduler (`StrategyEvaluationJob`) | Phase 4 |
-| `Backend/apps/market_streams/services.py` | `_evaluate_readiness`, `coordinate_bar_readiness`, `record_indicator_readiness`, `evaluate_ready_strategies`; evaluation calls from `persist_bar`/`persist_indicator` | The market persistence process can execute plugins synchronously instead of scheduling work | Backend Strategy Evaluation Scheduler and Strategy Evaluation Worker | Phase 3 cutover; delete in Phase 4 |
+| `Backend/apps/market_streams/models.py` | `StrategyEvaluationReadiness` | It remains a compatibility/input-completeness record; leases, attempts, execution status, and errors now belong to `StrategyEvaluationJob` | Backend Strategy Evaluation Scheduler (`StrategyEvaluationJob`) | Phase 4, after readiness can be derived without compatibility callers |
+| `Backend/apps/market_streams/services.py` | `evaluate_ready_strategies` compatibility alias | Some tests and callers still use this name, but it now schedules durable jobs only. The synchronous `_evaluate_readiness` implementation was removed during the verified worker cutover | Backend Strategy Evaluation Scheduler | Phase 4 |
 | `Backend/apps/strategies/views.py` | `action(..., action_name="evaluate")` inline call to `evaluate_instance` | Operator evaluation executes in the request process rather than creating the same durable evaluation job | Backend Strategy Evaluation Scheduler and Strategy Evaluation Worker | Phase 4 |
 | `Backend/apps/rebalancing/services.py` | `aggregate_targets` and the no-explicit-target-source branch of `plan_rebalance` | Planning reads a moving "latest target" set and skips an immutable `PortfolioTargetSnapshot` | Backend Portfolio Target Aggregation Service | Phase 3 cutover; delete in Phase 4 |
 | `Backend/apps/allocation/services.py` | `aggregate_targets`, `create_rebalance` | Compatibility aliases expose a second target/rebalance entry point and hard-code PAPER behaviour | Backend Portfolio Target Aggregation Service and Rebalance Planner | Phase 4 |
@@ -219,5 +221,5 @@ Run the non-behavioural ownership check from the repository root:
 ```
 
 The check verifies the single ordered automatic path, mandatory ownership
-statements, documented legacy submission site, and that strategy plugins do
-not import execution or broker layers.
+statements, documented legacy submission site, strategy-plugin isolation, and
+that market persistence schedules durable jobs without calling plugins.

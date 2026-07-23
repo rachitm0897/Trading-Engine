@@ -11,6 +11,7 @@ from apps.portfolios.models import TradingPortfolio
 from apps.rebalancing.services import aggregate_targets, plan_rebalance
 from apps.market_streams.models import IndicatorValue, MarketBar, MarketDataSubscription, StrategyEvaluationReadiness
 from apps.market_streams.services import evaluate_ready_strategies, persist_bar
+from apps.strategies.evaluation_jobs import process_strategy_evaluation_jobs
 from apps.strategies.framework import create_instance, enable_instance, evaluate_instance, pause_instance, update_instance
 from apps.strategies.models import StrategyAttributedPosition, StrategyDefinition, StrategyInputRequirement, StrategyTarget, StrategyVersion
 
@@ -156,7 +157,8 @@ def test_persisted_final_inputs_trigger_once_and_corrected_bar_gets_new_namespac
     assert evaluate_ready_strategies(first)==0
     IndicatorValue.objects.create(instrument=tsla,indicator="sma_slow",value=10,previous_value=10,parameters=requirements["slow"].parameters,
         parameters_hash=requirements["slow"].parameters_hash,timeframe="5m",source_bar_id="stable",source_bar_version=1,event_time=now,source_key="slow-1")
-    assert evaluate_ready_strategies(first)==1 and evaluate_ready_strategies(first)==0 and item.runs.count()==1
+    assert evaluate_ready_strategies(first)==1 and evaluate_ready_strategies(first)==0 and item.runs.count()==0
+    assert process_strategy_evaluation_jobs()["completed"]==1 and item.runs.count()==1
     assert StrategyEvaluationReadiness.objects.get(bar=first).status=="COMPLETED"
     corrected=bar(2)
     for role,value in [("fast",12),("slow",10)]:
@@ -164,7 +166,8 @@ def test_persisted_final_inputs_trigger_once_and_corrected_bar_gets_new_namespac
         IndicatorValue.objects.create(instrument=tsla,indicator=f"sma_{role}",value=value,previous_value=value,
             parameters=requirement.parameters,parameters_hash=requirement.parameters_hash,timeframe="5m",source_bar_id="stable",
             source_bar_version=2,event_time=now,source_key=f"{role}-2")
-    assert evaluate_ready_strategies(corrected)==1 and item.runs.count()==2
+    assert evaluate_ready_strategies(corrected)==1
+    assert process_strategy_evaluation_jobs()["completed"]==1 and item.runs.count()==2
 
 
 def test_strategy_management_api_create_patch_and_live_rejection(client,portfolio):
@@ -215,4 +218,8 @@ def test_real_final_bar_advances_strategy_warmup(portfolio):
         "interval":"5m","window_start":"2026-07-13T00:00:00+00:00","window_end":"2026-07-13T00:05:00+00:00",
         "open":"10","high":"11","low":"9","close":"10.5","volume":"100","is_final":True,"version":1}})
     instance.refresh_from_db()
-    assert instance.warmup_progress==1 and instance.warmup_last_progress_at is not None and instance.state!="WARMING_UP"
+    assert instance.warmup_progress==1 and instance.warmup_last_progress_at is not None
+    assert instance.state=="WARMING_UP" and instance.runs.count()==0
+    assert process_strategy_evaluation_jobs()["completed"]==1
+    instance.refresh_from_db()
+    assert instance.state!="WARMING_UP"

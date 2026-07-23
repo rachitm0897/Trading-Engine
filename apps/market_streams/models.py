@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 import uuid
 
 
@@ -123,6 +124,53 @@ class StrategyEvaluationReadiness(models.Model):
             name="unique_strategy_bar_readiness",
         )]
         indexes = [models.Index(fields=["status", "updated_at"], name="strategy_ready_status_idx")]
+
+
+class StrategyEvaluationJob(models.Model):
+    STATUSES = [(value, value) for value in [
+        "WAITING_FOR_INPUT", "PENDING", "CLAIMED", "RUNNING", "RETRY", "COMPLETED", "FAILED",
+    ]]
+    ERROR_CODES = [(value, value) for value in [
+        "INFRASTRUCTURE_RETRYABLE", "MISSING_INPUT", "STALE_INPUT", "INVALID_CONFIGURATION",
+        "PLUGIN_LOGIC_ERROR", "DATA_INTEGRITY_ERROR",
+    ]]
+    strategy_instance = models.ForeignKey(
+        "strategies.StrategyInstance", on_delete=models.CASCADE, related_name="evaluation_jobs",
+    )
+    strategy_version = models.ForeignKey(
+        "strategies.StrategyVersion", on_delete=models.CASCADE, related_name="evaluation_jobs",
+    )
+    bar = models.ForeignKey(MarketBar, on_delete=models.CASCADE, related_name="evaluation_jobs")
+    strategy_run = models.ForeignKey(
+        "strategies.StrategyRun", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="evaluation_jobs",
+    )
+    market_bar_id = models.CharField(max_length=160)
+    bar_version = models.PositiveIntegerField()
+    event_id = models.CharField(max_length=160)
+    event_time = models.DateTimeField()
+    source_data_version = models.PositiveIntegerField(default=1)
+    expected_input_identity_hashes = models.JSONField(default=list)
+    status = models.CharField(max_length=24, choices=STATUSES, default="WAITING_FOR_INPUT")
+    attempt_count = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    error_code = models.CharField(max_length=40, choices=ERROR_CODES, blank=True)
+    error_details = models.JSONField(default=dict)
+    idempotency_key = models.CharField(max_length=128, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=["strategy_instance", "strategy_version", "market_bar_id", "bar_version"],
+            name="unique_strategy_eval_job",
+        )]
+        indexes = [
+            models.Index(fields=["status", "next_attempt_at", "created_at"], name="strategy_eval_job_queue_idx"),
+            models.Index(fields=["status", "claimed_at"], name="strategy_eval_job_claim_idx"),
+        ]
 
 
 class InstrumentMarketState(models.Model):
