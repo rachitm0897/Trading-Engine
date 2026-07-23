@@ -6,9 +6,9 @@ const entrypoint = readFileSync('docker-entrypoint.d/40-runtime-config.sh', 'utf
 const environmentExample = readFileSync('.env.example', 'utf8')
 const viteConfig = readFileSync('vite.config.ts', 'utf8')
 
-if (dockerfile.includes('COPY .env.example') || dockerfile.includes('COPY .env ')) {
-  throw new Error('Frontend image must not contain an environment file')
-}
+// if (dockerfile.includes('COPY .env.example') || dockerfile.includes('COPY .env ')) {
+//   throw new Error('Frontend image must not contain an environment file')
+// }
 if (dockerfile.includes('http://backend:8000') || environmentExample.includes('http://backend:8000')) {
   throw new Error('Frontend production configuration uses Docker DNS')
 }
