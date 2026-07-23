@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.db import models
 
 class PortfolioFlow(models.Model):
@@ -74,9 +75,61 @@ class RebalancePolicy(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class PortfolioTargetSnapshot(models.Model):
+    STATUSES = [(value, value) for value in ["READY", "REJECTED"]]
+    MODES = [(value, value) for value in ["SHADOW", "PAPER"]]
+
+    portfolio = models.ForeignKey(
+        "portfolios.TradingPortfolio",
+        on_delete=models.PROTECT,
+        related_name="target_snapshots",
+    )
+    logical_evaluation_time = models.DateTimeField()
+    source_strategy_runs = models.JSONField(default=list)
+    strategy_versions = models.JSONField(default=dict)
+    target_contributions = models.JSONField(default=list)
+    target_ages = models.JSONField(default=list)
+    net_targets = models.JSONField(default=dict)
+    account_nav = models.DecimalField(max_digits=24, decimal_places=8)
+    portfolio_nav = models.DecimalField(max_digits=24, decimal_places=8)
+    available_cash = models.DecimalField(max_digits=24, decimal_places=8)
+    current_positions = models.JSONField(default=dict)
+    open_orders = models.JSONField(default=list)
+    exposure_reservations = models.JSONField(default=list)
+    reference_prices = models.JSONField(default=dict)
+    broker_reconciliation_generation = models.CharField(max_length=160, blank=True)
+    execution_mode = models.CharField(max_length=16, choices=MODES)
+    portfolio_order_policy = models.JSONField(default=dict)
+    portfolio_risk_limits = models.JSONField(default=dict)
+    rejected_targets = models.JSONField(default=list)
+    idempotency_key = models.CharField(max_length=128, unique=True)
+    status = models.CharField(max_length=16, choices=STATUSES, default="READY")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["portfolio", "-logical_evaluation_time"],
+                name="target_snapshot_port_time_idx",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk and PortfolioTargetSnapshot.objects.filter(pk=self.pk).exists():
+            raise ValidationError("PortfolioTargetSnapshot records are immutable")
+        return super().save(*args, **kwargs)
+
+
 class RebalanceRun(models.Model):
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT)
     policy = models.ForeignKey(RebalancePolicy, on_delete=models.PROTECT, null=True, blank=True)
+    target_snapshot = models.OneToOneField(
+        PortfolioTargetSnapshot,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="rebalance_run",
+    )
     optimization_run = models.ForeignKey("portfolio_optimization.PortfolioOptimizationRun", on_delete=models.PROTECT, null=True, blank=True, related_name="rebalances")
     construction_run = models.ForeignKey("portfolio_construction.PortfolioConstructionRun", on_delete=models.PROTECT, null=True, blank=True, related_name="rebalances")
     target_source = models.CharField(max_length=40, default="STRATEGY_AGGREGATION")
@@ -96,11 +149,62 @@ class RebalanceRun(models.Model):
     last_recalculated_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    automatic = models.BooleanField(default=False)
 
     class Meta:
         indexes = [
             models.Index(fields=["portfolio","status","-created_at"],name="rebalance_port_status_idx"),
             models.Index(fields=["status","mode","phase"],name="rebalance_recovery_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["portfolio"],
+                condition=models.Q(
+                    automatic=True,
+                    status__in=["QUEUED", "CALCULATING", "INTENTS_CREATED", "EXECUTING"],
+                ),
+                name="unique_active_auto_rebalance",
+            ),
+        ]
+
+
+class PortfolioTargetCoordination(models.Model):
+    STATUSES = [(value, value) for value in ["IDLE", "PENDING", "CLAIMED", "ACTIVE", "ERROR"]]
+
+    portfolio = models.OneToOneField(
+        "portfolios.TradingPortfolio",
+        on_delete=models.PROTECT,
+        related_name="target_coordination",
+    )
+    needs_coordination = models.BooleanField(default=False)
+    pending_recalculation = models.BooleanField(default=False)
+    status = models.CharField(max_length=16, choices=STATUSES, default="IDLE")
+    requested_at = models.DateTimeField(null=True, blank=True)
+    debounce_until = models.DateTimeField(null=True, blank=True)
+    logical_event_time = models.DateTimeField(null=True, blank=True)
+    active_rebalance = models.ForeignKey(
+        RebalanceRun,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    last_snapshot = models.ForeignKey(
+        PortfolioTargetSnapshot,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    last_error = models.CharField(max_length=1000, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["needs_coordination", "debounce_until", "status"],
+                name="target_coordination_queue_idx",
+            ),
         ]
 
 class TargetPortfolioPosition(models.Model):

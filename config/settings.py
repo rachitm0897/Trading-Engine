@@ -54,6 +54,13 @@ STRATEGY_EVALUATION_RETRY_BASE_SECONDS = int(os.getenv("STRATEGY_EVALUATION_RETR
 STRATEGY_EVALUATION_RETRY_MAX_SECONDS = int(os.getenv("STRATEGY_EVALUATION_RETRY_MAX_SECONDS", "300"))
 STRATEGY_EVALUATION_CLAIM_TIMEOUT_SECONDS = int(os.getenv("STRATEGY_EVALUATION_CLAIM_TIMEOUT_SECONDS", "300"))
 STRATEGY_EVALUATION_BATCH_SIZE = int(os.getenv("STRATEGY_EVALUATION_BATCH_SIZE", "50"))
+PORTFOLIO_TARGET_MAX_AGE_SECONDS = int(os.getenv("PORTFOLIO_TARGET_MAX_AGE_SECONDS", "900"))
+PORTFOLIO_TARGET_COORDINATION_DEBOUNCE_SECONDS = int(
+    os.getenv("PORTFOLIO_TARGET_COORDINATION_DEBOUNCE_SECONDS", "2")
+)
+PORTFOLIO_TARGET_COORDINATION_BATCH_SIZE = int(
+    os.getenv("PORTFOLIO_TARGET_COORDINATION_BATCH_SIZE", "50")
+)
 CELERY_BEAT_SCHEDULE = {
     "reconcile": {"task": "apps.reconciliation.tasks.run_scheduled_reconciliation", "schedule": 60.0},
     "sync-broker": {"task": "apps.broker_gateway.tasks.sync_broker_events", "schedule": 5.0},
@@ -65,6 +72,7 @@ CELERY_BEAT_SCHEDULE = {
     "recover-strategy-evaluation": {"task": "apps.strategies.tasks.recover_strategy_evaluation_jobs", "schedule": 30.0},
     "instrument-registry": {"task": "apps.instruments.tasks.publish_instrument_registry_snapshot", "schedule": 60.0},
     "recover-rebalances": {"task": "apps.rebalancing.tasks.recover_incomplete_rebalances", "schedule": 60.0},
+    "coordinate-portfolio-targets": {"task": "apps.rebalancing.tasks.coordinate_portfolio_targets", "schedule": 1.0},
     "sync-finnhub-history": {"task": "apps.market_data.tasks.sync_active_finnhub_universes", "schedule": 21600.0},
     "check-finnhub-history": {"task": "apps.market_data.tasks.check_finnhub_history_staleness", "schedule": 21600.0},
     "verify-finnhub-mappings": {"task": "apps.market_data.tasks.verify_pending_finnhub_mappings", "schedule": 21600.0},
@@ -188,4 +196,12 @@ STRATEGY_EVALUATION_TASK_ROUTES = {
     "apps.strategies.tasks.execute_strategy_evaluation_jobs": {"queue": "strategy_evaluation"},
     "apps.strategies.tasks.recover_strategy_evaluation_jobs": {"queue": "strategy_evaluation"},
 }
-CELERY_TASK_ROUTES = {**RESEARCH_TASK_ROUTES, **STRATEGY_EVALUATION_TASK_ROUTES}
+REBALANCING_TASK_ROUTES = {
+    "apps.rebalancing.tasks.coordinate_portfolio_targets": {"queue": "target_coordination"},
+    "apps.rebalancing.tasks.recover_incomplete_rebalances": {"queue": "target_coordination"},
+}
+CELERY_TASK_ROUTES = {
+    **RESEARCH_TASK_ROUTES,
+    **STRATEGY_EVALUATION_TASK_ROUTES,
+    **REBALANCING_TASK_ROUTES,
+}

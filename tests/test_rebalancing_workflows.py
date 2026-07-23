@@ -7,17 +7,29 @@ from apps.instruments.models import Instrument
 from apps.oms.models import Order, OrderIntent
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
 from apps.rebalancing.services import advance_rebalance, plan_rebalance, recover_incomplete
-from apps.strategies.models import StrategyAllocation, StrategyDefinition, StrategyInstance, StrategyRun, StrategyTarget
+from apps.strategies.models import (
+    StrategyAllocation,
+    StrategyDefinition,
+    StrategyInstance,
+    StrategyRun,
+    StrategyTarget,
+    StrategyVersion,
+)
 
 pytestmark=pytest.mark.django_db
 
 
 def strategy_target(portfolio,instrument,name,weight,input_hash):
     instance=StrategyInstance.objects.create(name=name,definition=StrategyDefinition.objects.get(key="FIXED_WEIGHT_REBALANCE"),
-        portfolio=portfolio,instrument=instrument,timeframe="1d",parameters={"direction":"LONG"},enabled=True)
+        portfolio=portfolio,instrument=instrument,timeframe="1d",parameters={"direction":"LONG"},enabled=True,
+        execution_mode="PAPER")
     StrategyAllocation.objects.create(portfolio=portfolio,strategy_instance=instance,weight=1)
-    run=StrategyRun.objects.create(strategy_instance=instance,input_hash=input_hash,status="COMPLETED",completed_at=timezone.now())
-    StrategyTarget.objects.create(run=run,strategy_instance=instance,instrument=instrument,target_weight=weight)
+    version=StrategyVersion.objects.create(strategy_instance=instance,version=instance.version,
+        configuration_snapshot={},parameter_hash=f"hash-{instance.pk}")
+    run=StrategyRun.objects.create(strategy_instance=instance,strategy_version=version,input_hash=input_hash,
+        status="COMPLETED",completed_at=timezone.now())
+    StrategyTarget.objects.create(run=run,strategy_instance=instance,strategy_version=version,portfolio=portfolio,
+        instrument=instrument,target_weight=weight,signal_time=timezone.now())
     return instance
 
 
