@@ -1,7 +1,26 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import pytest
-from streaming.flink.jobs.processing import aggregate_bars, compute_indicators, normalize_market_event, quality_state
+from streaming.flink.jobs.events import envelope
+from streaming.flink.jobs.identity import (
+    bar_event_key,
+    canonical_event_key,
+    deterministic_event_id,
+    indicator_event_key,
+    market_quality_event_key,
+    raw_event_key,
+    requirement_identity_hash,
+    starting_offset_policy,
+)
+from streaming.flink.jobs.processing import (
+    advance_bar_version,
+    aggregate_bars,
+    buffer_unknown_registry_event,
+    compute_indicators,
+    normalize_market_event,
+    partition_expired_registry_events,
+    quality_state,
+)
 
 
 def test_normalization_and_validation():
@@ -66,3 +85,76 @@ def test_equivalent_ibkr_and_finnhub_inputs_produce_the_same_canonical_ohlcv():
     finnhub_bar=aggregate_bars([finnhub],"1m",60)[0]
     for field in ("bar_id","instrument_id","interval","window_start","window_end","open","high","low","close","volume"):
         assert ibkr_bar[field]==finnhub_bar[field]
+
+
+def test_registry_event_after_raw_event_releases_bounded_event():
+    raw={"source_event_id":"late-registry","conid":123,"symbol":"LATE","event_time":"2026-01-01T00:00:01Z",
+        "price":"10","provider":"IBKR","provider_generation":"generation-1"}
+    incoming={"event_id":"raw-envelope","payload":raw}
+    pending,overflow=buffer_unknown_registry_event([],incoming,expires_at_ms=31_000,maximum_events=2)
+    assert len(pending)==1 and overflow==[]
+    pending,overflow=buffer_unknown_registry_event(pending,incoming,expires_at_ms=31_001,maximum_events=2)
+    assert len(pending)==1 and overflow==[]
+    normalized=normalize_market_event({**pending[0]["event"]["payload"],"instrument_id":77},{})
+    assert normalized["instrument_id"]=="77"
+    remaining,expired=partition_expired_registry_events(pending,30_999)
+    assert len(remaining)==1 and expired==[]
+    remaining,expired=partition_expired_registry_events(pending,31_000)
+    assert remaining==[] and len(expired)==1
+
+
+def test_checkpoint_replay_reuses_every_derived_identity():
+    raw={"source_event_id":"checkpoint-source","provider":"IBKR","provider_generation":"generation-1"}
+    raw_key=raw_event_key(raw)
+    raw_id=deterministic_event_id("market.raw",raw_key)
+    canonical_key=canonical_event_key(raw_key,"42")
+    first=envelope("market.canonical","instrument","42",{"value":1},canonical_key,{"event_id":raw_id})
+    restored=envelope("market.canonical","instrument","42",{"value":1},canonical_key,{"event_id":raw_id})
+    assert first["event_id"]==restored["event_id"]
+    assert bar_event_key("bar-id",2)==bar_event_key("bar-id",2)
+    assert indicator_event_key("bar-id",2,"a"*64,1)==indicator_event_key("bar-id",2,"a"*64,1)
+    assert market_quality_event_key("checkpoint-source","STALE")==market_quality_event_key("checkpoint-source","STALE")
+
+
+def test_checkpointed_bar_content_does_not_create_a_new_correction_version():
+    bar=aggregate_bars([{
+        "source_event_id":"checkpoint-tick",
+        "instrument_id":"42",
+        "event_time":"2026-01-01T00:00:01Z",
+        "price":"100",
+        "volume":"1",
+    }])[0]
+    checkpointed,version=advance_bar_version({},bar)
+    assert version==1
+    restored,version=advance_bar_version(checkpointed,dict(bar))
+    assert restored==checkpointed and version is None
+    corrected={**bar,"close":"101","high":"101"}
+    _,version=advance_bar_version(restored,corrected)
+    assert version==2
+
+
+def test_full_requirement_identity_prevents_parameter_only_collisions():
+    common={"input_type":"INDICATOR","role":"","parameters":{"window":20},"instrument_id":"7",
+        "timeframe":"5m","implementation_version":1}
+    sma=requirement_identity_hash(name="sma",**common)
+    momentum=requirement_identity_hash(name="momentum",**common)
+    assert sma!=momentum
+    assert requirement_identity_hash(name="sma",**common)==sma
+
+
+def test_starting_offsets_are_job_configurable_and_default_to_committed():
+    assert starting_offset_policy("bar-aggregation-v2")=="committed"
+    assert starting_offset_policy("bar-aggregation-v2","latest")=="latest"
+    assert starting_offset_policy("bar-aggregation-v2",environment={
+        "KAFKA_STARTING_OFFSETS_BAR_AGGREGATION_V2":"earliest",
+    })=="earliest"
+    with pytest.raises(ValueError):
+        starting_offset_policy("bar-aggregation-v2","invalid")
+
+
+def test_deduplication_state_has_a_configured_ttl():
+    from pathlib import Path
+    source=Path(__file__).resolve().parents[1]/"jobs"/"market_normalization.py"
+    implementation=source.read_text(encoding="utf-8")
+    assert "StateTtlConfig" in implementation
+    assert "DEDUPLICATION_STATE_TTL_SECONDS" in implementation

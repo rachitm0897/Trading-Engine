@@ -1,8 +1,12 @@
-import hashlib
 import math
-from collections import defaultdict, deque
+from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
+
+try:
+    from .identity import market_bar_id, processing_mode, raw_event_key, stable_hash
+except ImportError:
+    from jobs.identity import market_bar_id, processing_mode, raw_event_key, stable_hash
 
 
 def utc(value):
@@ -15,7 +19,7 @@ def utc(value):
     return dt.astimezone(timezone.utc)
 
 
-def normalize_market_event(raw, symbol_map):
+def normalize_market_event(raw, symbol_map, mode_override=None):
     kind=raw.get("event_kind","TICK").upper()
     required = ["source_event_id", "symbol", "event_time"] + (["open","high","low","close","timeframe","window_start","window_end"] if kind=="BAR" else ["price"])
     missing = [key for key in required if raw.get(key) in (None, "")]
@@ -33,7 +37,8 @@ def normalize_market_event(raw, symbol_map):
         "price": str(price), "volume": str(volume), "source": raw.get("source", "ibkr"),"event_kind":kind,
         "provider":raw.get("provider","IBKR"),"provider_symbol":raw.get("provider_symbol"),
         "provider_generation":raw.get("provider_generation"),"subscription_key":raw.get("subscription_key"),
-        "fallback_reason":raw.get("fallback_reason","")}
+        "fallback_reason":raw.get("fallback_reason",""),
+        "processing_mode":processing_mode(mode_override or raw.get("processing_mode"))}
     if kind=="BAR":
         values={key:Decimal(str(raw[key])) for key in ("open","high","low","close")}
         if min(values.values())<=0 or values["low"]>values["high"]:raise ValueError("invalid OHLC values")
@@ -51,22 +56,70 @@ def window_start(event_time, seconds):
 def aggregate_bars(events, interval="1m", seconds=60, prior_versions=None, final=True):
     grouped = defaultdict(list)
     for event in events:
-        grouped[(str(event["instrument_id"]), window_start(event["event_time"], seconds))].append(event)
+        grouped[(
+            str(event["instrument_id"]),
+            window_start(event["event_time"], seconds),
+            processing_mode(event.get("processing_mode")),
+        )].append(event)
     result = []
     prior_versions = prior_versions or {}
-    for (instrument_id, start), ticks in sorted(grouped.items()):
+    for (instrument_id, start, mode), ticks in sorted(grouped.items()):
         ticks.sort(key=lambda x: (utc(x["event_time"]), x["source_event_id"]))
         opens=[Decimal(str(x.get("open",x["price"]))) for x in ticks]
         highs=[Decimal(str(x.get("high",x["price"]))) for x in ticks]
         lows=[Decimal(str(x.get("low",x["price"]))) for x in ticks]
         closes=[Decimal(str(x.get("close",x["price"]))) for x in ticks]
-        bar_id = hashlib.sha256(f"{instrument_id}:{interval}:{start.isoformat()}".encode()).hexdigest()
+        bar_id = market_bar_id(instrument_id,interval,start.isoformat())
         result.append({"bar_id": bar_id, "instrument_id": instrument_id, "interval": interval,
             "window_start": start.isoformat(), "window_end": datetime.fromtimestamp(start.timestamp()+seconds, tz=timezone.utc).isoformat(),
             "open": str(opens[0]), "high": str(max(highs)), "low": str(min(lows)), "close": str(closes[-1]),
             "volume": str(sum(Decimal(str(x.get("volume", 0))) for x in ticks)),
-            "source_event_count": len(ticks), "version": prior_versions.get(bar_id, 0) + 1, "is_final": final})
+            "source_event_count": len(ticks), "version": prior_versions.get(bar_id, 0) + 1,
+            "is_final": final, "processing_mode":mode})
     return result
+
+
+def bar_content_fingerprint(bar):
+    return stable_hash({
+        key: bar[key]
+        for key in (
+            "bar_id", "instrument_id", "interval", "window_start", "window_end",
+            "open", "high", "low", "close", "volume", "source_event_count",
+        )
+    })
+
+
+def advance_bar_version(bucket, bar):
+    """Return checkpointable version state and a new version only for new content."""
+    updated = dict(bucket)
+    fingerprint = bar_content_fingerprint(bar)
+    if fingerprint == updated.get("fingerprint"):
+        return updated, None
+    updated["fingerprint"] = fingerprint
+    updated["version"] = int(updated.get("version", 0)) + 1
+    return updated, updated["version"]
+
+
+def buffer_unknown_registry_event(pending, incoming, expires_at_ms, maximum_events):
+    """Return a bounded, source-id deduplicated pending list and any capacity eviction."""
+    payload = incoming.get("payload", incoming)
+    identity = raw_event_key(payload)
+    if any(item["identity"] == identity for item in pending):
+        return list(pending), []
+    updated = [*pending, {
+        "identity": identity,
+        "expires_at_ms": int(expires_at_ms),
+        "event": incoming,
+    }]
+    updated.sort(key=lambda item: (item["expires_at_ms"], item["identity"]))
+    overflow = updated[:-maximum_events] if len(updated) > maximum_events else []
+    return updated[-maximum_events:], overflow
+
+
+def partition_expired_registry_events(pending, now_ms):
+    expired = [item for item in pending if item["expires_at_ms"] <= int(now_ms)]
+    remaining = [item for item in pending if item["expires_at_ms"] > int(now_ms)]
+    return remaining, expired
 
 
 def _sma(values, n):

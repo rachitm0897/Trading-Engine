@@ -1,6 +1,5 @@
 import json
 import os
-import hashlib
 from datetime import datetime
 from pyflink.common import Duration, Types, WatermarkStrategy
 from pyflink.common.watermark_strategy import TimestampAssigner
@@ -9,6 +8,15 @@ from pyflink.datastream.state import MapStateDescriptor, ValueStateDescriptor
 from jobs.processing import aggregate_bars
 from jobs.runtime import environment, sink, source
 from jobs.events import envelope
+from jobs.identity import (
+    bar_event_key,
+    canonical_event_key,
+    deterministic_event_id,
+    market_bar_id,
+    processing_mode,
+    raw_event_key,
+)
+from jobs.processing import advance_bar_version
 
 REQUIREMENTS=MapStateDescriptor("active-bar-inputs-v1",Types.STRING(),Types.STRING())
 
@@ -40,21 +48,33 @@ class RegistryBars(KeyedBroadcastProcessFunction):
             state.put(requirement["identity_hash"],json.dumps(item,separators=(",",":")))
 
     def process_element(self,value,ctx):
-        source_event=json.loads(value);tick=source_event["payload"];stored=json.loads(self.buckets.value() or "{}")
+        source_event=json.loads(value);tick={**source_event["payload"],
+            "_envelope_event_id":source_event["event_id"],
+            "_correlation_id":source_event.get("correlation_id")}
+        stored=json.loads(self.buckets.value() or "{}")
         stamp=int(datetime.fromisoformat(tick["event_time"].replace("Z","+00:00")).timestamp())
         for identity_hash,encoded in ctx.get_broadcast_state(REQUIREMENTS).items():
             requirement=json.loads(encoded)
             if requirement["instrument_id"]!=str(tick["instrument_id"]):continue
             if tick.get("event_kind")=="BAR" and tick.get("timeframe")==requirement["timeframe"] and tick.get("is_final",True):
-                bar_id=hashlib.sha256(f"{tick['instrument_id']}:{requirement['timeframe']}:{tick['window_start']}".encode()).hexdigest()
+                bar_id=market_bar_id(tick["instrument_id"],requirement["timeframe"],tick["window_start"])
                 bar={"bar_id":bar_id,"instrument_id":str(tick["instrument_id"]),"interval":requirement["timeframe"],
                     "window_start":tick["window_start"],"window_end":tick["window_end"],"open":tick["open"],"high":tick["high"],
-                    "low":tick["low"],"close":tick["close"],"volume":tick.get("volume","0"),"source_event_count":1,"version":1,"is_final":True}
+                    "low":tick["low"],"close":tick["close"],"volume":tick.get("volume","0"),"source_event_count":1,
+                    "version":1,"is_final":True,"processing_mode":processing_mode(tick.get("processing_mode"))}
+                key=f"direct:{identity_hash}:{bar['window_start']}:{bar['processing_mode']}"
+                bucket=stored.get(key,{"version":0,"fingerprint":""})
+                bucket,version=advance_bar_version(bucket,bar)
+                if version is None:
+                    continue
+                stored[key]=bucket;bar["version"]=version
                 yield json.dumps(envelope("market.bar","instrument",bar["instrument_id"],bar,
-                    f"{bar_id}:1",source_event,bar["window_end"]),separators=(",",":"))
+                    bar_event_key(bar_id,bar["version"]),source_event,bar["window_end"]),separators=(",",":"))
                 continue
             seconds=timeframe_seconds(requirement["timeframe"]);start=stamp-stamp%seconds
-            key=f"{identity_hash}:{start}";bucket=stored.get(key,{"ticks":[],"version":0,"timeframe":requirement["timeframe"],"seconds":seconds,"end":start+seconds})
+            mode=processing_mode(tick.get("processing_mode"))
+            key=f"{identity_hash}:{start}:{mode}";bucket=stored.get(key,{"ticks":[],"version":0,
+                "fingerprint":"","timeframe":requirement["timeframe"],"seconds":seconds,"end":start+seconds})
             bucket["ticks"]=[x for x in bucket["ticks"] if x["source_event_id"]!=tick["source_event_id"]]+[tick];stored[key]=bucket
             ctx.timer_service().register_event_time_timer((start+seconds)*1000)
         self.buckets.update(json.dumps(stored,separators=(",",":")))
@@ -63,13 +83,21 @@ class RegistryBars(KeyedBroadcastProcessFunction):
         stored=json.loads(self.buckets.value() or "{}")
         for key,bucket in list(stored.items()):
             if bucket["end"]*1000!=timestamp:continue
-            bucket["version"]+=1
             bars=aggregate_bars(bucket["ticks"],bucket["timeframe"],bucket["seconds"],final=True)
             if bars:
-                bar=bars[0];bar["version"]=bucket["version"];bar["is_final"]=True
-                source_event={"event_id":bar["bar_id"],"payload":bucket["ticks"][-1]}
+                bar=bars[0];bucket,version=advance_bar_version(bucket,bar)
+                if version is None:
+                    continue
+                bar["version"]=version;bar["is_final"]=True
+                causal_tick=max(bucket["ticks"],key=lambda item:(item["event_time"],item["source_event_id"]))
+                causal_event_id=causal_tick.get("_envelope_event_id") or deterministic_event_id(
+                    "market.canonical",
+                    canonical_event_key(raw_event_key(causal_tick),causal_tick["instrument_id"]),
+                )
+                source_event={"event_id":causal_event_id,
+                    "correlation_id":causal_tick.get("_correlation_id"),"payload":causal_tick}
                 yield json.dumps(envelope("market.bar","instrument",bar["instrument_id"],bar,
-                    f"{bar['bar_id']}:{bar['version']}",source_event,bar["window_end"]),separators=(",",":"))
+                    bar_event_key(bar["bar_id"],bar["version"]),source_event,bar["window_end"]),separators=(",",":"))
             stored[key]=bucket
         self.buckets.update(json.dumps(stored,separators=(",",":")))
 
@@ -79,7 +107,7 @@ def main():
     ticks=source(env,"market.canonical.v1","bar-aggregation-v2").assign_timestamps_and_watermarks(
         WatermarkStrategy.for_bounded_out_of_orderness(Duration.of_seconds(int(os.getenv("ALLOWED_LATENESS_SECONDS","30")))).with_timestamp_assigner(EnvelopeTimestamp())).key_by(
         lambda value:str(json.loads(value)["payload"]["instrument_id"]))
-    registry=source(env,"strategy.inputs.v1","bar-registry-v1").broadcast(REQUIREMENTS)
+    registry=source(env,"strategy.inputs.v1","bar-registry-v1",starting_offsets="earliest").broadcast(REQUIREMENTS)
     bars=ticks.connect(registry).process(RegistryBars(),output_type=Types.STRING()).uid("registry-bars-v2")
     sink(bars,"market.bars.v1","bar-sink-v2");env.execute("bar-aggregation-v2")
 

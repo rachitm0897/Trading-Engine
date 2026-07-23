@@ -1,8 +1,23 @@
 import os
 from pyflink.common import SimpleStringSchema
 from pyflink.datastream import StreamExecutionEnvironment
-from pyflink.datastream.connectors.kafka import KafkaOffsetsInitializer, KafkaSink, KafkaSource
+from pyflink.datastream.connectors.kafka import (
+    KafkaOffsetResetStrategy,
+    KafkaOffsetsInitializer,
+    KafkaSink,
+    KafkaSource,
+)
 from pyflink.datastream.connectors.kafka import KafkaRecordSerializationSchema
+
+from jobs.identity import starting_offset_policy
+
+
+def _offset_initializer(policy):
+    if policy == "earliest":
+        return KafkaOffsetsInitializer.earliest()
+    if policy == "latest":
+        return KafkaOffsetsInitializer.latest()
+    return KafkaOffsetsInitializer.committed_offsets(KafkaOffsetResetStrategy.LATEST)
 
 
 def environment(job_name):
@@ -13,10 +28,11 @@ def environment(job_name):
     return env
 
 
-def source(env, topic, group):
+def source(env, topic, group, starting_offsets=None):
+    policy = starting_offset_policy(group, starting_offsets, os.environ)
     return env.from_source(KafkaSource.builder().set_bootstrap_servers(
         os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")).set_topics(topic).set_group_id(group).set_starting_offsets(
-        KafkaOffsetsInitializer.earliest()).set_value_only_deserializer(SimpleStringSchema()).build(),
+        _offset_initializer(policy)).set_value_only_deserializer(SimpleStringSchema()).build(),
         __import__("pyflink.common", fromlist=["WatermarkStrategy"]).WatermarkStrategy.no_watermarks(), group + "-source").uid(group + "-source-v1")
 
 
