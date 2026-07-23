@@ -194,7 +194,12 @@ def _finish_recovery(command_id, attempt_id, result):
     persist_event(
         f"command:{command.pk}:completed",
         f"command.{command.command_type.lower()}.completed",
-        {"command_id": command.pk, **result},
+        {
+            "command_id": command.pk,
+            "command_type": command.command_type,
+            "payload": command.payload,
+            **result,
+        },
     )
 
 
@@ -365,7 +370,12 @@ def process_command(command, adapter):
     persist_event(
         f"command:{command.pk}:completed",
         f"command.{command.command_type.lower()}.completed",
-        {"command_id": command.pk, **result},
+        {
+            "command_id": command.pk,
+            "command_type": command.command_type,
+            "payload": command.payload,
+            **result,
+        },
     )
     supplied_command.refresh_from_db()
     return result

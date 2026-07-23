@@ -323,20 +323,29 @@ def record_gateway_command_failure(payload, gateway_session=None):
 def sync_executions(rows, gateway_session=None):
     for row in rows:
         execution_id=f"{_session_prefix(gateway_session)}:{row.get('execution_id')}" if gateway_session is not None else row.get("execution_id")
-        if not row.get("execution_id") or Fill.objects.filter(execution_id=execution_id).exists(): continue
-        _,portfolio=ensure_account(row.get("account"),gateway_session); instrument=ensure_instrument(row)
-        query=_order_query(gateway_session)
-        order=None
-        if row.get("permanent_id"): order=query.filter(broker_permanent_id=str(row["permanent_id"])).first()
-        if not order and row.get("broker_order_id"): order=query.filter(broker_order_id=str(row["broker_order_id"])).first()
-        if not order:
-            synthetic={**row,"internal_id":"","quantity":row.get("quantity"),"order_type":"MKT","time_in_force":"DAY","status":"Submitted"}
-            order=_external_order(synthetic,instrument,portfolio,gateway_session)
+        if not row.get("execution_id"): continue
+        existing=Fill.objects.select_related("order").filter(execution_id=execution_id).first()
+        if existing:
+            order=existing.order
+        else:
+            _,portfolio=ensure_account(row.get("account"),gateway_session); instrument=ensure_instrument(row)
+            query=_order_query(gateway_session)
+            order=None
+            if row.get("permanent_id"): order=query.filter(broker_permanent_id=str(row["permanent_id"])).first()
+            if not order and row.get("broker_order_id"): order=query.filter(broker_order_id=str(row["broker_order_id"])).first()
+            if not order:
+                synthetic={**row,"internal_id":"","quantity":row.get("quantity"),"order_type":"MKT","time_in_force":"DAY","status":"Submitted"}
+                order=_external_order(synthetic,instrument,portfolio,gateway_session)
         if order.status in {"CREATED","RISK_APPROVED","QUEUED","BROKER_BLOCKED","SUBMITTED","UNKNOWN"}:
             OrderStatusHistory.objects.get_or_create(event_key=f"broker-execution-ready:{order.internal_id}",defaults={"order":order,"from_status":order.status,"to_status":"ACKNOWLEDGED","source":"broker_sync","reason":"Execution received from IBKR"})
             order.status="ACKNOWLEDGED"; order.quantity=max(order.quantity,order.filled_quantity+dec(row.get("quantity"))); order.save(update_fields=["status","quantity","updated_at"])
-        executed_at=parse_datetime(row.get("executed_at") or "") or timezone.now()
-        apply_execution(order,{**row,"execution_id":execution_id,"quantity":str(dec(row.get("quantity"))),"price":str(dec(row.get("price"))),"commission":str(dec(row.get("commission"))),"executed_at":executed_at})
+        executed_at=parse_datetime(row.get("executed_at") or "") or (existing.executed_at if existing else timezone.now())
+        apply_execution(order,{**row,"execution_id":execution_id,
+            "quantity":str(dec(row.get("quantity"),existing.quantity if existing else "0")),
+            "price":str(dec(row.get("price"),existing.price if existing else "0")),
+            "commission":str(dec(row.get("commission"),existing.commission if existing else "0")),
+            "currency":row.get("currency") or (existing.currency if existing else "USD"),
+            "executed_at":executed_at})
 
 def process_snapshot(event, gateway_session=None):
     event_type=event.get("event_type","");payload=event.get("payload",{})

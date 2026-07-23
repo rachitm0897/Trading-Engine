@@ -52,9 +52,21 @@ Run the local topology smoke checks with:
 ```powershell
 powershell -NoProfile -File docs/compose_smoke.ps1
 powershell -NoProfile -File docs/streaming_recovery_smoke.ps1
+powershell -NoProfile -File docs/automatic_execution_smoke.ps1
 ```
 
 The Compose smoke verifies seven long-running services, Backend and Frontend health, SPA deep links, the absolute runtime Backend URL, absent demo accounts, disabled managed-session creation without QCH, and private Kafka/Flink listeners.
+
+The automatic-execution smoke validates Compose configuration, starts the
+required local infrastructure, requires all five named Flink jobs and a
+completed checkpoint for each, checks the Backend market-consumer heartbeat,
+reports the execution-readiness blockers, runs the static single-path contract,
+and executes the isolated synthetic PAPER integration test. A failure is
+prefixed with its exact stage, for example
+`[automatic-execution:flink-checkpoints]`. Use
+`-SkipInfrastructure` only after the stack-level checks have already passed.
+The test uses a mock Gateway response and broker callbacks; it never submits to
+a live brokerage account.
 
 For host-side Python tests, use a separate environment per Python application because the Backend and child image own different dependencies. Tests default to SQLite when `DATABASE_URL` is unset; if a local component `.env` points to external PostgreSQL, explicitly set `DATABASE_URL=sqlite:///:memory:` for an isolated test run.
 
@@ -63,6 +75,7 @@ Local health URLs:
 ```text
 GET http://localhost:5173/healthz
 GET http://localhost:8000/healthz
+GET http://localhost:8000/api/v1/execution/readiness/
 ```
 
 `docker run` for the image under `IB_gateway/` is a separate image-validation procedure documented in that directory. It is not part of the Compose application topology.

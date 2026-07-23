@@ -6,7 +6,7 @@ The backend Celery Beat task `compact-operational-records` runs daily and delete
 
 - Published outbox events after `OUTBOX_RETENTION_DAYS` (default 30). Pending, publishing, and failed events are retained.
 - Successfully completed broker position snapshots after `BROKER_SNAPSHOT_RETENTION_DAYS` (default 30). Incomplete, processing, and failed snapshots are retained.
-- Completed or terminal-error strategy readiness coordination rows after `READINESS_RETENTION_DAYS` (default 30). The related strategy run remains intact.
+- Terminal `StrategyEvaluationJob` rows follow the durable financial-workflow retention policy. The obsolete `StrategyEvaluationReadiness` table and its separate retention setting have been removed.
 - Stream-health metric rows not refreshed for `STREAM_HEALTH_RETENTION_DAYS` (default 30). Active component/metric rows update in place and therefore remain retained.
 
 The Gateway broker worker compacts at most `GATEWAY_COMPACTION_BATCH_SIZE` rows per category every `GATEWAY_COMPACTION_SECONDS` (default one hour):

@@ -83,6 +83,19 @@ CELERY_RESULT_BACKEND=redis://HOST:6379/2
 KAFKA_BOOTSTRAP_SERVERS=HOST:9092
 KAFKA_ENABLED=true
 FLINK_REST_URL=https://FLINK_HOST
+EXECUTION_REQUIRED_FLINK_JOBS=market-normalization-v2,bar-aggregation-v2,indicator-computation-v2,stale-price-detection-v1,stream-health-v1
+FLINK_CHECKPOINT_STALE_SECONDS=180
+EXECUTION_READINESS_HTTP_TIMEOUT_SECONDS=2
+MARKET_RAW_PRODUCER_HEARTBEAT_STALE_SECONDS=30
+MARKET_CONSUMER_HEARTBEAT_STALE_SECONDS=30
+EXECUTION_WORKER_HEARTBEAT_STALE_SECONDS=30
+GATEWAY_CONNECTIVITY_STALE_SECONDS=30
+STRATEGY_JOB_BACKLOG_THRESHOLD=100
+TARGET_COORDINATION_BACKLOG_THRESHOLD=100
+PENDING_INTENT_MAX_AGE_SECONDS=60
+ORDER_INTENT_CLAIM_TIMEOUT_SECONDS=120
+BROKER_COMMAND_MAX_AGE_SECONDS=60
+EXECUTION_AVERAGE_VOLUME_WINDOW=20
 ```
 
 Enable QFS Sub-container management for this Backend app. QCH must inject:
@@ -95,7 +108,13 @@ QCH_SERVICE_TOKEN
 
 `QCH_SUBCONTAINER_NETWORK` is optional. Leave it blank to omit `network` from the create payload and use QCH's platform default. Set it only when QFS requires an explicit shared network that resolves child container names from the Backend.
 
-The QFS process health check must use `/healthz`, not `/readyz`. `/healthz` is process liveness. `/readyz` checks the database and recommendation cache; missing managed-session configuration alone does not make either endpoint fail.
+The QFS process health check must use `/healthz`, not `/readyz` or the
+execution endpoint. `/healthz` is process liveness. `/readyz` checks the
+database and recommendation cache. `/api/v1/execution/readiness/` returns 503
+whenever the automatic PAPER path is unsafe: a required Flink job/checkpoint,
+producer/consumer/worker heartbeat, market fact, Gateway reconciliation,
+workflow-age threshold, or uncertainty gate is not healthy. Missing
+managed-session configuration alone does not make process liveness fail.
 
 Required public routing:
 

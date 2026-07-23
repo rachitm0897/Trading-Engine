@@ -1,6 +1,11 @@
 # Backend
 
-The Backend is the Django/ASGI execution core. One container runs Gunicorn with an ASGI worker, required Celery workers, Celery Beat, the market consumer, and the Finnhub consumer under Supervisor. Startup applies Django migrations before Supervisor starts.
+The Backend is the Django/ASGI execution core. One container runs Gunicorn with
+an ASGI worker, Celery Beat, the market and Finnhub consumers, and dedicated
+Celery workers for `strategy_evaluation`, `target_coordination`,
+`intent_execution`, and `broker_commands` under Supervisor. Intent and broker
+dispatch use separate worker processes so readiness can prove each financial
+handoff is staffed. Startup applies Django migrations before Supervisor starts.
 
 ## Run and test
 
@@ -20,6 +25,8 @@ The image builds from `Backend` alone. Its research bundle and Kafka schemas are
 
 - `GET /healthz` is process liveness and is the QFS health check.
 - `GET /readyz` checks database and recommendation-cache readiness.
+- `GET /api/v1/execution/readiness/` reports fail-closed automatic PAPER
+  readiness and returns 503 with named blockers when execution must stop.
 - `GET /api/v1/system/` reports non-secret deployment status.
 - The exact configured base path returns service, health, and System route metadata.
 - Both prefix-preserved requests and prefix-stripped requests with `X-Forwarded-Prefix` are supported.
@@ -46,3 +53,9 @@ Managed noVNC HTTP and WebSocket traffic is proxied through `/api/v1/broker-sess
 PostgreSQL, Redis, Celery broker/result storage, Kafka, Flink, and Finnhub configuration belong only to this application. Managed live sessions still require the independent `ALLOW_LIVE_TRADING` gate and all kill-switch, sizing, risk, OMS, ledger, and reconciliation controls.
 
 Database startup uses normal Django migrations. See [database upgrades](../docs/DATABASE_UPGRADES.md), [async operations](../docs/ASYNC_OPERATIONS.md), and [QFS deployment](../docs/QFS_DEPLOYMENT.md).
+
+From the repository root, the complete automatic path can be checked with:
+
+```powershell
+powershell -NoProfile -File docs\automatic_execution_smoke.ps1
+```

@@ -147,9 +147,10 @@ def test_order_modify_rejects_unsafe_fields_and_values(client,changes):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_concurrent_duplicate_manual_order_requests_submit_once(monkeypatch):
+def test_concurrent_duplicate_manual_order_requests_submit_once(monkeypatch, settings):
     if connection.vendor!="postgresql":pytest.skip("Row-lock concurrency is verified against PostgreSQL")
     portfolio,instrument=_manual_order_case()
+    bind_managed_gateway(portfolio, settings)
     from apps.broker_gateway.client import GatewayClient
     barrier=Barrier(2);lock=Lock();calls={"place":0}
     monkeypatch.setattr(GatewayClient,"health",lambda self:{"connected":True,"reconciled":True,"mode":"paper"})

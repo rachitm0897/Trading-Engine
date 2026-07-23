@@ -12,6 +12,7 @@ from apps.portfolio_optimization import views as optimization_views
 from apps.portfolio_construction import views as construction_views
 from apps.research import views as research_views
 from apps.broker_gateway import views as broker_session_views
+from apps.execution import views as execution_views
 
 api_patterns = [
     path("system/", views.system), path("auth/session/",views.auth_session), path("gateway/", views.gateway), path("accounts/", views.accounts),
@@ -31,7 +32,6 @@ new_api = [
     path("strategy-instances/",strategy_views.instances),path("strategy-instances/<int:instance_id>/",strategy_views.instances),
     path("strategy-instances/<int:instance_id>/enable/",strategy_views.action,{"action_name":"enable"}),
     path("strategy-instances/<int:instance_id>/pause/",strategy_views.action,{"action_name":"pause"}),
-    path("strategy-instances/<int:instance_id>/evaluate/",strategy_views.action,{"action_name":"evaluate"}),
     path("strategy-instances/<int:instance_id>/flatten/",strategy_views.action,{"action_name":"flatten"}),
     path("strategy-instances/<int:instance_id>/state/",strategy_views.related,{"resource":"state"}),
     path("strategy-instances/<int:instance_id>/signals/",strategy_views.related,{"resource":"signals"}),
@@ -41,6 +41,7 @@ new_api = [
     path("strategy-instances/<int:instance_id>/chart/",strategy_views.chart),
     path("strategy-policies/",strategy_views.policies),path("instruments/search/",strategy_views.search_instruments),path("instruments/resolve/",strategy_views.resolve),
     path("streaming/health/",streaming_views.health),path("streaming/topics/",streaming_views.topics),
+    path("execution/readiness/",execution_views.readiness),
     path("streaming/consumer-lag/",streaming_views.consumer_lag),path("streaming/dead-letter/",streaming_views.dead_letter),
     path("streaming/replay/",streaming_views.replay),path("streaming/replay/<int:replay_id>/",streaming_views.replay_status),
     path("allocations/policies/",allocation_views.policies),path("allocations/flows/",allocation_views.flows),

@@ -1,4 +1,6 @@
-import json, uuid
+import hashlib
+import json
+import uuid
 from decimal import Decimal
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
@@ -69,12 +71,97 @@ def transition(order, new_status, source, event_key, reason="", *, broker_status
     order.status = new_status; order.save(update_fields=["status", "updated_at"])
     return order
 
+
+def _apply_late_commission(fill, raw_event, incoming_commission):
+    """Apply a broker commission correction without replaying fill quantity."""
+    current = Decimal(fill.commission)
+    incoming = Decimal(incoming_commission)
+    if incoming == current or (current != 0 and incoming == 0):
+        return fill
+    delta = incoming - current
+    fill.commission = incoming
+    fill.raw_event = raw_event
+    fill.save(update_fields=["commission", "raw_event"])
+
+    cash_entry = CashLedgerEntry.objects.select_for_update().get(
+        idempotency_key=f"cash:{fill.execution_id}"
+    )
+    cash_entry.amount = Decimal(cash_entry.amount) - delta
+    cash_entry.save(update_fields=["amount"])
+
+    attributions = list(
+        fill.order.intent.attributions.select_for_update(of=("self",))
+    )
+    gross_allocated = sum(
+        (abs(Decimal(item.allocated_quantity)) for item in attributions),
+        Decimal(0),
+    ) or Decimal(1)
+    for attribution in attributions:
+        cost_share = abs(Decimal(attribution.allocated_quantity)) / gross_allocated
+        attribution.allocated_cost = Decimal(attribution.allocated_cost) + (
+            delta * cost_share
+        )
+        attribution.save(update_fields=["allocated_cost"])
+
+    revision = hashlib.sha256(
+        f"{fill.execution_id}:{incoming}".encode()
+    ).hexdigest()
+    AuditEvent.objects.get_or_create(
+        idempotency_key=f"audit:fill-commission:{revision}",
+        defaults={
+            "event_type": "fill.commission.updated",
+            "actor": "broker",
+            "aggregate_type": "order",
+            "aggregate_id": fill.order.internal_id,
+            "data": {
+                "execution_id": fill.execution_id,
+                "previous_commission": str(current),
+                "commission": str(incoming),
+            },
+        },
+    )
+    OutboxEvent.objects.get_or_create(
+        idempotency_key=f"outbox:fill-commission:{revision}",
+        defaults={
+            "topic": "executions.events.v1",
+            "event_type": "execution.commission.updated",
+            "aggregate_type": "account",
+            "aggregate_id": fill.order.intent.portfolio.account.account_id,
+            "partition_key": fill.order.intent.portfolio.account.account_id,
+            "payload": {
+                "execution_id": fill.execution_id,
+                "order_id": fill.order.internal_id,
+                "previous_commission": str(current),
+                "commission": str(incoming),
+            },
+        },
+    )
+    return fill
+
+
 @transaction.atomic
 def apply_execution(order, execution):
     order = Order.objects.select_for_update().select_related("intent__portfolio", "intent__instrument").get(pk=order.pk)
     raw_event = json.loads(json.dumps(execution, cls=DjangoJSONEncoder))
-    fill, created = Fill.objects.get_or_create(execution_id=execution["execution_id"], defaults={"order": order, "quantity": Decimal(str(execution["quantity"])), "price": Decimal(str(execution["price"])), "commission": Decimal(str(execution.get("commission", 0))), "currency": execution.get("currency", "USD"), "executed_at": execution.get("executed_at", timezone.now()), "raw_event": raw_event})
-    if not created: return fill
+    quantity = Decimal(str(execution["quantity"]))
+    price = Decimal(str(execution["price"]))
+    commission = Decimal(str(execution.get("commission", 0)))
+    currency = execution.get("currency", "USD")
+    fill, created = Fill.objects.get_or_create(execution_id=execution["execution_id"], defaults={"order": order, "quantity": quantity, "price": price, "commission": commission, "currency": currency, "executed_at": execution.get("executed_at", timezone.now()), "raw_event": raw_event})
+    if not created:
+        fill = Fill.objects.select_for_update().select_related(
+            "order__intent__portfolio__account"
+        ).get(pk=fill.pk)
+        if (
+            fill.order_id != order.pk
+            or Decimal(fill.quantity) != quantity
+            or Decimal(fill.price) != price
+            or fill.currency != currency
+        ):
+            raise ValueError(
+                "Conflicting broker execution payload for an existing execution ID"
+            )
+        return _apply_late_commission(fill, raw_event, commission)
     old_qty = order.filled_quantity; new_qty = old_qty + fill.quantity
     order.average_fill_price = ((order.average_fill_price * old_qty) + (fill.price * fill.quantity)) / new_qty
     order.filled_quantity = new_qty; order.save(update_fields=["filled_quantity", "average_fill_price", "updated_at"])

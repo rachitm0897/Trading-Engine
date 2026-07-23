@@ -8,7 +8,6 @@ from django.utils import timezone
 from apps.market_streams.models import (
     IndicatorValue,
     StrategyEvaluationJob,
-    StrategyEvaluationReadiness,
 )
 from apps.strategies.framework import evaluate_instance
 from apps.strategies.input_identity import indicator_output_name
@@ -64,22 +63,20 @@ def _job_key(instance_id, version_id, market_bar_id, bar_version):
 
 @transaction.atomic
 def ensure_strategy_evaluation_job(
-    readiness,
+    instance,
+    strategy_version,
+    bar,
     *,
     expected_input_identity_hashes,
     ready,
     event_id=None,
 ):
     """Create/update durable work without evaluating strategy code."""
-    readiness = StrategyEvaluationReadiness.objects.select_for_update().select_related(
-        "strategy_instance", "strategy_version", "bar",
-    ).get(pk=readiness.pk)
-    instance = StrategyInstance.objects.select_for_update().get(pk=readiness.strategy_instance_id)
-    bar = readiness.bar
+    instance = StrategyInstance.objects.select_for_update().get(pk=instance.pk)
     stable_event_id = str(event_id or f"{bar.bar_id}:{bar.version}")
     identity = {
-        "strategy_instance": readiness.strategy_instance,
-        "strategy_version": readiness.strategy_version,
+        "strategy_instance": instance,
+        "strategy_version": strategy_version,
         "market_bar_id": bar.bar_id,
         "bar_version": bar.version,
     }
@@ -99,8 +96,8 @@ def ensure_strategy_evaluation_job(
             "error_details": {} if ready else missing_details,
             "next_attempt_at": timezone.now(),
             "idempotency_key": _job_key(
-                readiness.strategy_instance_id,
-                readiness.strategy_version_id,
+                instance.pk,
+                strategy_version.pk,
                 bar.bar_id,
                 bar.version,
             ),
@@ -133,10 +130,6 @@ def ensure_strategy_evaluation_job(
         job.save(update_fields=[
             "status", "error_code", "error_details", "completed_at", "updated_at",
         ])
-        readiness.status = "ERROR"
-        readiness.completed_at = job.completed_at
-        readiness.last_error = job.error_details["message"]
-        readiness.save(update_fields=["status", "completed_at", "last_error", "updated_at"])
         return job, False
     if last_order is None or incoming_order > last_order:
         instance.last_market_event_at = bar.window_end
@@ -149,7 +142,7 @@ def ensure_strategy_evaluation_job(
         if job.bar_id != bar.pk:
             raise DataIntegrityEvaluationError(
                 "Strategy evaluation job points to a different persisted bar",
-                details={"job_bar_id": job.bar_id, "readiness_bar_id": bar.pk},
+                details={"job_bar_id": job.bar_id, "scheduled_bar_id": bar.pk},
             )
         fields = []
         expected = sorted(expected_input_identity_hashes)
@@ -193,11 +186,6 @@ def claim_next_strategy_evaluation_job(now=None):
     job.completed_at = None
     job.attempt_count += 1
     job.save(update_fields=["status", "claimed_at", "completed_at", "attempt_count", "updated_at"])
-    StrategyEvaluationReadiness.objects.filter(
-        strategy_instance_id=job.strategy_instance_id,
-        strategy_version_id=job.strategy_version_id,
-        bar_id=job.bar_id,
-    ).update(status="EVALUATING", claimed_at=now, completed_at=None, last_error="")
     return job.pk
 
 
@@ -364,11 +352,6 @@ def _complete_job(job_id, run_id):
     job.save(update_fields=[
         "status", "strategy_run", "completed_at", "error_code", "error_details", "updated_at",
     ])
-    StrategyEvaluationReadiness.objects.filter(
-        strategy_instance_id=job.strategy_instance_id,
-        strategy_version_id=job.strategy_version_id,
-        bar_id=job.bar_id,
-    ).update(status="COMPLETED", strategy_run_id=run_id, completed_at=now, last_error="")
     return job
 
 
@@ -431,17 +414,6 @@ def _record_failure(job_id, raw_error):
         "status", "next_attempt_at", "completed_at", "error_code", "error_details",
         "strategy_run", "updated_at",
     ])
-    readiness_status = "ERROR" if job.status == "FAILED" else "PENDING"
-    StrategyEvaluationReadiness.objects.filter(
-        strategy_instance_id=job.strategy_instance_id,
-        strategy_version_id=job.strategy_version_id,
-        bar_id=job.bar_id,
-    ).update(
-        status=readiness_status,
-        strategy_run_id=job.strategy_run_id,
-        completed_at=job.completed_at,
-        last_error=message,
-    )
     if job.status == "FAILED" and error.error_code in {
         "INVALID_CONFIGURATION", "PLUGIN_LOGIC_ERROR", "DATA_INTEGRITY_ERROR",
     }:
@@ -527,23 +499,12 @@ def recover_stuck_strategy_evaluation_jobs(now=None):
                 job.status = "RETRY"
                 job.next_attempt_at = now + timedelta(seconds=_backoff_seconds(job.attempt_count))
                 job.completed_at = None
-                readiness_status = "PENDING"
             else:
                 job.status = "FAILED"
                 job.completed_at = now
                 job.error_details = {**details, "maximum_attempts_exhausted": True}
-                readiness_status = "ERROR"
             job.save(update_fields=[
                 "status", "next_attempt_at", "completed_at", "error_code", "error_details", "updated_at",
             ])
-            StrategyEvaluationReadiness.objects.filter(
-                strategy_instance_id=job.strategy_instance_id,
-                strategy_version_id=job.strategy_version_id,
-                bar_id=job.bar_id,
-            ).update(
-                status=readiness_status,
-                completed_at=job.completed_at,
-                last_error=details["message"],
-            )
             recovered += 1
     return recovered

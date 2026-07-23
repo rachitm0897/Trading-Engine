@@ -61,7 +61,15 @@ PORTFOLIO_TARGET_COORDINATION_DEBOUNCE_SECONDS = int(
 PORTFOLIO_TARGET_COORDINATION_BATCH_SIZE = int(
     os.getenv("PORTFOLIO_TARGET_COORDINATION_BATCH_SIZE", "50")
 )
+EXECUTION_AVERAGE_VOLUME_WINDOW = int(
+    os.getenv("EXECUTION_AVERAGE_VOLUME_WINDOW", "20")
+)
+if EXECUTION_AVERAGE_VOLUME_WINDOW < 1:
+    raise RuntimeError("EXECUTION_AVERAGE_VOLUME_WINDOW must be positive")
 ORDER_INTENT_BATCH_SIZE = int(os.getenv("ORDER_INTENT_BATCH_SIZE", "50"))
+ORDER_INTENT_CLAIM_TIMEOUT_SECONDS = int(
+    os.getenv("ORDER_INTENT_CLAIM_TIMEOUT_SECONDS", "120")
+)
 BROKER_COMMAND_BATCH_SIZE = int(os.getenv("BROKER_COMMAND_BATCH_SIZE", "50"))
 BROKER_COMMAND_RETRY_BASE_SECONDS = int(
     os.getenv("BROKER_COMMAND_RETRY_BASE_SECONDS", "5")
@@ -71,6 +79,42 @@ BROKER_COMMAND_RETRY_MAX_SECONDS = int(
 )
 BROKER_COMMAND_CLAIM_TIMEOUT_SECONDS = int(
     os.getenv("BROKER_COMMAND_CLAIM_TIMEOUT_SECONDS", "120")
+)
+EXECUTION_REQUIRED_FLINK_JOBS = tuple(
+    value.strip()
+    for value in os.getenv(
+        "EXECUTION_REQUIRED_FLINK_JOBS",
+        "market-normalization-v2,bar-aggregation-v2,indicator-computation-v2,"
+        "stale-price-detection-v1,stream-health-v1",
+    ).split(",")
+    if value.strip()
+)
+FLINK_CHECKPOINT_STALE_SECONDS = int(
+    os.getenv("FLINK_CHECKPOINT_STALE_SECONDS", "180")
+)
+EXECUTION_READINESS_HTTP_TIMEOUT_SECONDS = float(
+    os.getenv("EXECUTION_READINESS_HTTP_TIMEOUT_SECONDS", "2")
+)
+MARKET_RAW_PRODUCER_HEARTBEAT_STALE_SECONDS = int(
+    os.getenv("MARKET_RAW_PRODUCER_HEARTBEAT_STALE_SECONDS", "30")
+)
+EXECUTION_WORKER_HEARTBEAT_STALE_SECONDS = int(
+    os.getenv("EXECUTION_WORKER_HEARTBEAT_STALE_SECONDS", "30")
+)
+GATEWAY_CONNECTIVITY_STALE_SECONDS = int(
+    os.getenv("GATEWAY_CONNECTIVITY_STALE_SECONDS", "30")
+)
+STRATEGY_JOB_BACKLOG_THRESHOLD = int(
+    os.getenv("STRATEGY_JOB_BACKLOG_THRESHOLD", "100")
+)
+TARGET_COORDINATION_BACKLOG_THRESHOLD = int(
+    os.getenv("TARGET_COORDINATION_BACKLOG_THRESHOLD", "100")
+)
+PENDING_INTENT_MAX_AGE_SECONDS = int(
+    os.getenv("PENDING_INTENT_MAX_AGE_SECONDS", "60")
+)
+BROKER_COMMAND_MAX_AGE_SECONDS = int(
+    os.getenv("BROKER_COMMAND_MAX_AGE_SECONDS", "60")
 )
 CELERY_BEAT_SCHEDULE = {
     "reconcile": {"task": "apps.reconciliation.tasks.run_scheduled_reconciliation", "schedule": 60.0},
@@ -85,6 +129,7 @@ CELERY_BEAT_SCHEDULE = {
     "recover-rebalances": {"task": "apps.rebalancing.tasks.recover_incomplete_rebalances", "schedule": 60.0},
     "coordinate-portfolio-targets": {"task": "apps.rebalancing.tasks.coordinate_portfolio_targets", "schedule": 1.0},
     "execute-order-intents": {"task": "apps.execution.tasks.execute_order_intents", "schedule": 1.0},
+    "recover-order-intents": {"task": "apps.execution.tasks.recover_order_intents", "schedule": 30.0},
     "dispatch-broker-commands": {"task": "apps.execution.tasks.dispatch_broker_commands", "schedule": 1.0},
     "recover-broker-commands": {"task": "apps.execution.tasks.recover_broker_commands", "schedule": 30.0},
     "sync-finnhub-history": {"task": "apps.market_data.tasks.sync_active_finnhub_universes", "schedule": 21600.0},
@@ -159,7 +204,6 @@ OPTIMIZATION_THROTTLE_LIMIT = int(os.getenv("OPTIMIZATION_THROTTLE_LIMIT", "30")
 EXPENSIVE_OPERATION_THROTTLE_WINDOW_SECONDS = int(os.getenv("EXPENSIVE_OPERATION_THROTTLE_WINDOW_SECONDS", "60"))
 OUTBOX_RETENTION_DAYS = int(os.getenv("OUTBOX_RETENTION_DAYS", "30"))
 BROKER_SNAPSHOT_RETENTION_DAYS = int(os.getenv("BROKER_SNAPSHOT_RETENTION_DAYS", "30"))
-READINESS_RETENTION_DAYS = int(os.getenv("READINESS_RETENTION_DAYS", "30"))
 STREAM_HEALTH_RETENTION_DAYS = int(os.getenv("STREAM_HEALTH_RETENTION_DAYS", "30"))
 OPERATIONAL_COMPACTION_BATCH_SIZE = int(os.getenv("OPERATIONAL_COMPACTION_BATCH_SIZE", "1000"))
 RECOMMENDATION_CONFIG = RecommendationSystemConfiguration.from_environment(
@@ -216,6 +260,7 @@ REBALANCING_TASK_ROUTES = {
 }
 EXECUTION_TASK_ROUTES = {
     "apps.execution.tasks.execute_order_intents": {"queue": "intent_execution"},
+    "apps.execution.tasks.recover_order_intents": {"queue": "intent_execution"},
     "apps.execution.tasks.dispatch_broker_commands": {"queue": "broker_commands"},
     "apps.execution.tasks.recover_broker_commands": {"queue": "broker_commands"},
 }

@@ -482,26 +482,6 @@ def _finish_rebalance_at_safe_boundary(run):
 def recover_incomplete():
     recovered = 0
     for run in RebalanceRun.objects.filter(status__in=["INTENTS_CREATED", "EXECUTING"], mode="PAPER"):
-        if run.phase == "SELLS":
-            advance_rebalance(run)
-        else:
-            positions = {x.instrument_id:D(x.quantity) for x in PortfolioPosition.objects.filter(portfolio=run.portfolio)}
-            for target in run.targets.filter(suppressed=False):
-                desired = D(target.target_quantity)-positions.get(target.instrument_id,D(0))
-                side = "BUY" if desired > 0 else "SELL"
-                remaining = abs(desired)
-                if remaining < D(target.lot_size):
-                    continue
-                intents = OrderIntent.objects.filter(rebalance=run,instrument=target.instrument,side=side)
-                if intents.filter(order__status__in=["CREATED","RISK_APPROVED","QUEUED","SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED","CANCEL_PENDING","UNKNOWN"]).exists() or intents.filter(order__isnull=True).exists():
-                    continue
-                version = intents.count()+1
-                OrderIntent.objects.get_or_create(idempotency_key=f"rebalance:{run.pk}:instrument:{target.instrument_id}:recovery:{version}",defaults={
-                    "rebalance":run,"portfolio":run.portfolio,"instrument":target.instrument,"side":side,
-                    "quantity":remaining,"reference_price":target.reference_price,"source":"REBALANCE","mode":"PAPER",
-                    "requires_fresh_price":True,"execution_priority":target.rank,"eligible":True,
-                    "request_hash":canonical_request_hash("strategy_order_intent_recovery",{
-                        "rebalance_id":run.pk,"instrument_id":target.instrument_id,"side":side,
-                        "quantity":remaining,"version":version})})
+        advance_rebalance(run)
         recovered += 1
     return recovered
