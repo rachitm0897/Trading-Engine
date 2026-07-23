@@ -61,8 +61,8 @@ FORBIDDEN_PLUGIN_IMPORTS = (
 )
 
 BACKEND_PLACE_ORDER_ALLOWLIST = {
-    "Backend/apps/core/views.py",
-    "apps/core/views.py",
+    "Backend/apps/execution/dispatch.py",
+    "apps/execution/dispatch.py",
 }
 
 
@@ -143,13 +143,13 @@ def check_backend_submission_sites() -> None:
             if any(
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "place_order"
+                and node.func.attr in {"place_order", "modify_order", "cancel_order"}
                 for node in ast.walk(tree)
             ):
                 call_sites.add(path.relative_to(ROOT).as_posix())
     unexpected = call_sites - BACKEND_PLACE_ORDER_ALLOWLIST
     if unexpected:
-        fail(f"undocumented Backend place_order call site(s): {sorted(unexpected)}")
+        fail(f"undocumented Backend order-command call site(s): {sorted(unexpected)}")
     if call_sites and not call_sites <= BACKEND_PLACE_ORDER_ALLOWLIST:
         fail(f"Backend place_order allowlist mismatch: {sorted(call_sites)}")
 
