@@ -1,7 +1,5 @@
-from datetime import timedelta
 from decimal import Decimal
-from django.db import transaction
-from django.db.models import F, Prefetch
+from django.db.models import F, Max, Prefetch
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from apps.event_bus.services import consume_once
@@ -23,7 +21,7 @@ def persist_bar(envelope):
         "is_final": payload.get("is_final", False), "source_event_count": payload.get("source_event_count", 0),
         "produced_at": _dt(envelope["produced_at"]),})
     update_warmup_progress(bar,new_final_bar=bar.is_final and not was_final)
-    coordinate_bar_readiness(bar)
+    coordinate_bar_readiness(bar, event_id=envelope.get("event_id"))
     return {"bar_id": bar.pk}
 
 
@@ -46,18 +44,22 @@ def persist_indicator(envelope):
     return {"indicator_id": item.pk}
 
 
-def _indicator_output_name(requirement):
-    role=requirement.parameters.get("role")
-    if requirement.name=="donchian":return "donchian_upper" if role=="entry" else "donchian_lower"
-    return f"{requirement.name}_{role}" if role else requirement.name
-
-
 def update_warmup_progress(bar,new_final_bar=False):
     if not bar.is_final:return 0
-    from apps.strategies.models import StrategyInstance
-    from apps.strategies.plugins import get_plugin
-    instances=list(StrategyInstance.objects.filter(enabled=True,instrument=bar.instrument,timeframe=bar.interval).select_related("definition"))
-    requirements={instance.pk:get_plugin(instance.definition).warmup_bars(instance.parameters) for instance in instances}
+    from apps.strategies.models import StrategyInputBinding, StrategyInstance
+    instances=list(StrategyInstance.objects.filter(
+        enabled=True,instrument=bar.instrument,timeframe=bar.interval))
+    required_by_instance=dict(
+        StrategyInputBinding.objects.filter(
+            active=True,
+            strategy_instance_id__in=[instance.pk for instance in instances],
+            strategy_version__version=F("strategy_instance__version"),
+        )
+        .values("strategy_instance_id")
+        .annotate(required=Max("requirement__warmup_bars"))
+        .values_list("strategy_instance_id","required")
+    )
+    requirements={instance.pk:required_by_instance.get(instance.pk,0) or 0 for instance in instances}
     maximum=max(requirements.values(),default=0)
     history_count=0
     if new_final_bar and any(instance.warmup_progress==0 for instance in instances):
@@ -93,66 +95,16 @@ def _active_instances_for_bar(bar):
             Prefetch("input_bindings",queryset=bindings,to_attr="ready_bindings")))
 
 
-def _evaluate_readiness(readiness_ids):
-    from apps.strategies.framework import evaluate_instance
-    evaluated=0
-    for readiness_id in readiness_ids:
-        with transaction.atomic():
-            readiness=StrategyEvaluationReadiness.objects.select_for_update().select_related(
-                "strategy_instance__definition","strategy_instance__instrument","strategy_instance__portfolio",
-                "strategy_version","bar").get(pk=readiness_id)
-            if readiness.status in {"COMPLETED","ERROR"}:
-                continue
-            if readiness.status=="EVALUATING" and readiness.claimed_at and readiness.claimed_at>timezone.now()-timedelta(minutes=5):
-                continue
-            if len(set(readiness.received_input_hashes))<readiness.expected_input_count:
-                continue
-            readiness.status="EVALUATING";readiness.claimed_at=timezone.now();readiness.last_error=""
-            readiness.save(update_fields=["status","claimed_at","last_error","updated_at"])
-        instance=readiness.strategy_instance;bar=readiness.bar
-        bindings=list(instance.input_bindings.filter(active=True,strategy_version=readiness.strategy_version,
-            requirement__input_type="INDICATOR").select_related("requirement"))
-        values_by_hash={}
-        for value in IndicatorValue.objects.filter(instrument=instance.instrument,timeframe=instance.timeframe,
-                source_bar_id=bar.bar_id,source_bar_version=bar.version,is_final=True,
-                parameters_hash__in=[binding.requirement.parameters_hash for binding in bindings]
-                ).order_by("parameters_hash","-created_at"):
-            values_by_hash.setdefault(value.parameters_hash,value)
-        if len(values_by_hash)<len({binding.requirement.parameters_hash for binding in bindings}):
-            StrategyEvaluationReadiness.objects.filter(pk=readiness.pk).update(status="PENDING",claimed_at=None)
-            continue
-        values={};previous={}
-        for binding in bindings:
-            value=values_by_hash[binding.requirement.parameters_hash]
-            name=_indicator_output_name(binding.requirement);values[name]=value.value;previous[name]=value.previous_value
-        payload={"bar_id":bar.bar_id,"event_id":f"{bar.bar_id}:{bar.version}","instrument_id":bar.instrument_id,
-            "interval":bar.interval,"window_start":bar.window_start.isoformat(),"window_end":bar.window_end.isoformat(),
-            "open":str(bar.open),"high":str(bar.high),"low":str(bar.low),"close":str(bar.close),"volume":str(bar.volume),
-            "version":bar.version,"is_final":True}
-        try:
-            run=evaluate_instance(instance,bar=payload,indicators=values,previous_indicators=previous,
-                event_id=payload["event_id"],source_data_version=bar.version,event_time=bar.window_end)
-            status="ERROR" if run.status=="ERROR" else "COMPLETED"
-            StrategyEvaluationReadiness.objects.filter(pk=readiness.pk).update(status=status,strategy_run=run,
-                completed_at=timezone.now(),last_error=run.error[:1000])
-            if run.status=="ERROR":raise RuntimeError(run.error or "Strategy evaluation failed")
-            evaluated+=1
-        except Exception as exc:
-            StrategyEvaluationReadiness.objects.filter(pk=readiness.pk).update(status="ERROR",completed_at=timezone.now(),
-                last_error=str(exc)[:1000])
-            raise
-    return evaluated
-
-
-def coordinate_bar_readiness(bar):
-    """Persist exact input readiness and evaluate each strategy/bar/version at most once."""
+def coordinate_bar_readiness(bar, event_id=None):
+    """Persist exact input readiness and schedule each strategy/bar/version at most once."""
     if not bar.is_final:return 0
+    from apps.strategies.evaluation_jobs import ensure_strategy_evaluation_job
     instances=_active_instances_for_bar(bar)
     available=set(IndicatorValue.objects.filter(instrument=bar.instrument,timeframe=bar.interval,
         source_bar_id=bar.bar_id,source_bar_version=bar.version,is_final=True).values_list("parameters_hash",flat=True))
     existing={(row.strategy_instance_id,row.strategy_version_id):row for row in
         StrategyEvaluationReadiness.objects.filter(bar=bar,strategy_instance_id__in=[item.pk for item in instances])}
-    creates=[];updates=[]
+    creates=[];updates=[];job_inputs={}
     for instance in instances:
         version=next((binding.strategy_version for binding in instance.ready_bindings
             if binding.strategy_version.version==instance.version),None)
@@ -161,7 +113,10 @@ def coordinate_bar_readiness(bar):
         if version is None:continue
         expected={binding.requirement.parameters_hash for binding in instance.ready_bindings
             if binding.strategy_version_id==version.pk and binding.requirement.input_type=="INDICATOR"}
+        identities={binding.requirement.identity_hash for binding in instance.ready_bindings
+            if binding.strategy_version_id==version.pk}
         received=sorted(expected & available)
+        job_inputs[(instance.pk,version.pk)]=(sorted(identities),expected.issubset(available))
         readiness=existing.get((instance.pk,version.pk))
         if readiness is None:
             creates.append(StrategyEvaluationReadiness(strategy_instance=instance,strategy_version=version,bar=bar,
@@ -171,30 +126,26 @@ def coordinate_bar_readiness(bar):
             readiness.expected_input_count=len(expected);readiness.received_input_hashes=received;updates.append(readiness)
     if creates:StrategyEvaluationReadiness.objects.bulk_create(creates,ignore_conflicts=True)
     if updates:StrategyEvaluationReadiness.objects.bulk_update(updates,["expected_input_count","received_input_hashes","updated_at"])
-    ready_ids=list(StrategyEvaluationReadiness.objects.filter(bar=bar,status="PENDING").values_list("pk",flat=True))
-    return _evaluate_readiness(ready_ids)
+    readiness_rows=StrategyEvaluationReadiness.objects.filter(
+        bar=bar,
+        strategy_instance_id__in=[item.pk for item in instances],
+    )
+    scheduled=0
+    for readiness in readiness_rows:
+        inputs=job_inputs.get((readiness.strategy_instance_id,readiness.strategy_version_id))
+        if inputs is None:continue
+        _,became_ready=ensure_strategy_evaluation_job(
+            readiness,
+            expected_input_identity_hashes=inputs[0],
+            ready=inputs[1],
+            event_id=event_id,
+        )
+        scheduled+=int(became_ready)
+    return scheduled
 
 
 def record_indicator_readiness(indicator,bar):
-    from apps.strategies.models import StrategyInputBinding
-    pairs=list(StrategyInputBinding.objects.filter(active=True,requirement__parameters_hash=indicator.parameters_hash,
-        strategy_instance__enabled=True,strategy_instance__instrument_id=indicator.instrument_id,
-        strategy_instance__timeframe=indicator.timeframe,strategy_instance__state__in=ACTIVE_STRATEGY_STATES,
-        strategy_version__version=F("strategy_instance__version")).values_list("strategy_instance_id","strategy_version_id"))
-    if not pairs:return 0
-    rows={(row.strategy_instance_id,row.strategy_version_id):row for row in StrategyEvaluationReadiness.objects.filter(
-        bar=bar,strategy_instance_id__in=[pair[0] for pair in pairs],strategy_version_id__in=[pair[1] for pair in pairs])}
-    if not rows:
-        return coordinate_bar_readiness(bar)
-    ready=[]
-    with transaction.atomic():
-        for pair in pairs:
-            row=StrategyEvaluationReadiness.objects.select_for_update().get(pk=rows[pair].pk)
-            if row.status!="PENDING":continue
-            received=set(row.received_input_hashes);received.add(indicator.parameters_hash)
-            row.received_input_hashes=sorted(received);row.save(update_fields=["received_input_hashes","updated_at"])
-            if len(received)>=row.expected_input_count:ready.append(row.pk)
-    return _evaluate_readiness(ready)
+    return coordinate_bar_readiness(bar)
 
 
 def evaluate_ready_strategies(bar):
