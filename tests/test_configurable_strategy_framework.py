@@ -8,7 +8,8 @@ from apps.broker_gateway.sync import process_snapshot
 from apps.oms.models import Order, OrderIntent
 from apps.oms.services import apply_execution
 from apps.portfolios.models import TradingPortfolio
-from apps.rebalancing.services import aggregate_targets, plan_rebalance
+from apps.rebalancing.coordinator import build_portfolio_target_snapshot
+from apps.rebalancing.services import plan_rebalance
 from apps.market_streams.models import IndicatorValue, MarketBar, MarketDataSubscription, StrategyEvaluationReadiness
 from apps.market_streams.services import coordinate_bar_readiness, persist_bar
 from apps.strategies.evaluation_jobs import process_strategy_evaluation_jobs
@@ -86,7 +87,8 @@ def test_hold_run_keeps_last_changed_target_for_rebalancing(portfolio):
         previous_indicators={"rsi":"29"},event_id="entry")
     hold=evaluate_instance(item,bar={"bar_id":"hold","close":"101","is_final":True},indicators={"rsi":"40"},
         previous_indicators={"rsi":"39"},event_id="hold")
-    assert not hold.targets.exists() and aggregate_targets(portfolio)[0][tsla.pk]==Decimal("0.05")
+    snapshot=build_portfolio_target_snapshot(portfolio,prices={tsla.pk:100})
+    assert not hold.targets.exists() and Decimal(snapshot.net_targets[str(tsla.pk)])==Decimal("0.05")
 
 
 def test_strategy_portability_separate_state_and_shared_indicator(portfolio):
@@ -111,9 +113,10 @@ def test_multi_strategy_targets_net_to_one_paper_intent_with_attribution(portfol
     short=make(portfolio,tsla,"FIXED_WEIGHT_REBALANCE","TSLA_FIXED_SHORT",{"direction":"BOTH"},"-0.02","PAPER")
     for item,event in [(long,"long"),(short,"short")]:
         enable_instance(item);evaluate_instance(item,bar={"bar_id":event,"close":"100","is_final":True},indicators={},event_id=event)
-    weights,attribution=aggregate_targets(portfolio)
-    assert weights[tsla.pk]==Decimal("0.03") and len(attribution[tsla.pk])==2
     RebalancePolicy.objects.create(portfolio=portfolio,minimum_trade_notional=1,maximum_turnover=1,mode="PAPER")
+    snapshot=build_portfolio_target_snapshot(portfolio,prices={tsla.pk:100})
+    assert Decimal(snapshot.net_targets[str(tsla.pk)])==Decimal("0.03")
+    assert len([row for row in snapshot.target_contributions if row["instrument_id"]==tsla.pk])==2
     rebalance=plan_rebalance(portfolio,"MANUAL","strategy-netting",prices={tsla.pk:100},mode="PAPER",strict_market_state=False)
     intent=OrderIntent.objects.get(rebalance=rebalance)
     assert intent.side=="BUY" and intent.quantity==30

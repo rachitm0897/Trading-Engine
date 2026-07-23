@@ -3,34 +3,21 @@ from django.db import transaction
 from django.utils import timezone
 from apps.audit.models import OutboxEvent
 from apps.core.idempotency import canonical_request_hash, require_matching_request
-from apps.allocation.models import OrderIntentAttribution, RebalancePolicy, RebalanceRun, TargetPortfolioPosition
+from apps.allocation.models import (
+    OrderIntentAttribution,
+    PortfolioTargetSnapshot,
+    RebalancePolicy,
+    RebalanceRun,
+    TargetPortfolioPosition,
+)
 from apps.oms.models import OrderIntent
 from apps.portfolios.models import PortfolioPosition
-from apps.strategies.models import StrategyAllocation, StrategyTarget
+from apps.strategies.models import StrategyAllocation
 
 D = Decimal
 VARIABLE_FEE_RATE = D("0.0005")
-
-
-def aggregate_targets(portfolio):
-    totals, attribution = {}, {}
-    allocations = list(StrategyAllocation.objects.filter(portfolio=portfolio, strategy_instance__enabled=True,
-        strategy_instance__kill_switch=False).select_related("strategy_instance"))
-    latest_targets = {}
-    for target in StrategyTarget.objects.filter(
-            strategy_instance_id__in=[item.strategy_instance_id for item in allocations],
-            run__status="COMPLETED", status="ACTIVE").order_by("strategy_instance_id", "-created_at"):
-        latest_targets.setdefault(target.strategy_instance_id, target)
-    for allocation in allocations:
-        nav=D(portfolio.account.net_liquidation)
-        instance=allocation.strategy_instance
-        capital_share = D(instance.allocated_capital)/nav if nav>0 and instance.allocated_capital>0 else D(allocation.weight)
-        target = latest_targets.get(instance.pk)
-        if target:
-            contribution = D(target.target_weight) * capital_share
-            totals[target.instrument_id] = totals.get(target.instrument_id, D(0)) + contribution
-            attribution.setdefault(target.instrument_id, {})[instance.pk] = contribution
-    return totals, attribution
+TERMINAL_ORDER_STATUSES = {"FILLED", "CANCELLED", "REJECTED", "EXPIRED"}
+TERMINAL_INTENT_STATUSES = {"RISK_REJECTED", "FAILED"}
 
 
 def _round_lot(quantity, lot):
@@ -56,57 +43,90 @@ def _reference_prices(portfolio, prices, strict):
     return result, unusable
 
 
-def _net_order_policy(portfolio, contributions, reference_price, side):
-    """Select the highest-priority contributing policy for one net broker order."""
-    allocations=StrategyAllocation.objects.filter(portfolio=portfolio,strategy_instance_id__in=contributions).select_related(
-        "strategy_instance__order_policy").order_by("priority","strategy_instance_id")
-    for allocation in allocations:
-        policy=allocation.strategy_instance.order_policy
-        if not policy:continue
-        limit=None
-        if policy.order_type=="LMT":
-            offset=D(policy.limit_offset_bps)/D(10000)
-            limit=reference_price*(D(1)+offset if side=="BUY" else D(1)-offset)
-        return policy.order_type,policy.time_in_force,limit
-    return "MKT","DAY",None
+def _net_order_policy(snapshot, instrument_id, reference_price, side):
+    """Apply the immutable portfolio-level policy selected in the target snapshot."""
+    policy = (snapshot.portfolio_order_policy or {}).get(str(instrument_id), {})
+    order_type = policy.get("order_type", "MKT")
+    time_in_force = policy.get("time_in_force", "DAY")
+    limit = None
+    if order_type == "LMT":
+        offset = D(str(policy.get("limit_offset_bps", 0))) / D(10000)
+        limit = reference_price * (D(1) + offset if side == "BUY" else D(1) - offset)
+    return order_type, time_in_force, limit
 
 
-def _net_strategy_risk_limits(portfolio, contributions, reference_price, target_weight):
-    policies=[]
-    for allocation in StrategyAllocation.objects.filter(portfolio=portfolio,strategy_instance_id__in=contributions).select_related(
-            "strategy_instance__risk_policy"):
-        if allocation.strategy_instance.risk_policy:policies.append(allocation.strategy_instance.risk_policy)
-    if not policies:return {},{}
-    maximum_quantity=min(min(D(x.maximum_quantity),D(x.maximum_notional)/reference_price) for x in policies)
-    broker={"broker_max_quantity":maximum_quantity,"short_available":target_weight>=0 or all(x.allow_short for x in policies)}
-    strategy={"max_weight":min(D(x.maximum_weight) for x in policies)}
-    return broker,strategy
+def _snapshot_attribution(snapshot):
+    attribution = {}
+    contribution_rows = {}
+    for row in snapshot.target_contributions:
+        instrument_id = int(row["instrument_id"])
+        strategy_instance_id = int(row["strategy_instance_id"])
+        contribution = D(str(row["effective_weight"]))
+        attribution.setdefault(instrument_id, {})[strategy_instance_id] = contribution
+        contribution_rows[(instrument_id, strategy_instance_id)] = row
+    return attribution, contribution_rows
+
+
+def _portfolio_order_limit(snapshot, quantity, notional):
+    limits = snapshot.portfolio_risk_limits or {}
+    maximum_quantity = D(str(limits.get("maximum_order_quantity", "Infinity")))
+    maximum_notional = D(str(limits.get("maximum_order_notional", "Infinity")))
+    if abs(quantity) > maximum_quantity:
+        return "PORTFOLIO_MAXIMUM_ORDER_QUANTITY"
+    if abs(notional) > maximum_notional:
+        return "PORTFOLIO_MAXIMUM_ORDER_NOTIONAL"
+    return ""
 
 
 @transaction.atomic
 def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None, mode=None,
                    policy=None, strict_market_state=True, optimization_run=None, construction_run=None,
-                   available_cash=None,defer=False,
-                   retry_failed=False):
-    if optimization_run and construction_run:
-        raise ValueError("A rebalance may use either optimization or goal-construction targets, not both")
+                   target_snapshot=None, available_cash=None, defer=False, retry_failed=False,
+                   automatic=False):
+    explicit_sources = sum(bool(value) for value in (optimization_run, construction_run, target_snapshot))
+    if explicit_sources > 1:
+        raise ValueError("A rebalance may use only one immutable target source")
+    if not optimization_run and not construction_run and not target_snapshot:
+        existing_run = RebalanceRun.objects.filter(
+            idempotency_key=idempotency_key
+        ).select_related("target_snapshot").first()
+        if existing_run and existing_run.target_snapshot_id:
+            target_snapshot = existing_run.target_snapshot
+        else:
+            from apps.rebalancing.coordinator import build_portfolio_target_snapshot
+            target_snapshot = build_portfolio_target_snapshot(
+                portfolio,
+                logical_time=timezone.now(),
+                prices=prices,
+            )
+    if target_snapshot:
+        target_snapshot = PortfolioTargetSnapshot.objects.get(pk=target_snapshot.pk)
+        if target_snapshot.portfolio_id != portfolio.pk:
+            raise ValueError("Portfolio target snapshot belongs to another portfolio")
+        if target_snapshot.status != "READY":
+            raise ValueError("Rejected portfolio target snapshots cannot create a rebalance")
     policy = policy or RebalancePolicy.objects.filter(portfolio=portfolio).first() or RebalancePolicy.objects.create(portfolio=portfolio)
-    mode = (mode or policy.mode).upper()
+    mode = (mode or (target_snapshot.execution_mode if target_snapshot else policy.mode)).upper()
     if mode not in {"SHADOW", "PAPER"}:
         raise ValueError("Rebalancing supports SHADOW or PAPER mode only")
+    if target_snapshot and mode == "PAPER" and target_snapshot.execution_mode != "PAPER":
+        raise ValueError("A SHADOW target snapshot cannot be promoted to PAPER")
     request_hash=canonical_request_hash("rebalance",{
         "portfolio_id":portfolio.pk,"trigger":trigger,"prices":prices,"nav":nav,"mode":mode,
         "policy_id":policy.pk,"strict_market_state":strict_market_state,
         "optimization_run_id":optimization_run.pk if optimization_run else None,
         "construction_run_id":construction_run.pk if construction_run else None,
-        "available_cash":available_cash})
+        "target_snapshot_id":target_snapshot.pk if target_snapshot else None,
+        "available_cash":available_cash,"automatic":automatic})
     run, created = RebalanceRun.objects.get_or_create(idempotency_key=idempotency_key, defaults={
         "portfolio": portfolio, "policy": policy, "trigger": trigger, "mode": mode,
         "request_hash":request_hash,
         "optimization_run": optimization_run,
         "construction_run": construction_run,
+        "target_snapshot": target_snapshot,
+        "automatic": automatic,
         "target_source": "PORTFOLIO_OPTIMIZATION" if optimization_run else (
-            "GOAL_CONSTRUCTION" if construction_run else "STRATEGY_AGGREGATION"
+            "GOAL_CONSTRUCTION" if construction_run else "PORTFOLIO_TARGET_SNAPSHOT"
         )})
     if not created:
         require_matching_request(run.request_hash,request_hash)
@@ -122,8 +142,12 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
             run.status="CALCULATING";run.save(update_fields=["status"])
     elif defer:
         run.status="QUEUED";run.save(update_fields=["status"]);return run
-    nav = D(str(nav if nav is not None else portfolio.account.net_liquidation))
-    available_cash = D(str(available_cash if available_cash is not None else portfolio.account.available_cash))
+    nav = D(str(nav if nav is not None else (
+        target_snapshot.portfolio_nav if target_snapshot else portfolio.account.net_liquidation
+    )))
+    available_cash = D(str(available_cash if available_cash is not None else (
+        target_snapshot.available_cash if target_snapshot else portfolio.account.available_cash
+    )))
     if nav <= 0:
         raise ValueError("Portfolio NAV must be positive")
     current_rows = {x.instrument_id:x for x in PortfolioPosition.objects.filter(portfolio=portfolio).select_related("instrument")}
@@ -138,9 +162,21 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
         target_weights = {item.instrument_id: D(item.target_weight) for item in construction_run.targets.all()}
         attribution = {}
     else:
-        target_weights, attribution = aggregate_targets(portfolio)
+        target_weights = {
+            int(instrument_id): D(str(weight))
+            for instrument_id, weight in target_snapshot.net_targets.items()
+        }
+        attribution, contribution_rows = _snapshot_attribution(target_snapshot)
     instrument_ids = set(target_weights) | set(current_rows)
-    reference, unusable = _reference_prices(portfolio, prices or {}, strict_market_state)
+    if target_snapshot:
+        instrument_ids |= {int(key) for key in target_snapshot.current_positions}
+        reference = {
+            int(instrument_id): D(str(price))
+            for instrument_id, price in target_snapshot.reference_prices.items()
+        }
+        unusable = set()
+    else:
+        reference, unusable = _reference_prices(portfolio, prices or {}, strict_market_state)
     missing = instrument_ids-set(reference)
     if missing:
         raise ValueError(f"No auditable reference price for instruments: {sorted(missing)}")
@@ -148,13 +184,21 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
     run.snapshot = {"nav":str(nav), "cash":str(available_cash), "target_source":run.target_source,
         "optimization_run_id":optimization_run.pk if optimization_run else None,
         "construction_run_id":construction_run.pk if construction_run else None,
-        "positions":{str(key):str(row.quantity) for key,row in current_rows.items()},
+        "target_snapshot_id":target_snapshot.pk if target_snapshot else None,
+        "positions":target_snapshot.current_positions if target_snapshot else {
+            str(key):str(row.quantity) for key,row in current_rows.items()
+        },
         "prices":{str(key):str(reference[key]) for key in instrument_ids}}
     candidates = []
     for instrument_id in instrument_ids:
         row = current_rows.get(instrument_id)
         instrument = row.instrument if row else __import__("apps.instruments.models", fromlist=["Instrument"]).Instrument.objects.get(pk=instrument_id)
-        price, current = reference[instrument_id], D(row.quantity if row else 0)
+        price = reference[instrument_id]
+        if target_snapshot:
+            position_snapshot = target_snapshot.current_positions.get(str(instrument_id), {})
+            current = D(str(position_snapshot.get("projected_quantity", 0)))
+        else:
+            current = D(row.quantity if row else 0)
         weight = D(target_weights.get(instrument_id, 0)); current_weight = current*price/nav
         drift = weight-current_weight
         lot = D(str((prices or {}).get(f"lot:{instrument_id}", instrument.lot_size)))
@@ -167,6 +211,8 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
         elif abs(delta) < D(policy.minimum_trade_quantity): reason = "BELOW_MINIMUM_QUANTITY"
         elif notional < D(policy.minimum_trade_notional): reason = "BELOW_MINIMUM_NOTIONAL"
         elif strict_market_state and not hasattr(instrument, "broker_contract"): reason = "UNQUALIFIED_CONTRACT"
+        elif target_snapshot:
+            reason = _portfolio_order_limit(target_snapshot, delta, notional)
         estimated_cost = D(policy.fee_buffer) + notional*VARIABLE_FEE_RATE
         benefit = abs(drift)*nav
         if not reason and estimated_cost >= benefit: reason = "COST_EXCEEDS_BENEFIT"
@@ -218,18 +264,20 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
             is_buy = item["delta"] > 0
             eligible = not (policy.sell_before_buy and is_buy and run.phase == "SELLS")
             contributions = attribution.get(item["instrument"].pk, {})
-            order_type,tif,limit_price=_net_order_policy(portfolio,contributions,item["price"],"BUY" if is_buy else "SELL")
-            version_ids=[]
+            order_type,tif,limit_price=_net_order_policy(
+                target_snapshot, item["instrument"].pk, item["price"], "BUY" if is_buy else "SELL"
+            ) if target_snapshot else ("MKT", "DAY", None)
+            version_ids = sorted({
+                contribution_rows[(item["instrument"].pk, strategy_instance_id)].get("strategy_version_id")
+                for strategy_instance_id in contributions
+                if contribution_rows[(item["instrument"].pk, strategy_instance_id)].get("strategy_version_id")
+            }) if target_snapshot else []
             contributing_allocations = {
                 allocation.strategy_instance_id: allocation
                 for allocation in StrategyAllocation.objects.filter(
                     portfolio=portfolio, strategy_instance_id__in=contributions
                 ).select_related("strategy_instance")
             }
-            for strategy_instance_id in contributions:
-                instance=contributing_allocations[strategy_instance_id].strategy_instance
-                version=instance.versions.filter(version=instance.version).first()
-                if version:version_ids.append(version.pk)
             intent = OrderIntent.objects.create(rebalance=run, portfolio=portfolio, instrument=item["instrument"],
                 side="BUY" if is_buy else "SELL", quantity=abs(item["delta"]), reference_price=item["price"],
                 order_type=order_type,time_in_force=tif,limit_price=limit_price,strategy_version_snapshot=sorted(version_ids),
@@ -245,31 +293,63 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
                 from apps.market_streams.models import IndicatorValue
                 sizing_policy = PositionSizingPolicy.objects.filter(portfolio=portfolio, enabled=True).first() or PositionSizingPolicy.objects.create(portfolio=portfolio)
                 adv_record = IndicatorValue.objects.filter(instrument=item["instrument"], indicator="average_volume").order_by("-event_time").first()
-                broker_limits,strategy_limits=_net_strategy_risk_limits(portfolio,contributions,item["price"],item["weight"])
+                limits = target_snapshot.portfolio_risk_limits if target_snapshot else {}
+                broker_limits = {
+                    "broker_max_quantity": D(str(limits.get("maximum_order_quantity", intent.quantity))),
+                    "short_available": item["weight"] >= 0,
+                }
                 size_and_record(sizing_policy, item["instrument"], intent.side, intent.quantity, item["price"], None, nav,
                     available_cash, adv_record.value if adv_record and adv_record.value is not None else 0,
-                    broker_limits=broker_limits,strategy_limits=strategy_limits,order_intent=intent,
+                    broker_limits=broker_limits,strategy_limits={},order_intent=intent,
                     idempotency_key=f"sizing:rebalance:{run.pk}:instrument:{item['instrument'].pk}:v1")
-            net_contribution = sum(contributions.values()) or D(1)
+            net_contribution = sum(contributions.values(), D(0))
+            attribution_total = sum((abs(value) for value in contributions.values()), D(0)) or D(1)
+            strategy_trade_deltas = {
+                strategy_instance_id: D(str(
+                    contribution_rows[(item["instrument"].pk, strategy_instance_id)].get(
+                        "strategy_trade_delta", 0
+                    )
+                ))
+                for strategy_instance_id in contributions
+            }
+            net_strategy_trade_delta = sum(strategy_trade_deltas.values(), D(0))
             for strategy_instance_id, contribution in contributions.items():
                 instance = contributing_allocations[strategy_instance_id].strategy_instance
+                contribution_row = contribution_rows[(item["instrument"].pk, strategy_instance_id)]
+                allocated_quantity = (
+                    item["delta"]
+                    * strategy_trade_deltas[strategy_instance_id]
+                    / net_strategy_trade_delta
+                    if net_strategy_trade_delta
+                    else (
+                        item["delta"] * contribution / net_contribution
+                        if net_contribution
+                        else item["delta"] * abs(contribution) / attribution_total
+                    )
+                )
                 OrderIntentAttribution.objects.create(order_intent=intent, strategy_instance=instance,
-                    strategy_version=instance.versions.filter(version=instance.version).first(),
-                    target_delta=contribution, allocated_quantity=item["delta"]*contribution/net_contribution)
+                    strategy_version_id=contribution_row.get("strategy_version_id"),
+                    target_delta=contribution,
+                    allocated_quantity=allocated_quantity)
     OutboxEvent.objects.create(topic="portfolio.rebalance.planned.v1", event_type="portfolio.rebalance.planned",
         aggregate_type="portfolio", aggregate_id=str(portfolio.pk), partition_key=str(portfolio.pk),
         payload={"rebalance_run_id":run.pk,"mode":mode,"phase":run.phase,"turnover":str(turnover_used),
                  "target_source":run.target_source,"optimization_run_id":optimization_run.pk if optimization_run else None,
-                 "construction_run_id":construction_run.pk if construction_run else None},
+                 "construction_run_id":construction_run.pk if construction_run else None,
+                 "target_snapshot_id":target_snapshot.pk if target_snapshot else None},
         idempotency_key=f"rebalance:{run.pk}:planned")
+    if mode == "PAPER" and run.phase != "SELLS":
+        run = _finish_rebalance_at_safe_boundary(run)
     return run
 
 
 @transaction.atomic
 def advance_rebalance(run):
     run = RebalanceRun.objects.select_for_update().get(pk=run.pk)
-    if run.mode != "PAPER" or run.phase != "SELLS":
+    if run.mode != "PAPER":
         return run
+    if run.phase != "SELLS":
+        return _finish_rebalance_at_safe_boundary(run)
     sell_intents = OrderIntent.objects.filter(rebalance=run, side="SELL")
     requested = sum((D(x.quantity) for x in sell_intents), D(0))
     filled = sum((D(x.order.filled_quantity) for x in sell_intents if hasattr(x, "order")), D(0))
@@ -282,7 +362,10 @@ def advance_rebalance(run):
         run.last_error=(f"Sell stage ended at fill ratio {fill_ratio}; required threshold is {threshold}. "
             "Buy intents remain ineligible.")
         run.last_recalculated_at=timezone.now()
-        run.save(update_fields=["phase","status","last_error","last_recalculated_at"])
+        run.completed_at=timezone.now()
+        run.save(update_fields=["phase","status","last_error","last_recalculated_at","completed_at"])
+        from apps.rebalancing.coordinator import release_portfolio_coordination
+        release_portfolio_coordination(run)
         return run
     if requested == 0 or fill_ratio >= threshold:
         portfolio = run.portfolio
@@ -324,6 +407,75 @@ def advance_rebalance(run):
         run.planned_turnover = turnover_used
         run.last_recalculated_at = timezone.now()
         run.save(update_fields=["phase","status","last_error","planned_turnover","last_recalculated_at"])
+    return _finish_rebalance_at_safe_boundary(run)
+
+
+def _finish_rebalance_at_safe_boundary(run):
+    intents = list(OrderIntent.objects.filter(rebalance=run).select_related("order"))
+    terminal = all(
+        (
+            hasattr(intent, "order")
+            and intent.order.status in TERMINAL_ORDER_STATUSES
+        )
+        or (
+            not hasattr(intent, "order")
+            and intent.operation_status in TERMINAL_INTENT_STATUSES
+        )
+        for intent in intents
+    )
+    if not terminal:
+        return run
+    filled = sum(
+        (
+            D(intent.order.filled_quantity)
+            for intent in intents
+            if hasattr(intent, "order")
+        ),
+        D(0),
+    )
+    failed = any(
+        (
+            hasattr(intent, "order")
+            and intent.order.status in {"CANCELLED", "REJECTED", "EXPIRED"}
+        )
+        or intent.operation_status in TERMINAL_INTENT_STATUSES
+        for intent in intents
+    )
+    run.phase = "COMPLETE" if not failed else "BLOCKED"
+    run.status = "PARTIALLY_COMPLETED" if failed and filled else (
+        "FAILED" if failed else "COMPLETED"
+    )
+    run.completed_at = timezone.now()
+    run.last_recalculated_at = timezone.now()
+    run.save(
+        update_fields=[
+            "phase",
+            "status",
+            "completed_at",
+            "last_recalculated_at",
+        ]
+    )
+    if run.status == "COMPLETED" and run.target_snapshot_id:
+        flatten_ids = {
+            int(row["strategy_instance_id"])
+            for row in run.target_snapshot.target_contributions
+            if row.get("lifecycle") == "FLATTEN_REQUESTED"
+        }
+        if flatten_ids:
+            from apps.strategies.models import (
+                StrategyAttributedPosition,
+                StrategyInstance,
+            )
+            for strategy_instance_id in flatten_ids:
+                if not StrategyAttributedPosition.objects.filter(
+                    strategy_instance_id=strategy_instance_id
+                ).exclude(quantity=0).exists():
+                    StrategyInstance.objects.filter(
+                        pk=strategy_instance_id,
+                        state="FLATTEN_REQUESTED",
+                    ).update(state="FLAT", updated_at=timezone.now())
+    from apps.rebalancing.coordinator import release_portfolio_coordination
+    release_portfolio_coordination(run)
     return run
 
 

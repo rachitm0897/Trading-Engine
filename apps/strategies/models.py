@@ -50,7 +50,8 @@ class StrategyRiskPolicy(models.Model):
 class StrategyInstance(models.Model):
     MODES = [(x, x) for x in ["OBSERVE", "SHADOW", "PAPER"]]
     STATES = [(x, x) for x in ["FLAT", "ENTRY_PENDING", "PARTIALLY_LONG", "LONG", "EXIT_PENDING",
-        "PARTIALLY_SHORT", "SHORT", "PAUSED", "BLOCKED", "WARMING_UP", "ERROR"]]
+        "PARTIALLY_SHORT", "SHORT", "PAUSED", "DISABLED", "FLATTEN_REQUESTED", "KILLED",
+        "BLOCKED", "WARMING_UP", "ERROR"]]
     name = models.CharField(max_length=128)
     definition = models.ForeignKey(StrategyDefinition, on_delete=models.PROTECT, related_name="instances")
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT, related_name="strategy_instances")
