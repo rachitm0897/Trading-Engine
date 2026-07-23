@@ -171,6 +171,8 @@ def pause_instance(instance,gateway=None):
         instance=StrategyInstance.objects.select_for_update().select_related("instrument").get(pk=instance.pk)
         instance.enabled=False;instance.state="PAUSED";instance.effective_to=timezone.now();instance.save(update_fields=["enabled","state","effective_to","updated_at"])
         deactivate_inputs(instance)
+        from apps.rebalancing.coordinator import mark_portfolio_for_target_coordination
+        mark_portfolio_for_target_coordination(instance.portfolio_id, logical_event_time=instance.effective_to)
     if settings.KAFKA_ENABLED or gateway is not None:
         from apps.market_streams.subscriptions import reconcile_market_subscription
         reconcile_market_subscription(instance.instrument,instance.timeframe,gateway,gateway_session=instance.portfolio.gateway_session)
@@ -235,6 +237,8 @@ def evaluate_instance(instance, *, bar, indicators, previous_indicators=None, ev
                 "strategy_instance_id":instance.pk,"strategy_version":version.version,"signal_type":decision.signal_type,
                 "target_ids":list(run.targets.values_list("pk",flat=True)),"execution_mode":instance.execution_mode},
                 idempotency_key=f"strategy-run:{run.pk}:completed")
+            from apps.rebalancing.coordinator import mark_portfolio_for_target_coordination
+            mark_portfolio_for_target_coordination(instance.portfolio_id, logical_event_time=when)
         return run
     except (OperationalError, InterfaceError, ConnectionError, TimeoutError):
         raise
@@ -259,15 +263,17 @@ def flatten_instance(instance, *, event_id=None, event_time=None):
     when=event_time or timezone.now()
     StrategySignal.objects.create(run=run,strategy_instance=instance,strategy_version=version,signal_type="SET_TARGET",
         signal_time=when,reason="Operator requested strategy-attributed flat target")
-    if instance.execution_mode != "OBSERVE" and _latest_target_weight(instance) != Decimal(0):
+    if instance.execution_mode != "OBSERVE":
         StrategyTarget.objects.create(run=run,strategy_instance=instance,strategy_version=version,portfolio=instance.portfolio,
             instrument=instance.instrument,target_type="FLAT",target_weight=0,direction="FLAT",signal_type="SET_TARGET",
             signal_time=when,source_event_id=event_id,reason="Operator requested strategy-attributed flat target",
             rationale="Operator requested strategy-attributed flat target")
-    instance.state="FLAT";instance.save(update_fields=["state","updated_at"])
+    instance.state="FLATTEN_REQUESTED";instance.save(update_fields=["state","updated_at"])
     run.status="COMPLETED";run.completed_at=timezone.now();run.save(update_fields=["status","completed_at"])
     OutboxEvent.objects.create(topic="strategy.targets.v1",event_type="strategy.flattened",aggregate_type="strategy_instance",
         aggregate_id=str(instance.pk),partition_key=str(instance.instrument_id),payload={"strategy_run_id":run.pk,
         "strategy_instance_id":instance.pk,"strategy_version":version.version,"target_ids":list(run.targets.values_list("pk",flat=True)),
         "execution_mode":instance.execution_mode},idempotency_key=f"strategy-run:{run.pk}:completed")
+    from apps.rebalancing.coordinator import mark_portfolio_for_target_coordination
+    mark_portfolio_for_target_coordination(instance.portfolio_id, logical_event_time=when)
     return run

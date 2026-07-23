@@ -438,13 +438,3 @@ def create_flow(portfolio, flow_type, amount, idempotency_key, *, nav=None, effe
             attempt_number=run.flow.attempt_count).update(status="QUEUED")
         run.status="QUEUED";return run
     return execute_flow_allocation(run)
-
-
-def aggregate_targets(portfolio):
-    from apps.rebalancing.services import aggregate_targets as aggregate
-    return aggregate(portfolio)[0]
-
-
-def create_rebalance(portfolio, prices, nav, trigger, idempotency_key):
-    from apps.rebalancing.services import plan_rebalance
-    return plan_rebalance(portfolio, trigger, idempotency_key, prices=prices, nav=nav, mode="PAPER", strict_market_state=False)

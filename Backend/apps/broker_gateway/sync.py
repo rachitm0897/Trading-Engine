@@ -262,6 +262,9 @@ def _record_broker_status(order,row,event_key,source="ibkr",target_override=None
         if target in TERMINAL:
             from apps.risk.services import settle_order_reservation
             settle_order_reservation(order,target)
+            if order.intent.rebalance_id:
+                from apps.rebalancing.services import advance_rebalance
+                advance_rebalance(order.intent.rebalance)
     return history
 
 def sync_orders(rows, snapshot, gateway_session=None):
