@@ -58,6 +58,7 @@ class MarketDataProviderTransition(models.Model):
 
 
 class MarketBar(models.Model):
+    PROCESSING_MODES = [(value, value) for value in ["LIVE", "WARMUP", "REPLAY", "BACKFILL"]]
     instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT, related_name="stream_bars")
     bar_id = models.CharField(max_length=160)
     interval = models.CharField(max_length=16)
@@ -71,6 +72,7 @@ class MarketBar(models.Model):
     version = models.PositiveIntegerField(default=1)
     is_final = models.BooleanField(default=False)
     source_event_count = models.PositiveIntegerField(default=0)
+    processing_mode = models.CharField(max_length=16, choices=PROCESSING_MODES, default="LIVE")
     produced_at = models.DateTimeField()
 
     class Meta:
@@ -79,27 +81,32 @@ class MarketBar(models.Model):
 
 
 class IndicatorValue(models.Model):
+    PROCESSING_MODES = [(value, value) for value in ["LIVE", "WARMUP", "REPLAY", "BACKFILL"]]
     instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT, related_name="indicators")
     bar = models.ForeignKey(MarketBar, on_delete=models.PROTECT, null=True, blank=True)
     indicator = models.CharField(max_length=64)
+    indicator_name = models.CharField(max_length=64)
+    indicator_role = models.CharField(max_length=64, blank=True)
+    implementation_version = models.PositiveIntegerField(default=1)
+    requirement_identity_hash = models.CharField(max_length=64)
     value = models.DecimalField(max_digits=28, decimal_places=10, null=True, blank=True)
     parameters = models.JSONField(default=dict)
-    parameters_hash = models.CharField(max_length=64, blank=True)
     previous_value = models.DecimalField(max_digits=28, decimal_places=10, null=True, blank=True)
     timeframe = models.CharField(max_length=16, blank=True)
     source_bar_id = models.CharField(max_length=160, blank=True)
     source_bar_version = models.PositiveIntegerField(default=1)
     is_final = models.BooleanField(default=True)
-    parameter_version = models.PositiveIntegerField(default=1)
+    processing_mode = models.CharField(max_length=16, choices=PROCESSING_MODES, default="LIVE")
     event_time = models.DateTimeField()
     source_key = models.CharField(max_length=200)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["source_key", "parameter_version"], name="unique_indicator_source_version")]
+        constraints = [models.UniqueConstraint(fields=["source_key"], name="unique_indicator_source")]
         indexes = [
             models.Index(fields=["instrument","timeframe","is_final","-event_time"],name="indicator_latest_idx"),
-            models.Index(fields=["source_bar_id","source_bar_version","parameters_hash","is_final"],name="indicator_ready_idx"),
+            models.Index(fields=["source_bar_id","source_bar_version","requirement_identity_hash","is_final"],
+                name="indicator_identity_ready_idx"),
         ]
 
 
@@ -108,8 +115,6 @@ class StrategyEvaluationReadiness(models.Model):
     strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.CASCADE, related_name="evaluation_readiness")
     strategy_version = models.ForeignKey("strategies.StrategyVersion", on_delete=models.CASCADE)
     bar = models.ForeignKey(MarketBar, on_delete=models.CASCADE, related_name="strategy_readiness")
-    expected_input_count = models.PositiveIntegerField(default=0)
-    received_input_hashes = models.JSONField(default=list)
     status = models.CharField(max_length=16, choices=STATUSES, default="PENDING")
     strategy_run = models.ForeignKey("strategies.StrategyRun", on_delete=models.SET_NULL, null=True, blank=True)
     claimed_at = models.DateTimeField(null=True, blank=True)
@@ -150,6 +155,7 @@ class StrategyEvaluationJob(models.Model):
     event_id = models.CharField(max_length=160)
     event_time = models.DateTimeField()
     source_data_version = models.PositiveIntegerField(default=1)
+    processing_mode = models.CharField(max_length=16, default="LIVE")
     expected_input_identity_hashes = models.JSONField(default=list)
     status = models.CharField(max_length=24, choices=STATUSES, default="WAITING_FOR_INPUT")
     attempt_count = models.PositiveIntegerField(default=0)

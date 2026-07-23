@@ -1,7 +1,9 @@
 from decimal import Decimal
+from django.db import transaction
 from django.db.models import F, Max, Prefetch
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from apps.event_bus.identity import processing_mode
 from apps.event_bus.services import consume_once
 from .models import IndicatorValue, InstrumentMarketState, MarketBar, StrategyEvaluationReadiness
 
@@ -10,37 +12,105 @@ def _dt(value):
     return parse_datetime(value) if isinstance(value, str) else value
 
 
+def _assert_same_market_fact(kind, actual, expected):
+    differences = [
+        field
+        for field, value in expected.items()
+        if getattr(actual, field) != value
+    ]
+    if differences:
+        raise ValueError(
+            f"Conflicting {kind} payload for deterministic identity: "
+            + ", ".join(sorted(differences))
+        )
+
+
+@transaction.atomic
 def persist_bar(envelope):
     payload = envelope["payload"]
-    was_final=MarketBar.objects.filter(bar_id=payload["bar_id"],is_final=True).exists()
-    bar, _ = MarketBar.objects.update_or_create(bar_id=payload["bar_id"], version=payload.get("version", 1), defaults={
+    mode=processing_mode(payload.get("processing_mode"))
+    was_final=MarketBar.objects.filter(
+        bar_id=payload["bar_id"],
+        is_final=True,
+        processing_mode__in=["LIVE","WARMUP"],
+    ).exists()
+    bar, created = MarketBar.objects.get_or_create(bar_id=payload["bar_id"], version=payload.get("version", 1), defaults={
         "instrument_id": payload["instrument_id"], "interval": payload["interval"],
         "window_start": _dt(payload["window_start"]), "window_end": _dt(payload["window_end"]),
         "open": Decimal(payload["open"]), "high": Decimal(payload["high"]), "low": Decimal(payload["low"]),
         "close": Decimal(payload["close"]), "volume": Decimal(payload.get("volume", "0")),
         "is_final": payload.get("is_final", False), "source_event_count": payload.get("source_event_count", 0),
-        "produced_at": _dt(envelope["produced_at"]),})
-    update_warmup_progress(bar,new_final_bar=bar.is_final and not was_final)
-    coordinate_bar_readiness(bar, event_id=envelope.get("event_id"))
+        "processing_mode":mode,"produced_at": _dt(envelope["produced_at"]),})
+    promoted_to_live=False
+    if not created:
+        bar=MarketBar.objects.select_for_update().get(pk=bar.pk)
+        _assert_same_market_fact("bar",bar,{
+            "instrument_id":int(payload["instrument_id"]),
+            "interval":payload["interval"],
+            "window_start":_dt(payload["window_start"]),
+            "window_end":_dt(payload["window_end"]),
+            "open":Decimal(payload["open"]),
+            "high":Decimal(payload["high"]),
+            "low":Decimal(payload["low"]),
+            "close":Decimal(payload["close"]),
+            "volume":Decimal(payload.get("volume","0")),
+            "is_final":payload.get("is_final",False),
+            "source_event_count":payload.get("source_event_count",0),
+        })
+        if mode=="LIVE" and bar.processing_mode!="LIVE":
+            bar.processing_mode="LIVE";bar.save(update_fields=["processing_mode"])
+            promoted_to_live=True
+    if (created and mode in {"LIVE","WARMUP"}) or promoted_to_live:
+        update_warmup_progress(bar,new_final_bar=bar.is_final and not was_final)
+    if mode=="LIVE":
+        coordinate_bar_readiness(bar, event_id=envelope.get("event_id"))
     return {"bar_id": bar.pk}
 
 
+@transaction.atomic
 def persist_indicator(envelope):
     payload = envelope["payload"]
-    item, _ = IndicatorValue.objects.update_or_create(source_key=payload["source_key"],
-        parameter_version=payload.get("parameter_version", 1), defaults={
+    mode=processing_mode(payload.get("processing_mode"))
+    identity_hash=str(payload.get("requirement_identity_hash") or "")
+    if len(identity_hash)!=64:
+        raise ValueError("Indicator event is missing a full requirement identity hash")
+    item, created = IndicatorValue.objects.get_or_create(source_key=payload["source_key"],defaults={
             "instrument_id": payload["instrument_id"], "indicator": payload["indicator"],
+            "indicator_name":payload["indicator_name"],"indicator_role":payload.get("indicator_role",""),
+            "implementation_version":payload.get("implementation_version",1),
+            "requirement_identity_hash":identity_hash,
             "value": Decimal(payload["value"]) if payload.get("value") is not None else None,
             "previous_value": Decimal(payload["previous_value"]) if payload.get("previous_value") is not None else None,
-            "parameters": payload.get("parameters", {}), "parameters_hash": payload.get("parameters_hash", ""),
+            "parameters": payload.get("parameters", {}),
             "timeframe": payload.get("timeframe", ""), "source_bar_id": payload.get("source_bar_id", ""),
             "source_bar_version": payload.get("source_bar_version", 1), "is_final": payload.get("is_final", True),
-            "event_time": _dt(payload["event_time"])})
+            "processing_mode":mode,"event_time": _dt(payload["event_time"])})
+    if not created:
+        item=IndicatorValue.objects.select_for_update().get(pk=item.pk)
+        _assert_same_market_fact("indicator",item,{
+            "instrument_id":int(payload["instrument_id"]),
+            "indicator":payload["indicator"],
+            "indicator_name":payload["indicator_name"],
+            "indicator_role":payload.get("indicator_role",""),
+            "implementation_version":payload.get("implementation_version",1),
+            "requirement_identity_hash":identity_hash,
+            "value":Decimal(payload["value"]) if payload.get("value") is not None else None,
+            "previous_value":Decimal(payload["previous_value"]) if payload.get("previous_value") is not None else None,
+            "parameters":payload.get("parameters",{}),
+            "timeframe":payload.get("timeframe",""),
+            "source_bar_id":payload.get("source_bar_id",""),
+            "source_bar_version":payload.get("source_bar_version",1),
+            "is_final":payload.get("is_final",True),
+            "event_time":_dt(payload["event_time"]),
+        })
+        if mode=="LIVE" and item.processing_mode!="LIVE":
+            item.processing_mode="LIVE";item.save(update_fields=["processing_mode"])
     bar=MarketBar.objects.filter(bar_id=item.source_bar_id,version=item.source_bar_version,is_final=True).first()
     if bar:
         if item.bar_id!=bar.pk:
             item.bar=bar;item.save(update_fields=["bar"])
-        record_indicator_readiness(item,bar)
+        if mode=="LIVE" and bar.processing_mode=="LIVE":
+            coordinate_bar_readiness(bar)
     return {"indicator_id": item.pk}
 
 
@@ -64,6 +134,7 @@ def update_warmup_progress(bar,new_final_bar=False):
     history_count=0
     if new_final_bar and any(instance.warmup_progress==0 for instance in instances):
         history_count=len(list(MarketBar.objects.filter(instrument=bar.instrument,interval=bar.interval,is_final=True)
+            .filter(processing_mode__in=["LIVE","WARMUP"])
             .values_list("bar_id",flat=True).distinct()[:maximum]))
     changed=[];now=timezone.now()
     for instance in instances:
@@ -97,35 +168,30 @@ def _active_instances_for_bar(bar):
 
 def coordinate_bar_readiness(bar, event_id=None):
     """Persist exact input readiness and schedule each strategy/bar/version at most once."""
-    if not bar.is_final:return 0
+    if not bar.is_final or bar.processing_mode!="LIVE":return 0
     from apps.strategies.evaluation_jobs import ensure_strategy_evaluation_job
     instances=_active_instances_for_bar(bar)
     available=set(IndicatorValue.objects.filter(instrument=bar.instrument,timeframe=bar.interval,
-        source_bar_id=bar.bar_id,source_bar_version=bar.version,is_final=True).values_list("parameters_hash",flat=True))
+        source_bar_id=bar.bar_id,source_bar_version=bar.version,is_final=True,processing_mode="LIVE"
+        ).values_list("requirement_identity_hash",flat=True))
     existing={(row.strategy_instance_id,row.strategy_version_id):row for row in
         StrategyEvaluationReadiness.objects.filter(bar=bar,strategy_instance_id__in=[item.pk for item in instances])}
-    creates=[];updates=[];job_inputs={}
+    creates=[];job_inputs={}
     for instance in instances:
         version=next((binding.strategy_version for binding in instance.ready_bindings
             if binding.strategy_version.version==instance.version),None)
         if version is None:
             version=instance.versions.filter(version=instance.version).first()
         if version is None:continue
-        expected={binding.requirement.parameters_hash for binding in instance.ready_bindings
+        expected={binding.requirement.identity_hash for binding in instance.ready_bindings
             if binding.strategy_version_id==version.pk and binding.requirement.input_type=="INDICATOR"}
         identities={binding.requirement.identity_hash for binding in instance.ready_bindings
             if binding.strategy_version_id==version.pk}
-        received=sorted(expected & available)
         job_inputs[(instance.pk,version.pk)]=(sorted(identities),expected.issubset(available))
         readiness=existing.get((instance.pk,version.pk))
         if readiness is None:
-            creates.append(StrategyEvaluationReadiness(strategy_instance=instance,strategy_version=version,bar=bar,
-                expected_input_count=len(expected),received_input_hashes=received))
-        elif readiness.status not in {"COMPLETED","ERROR","EVALUATING"} and (
-                readiness.expected_input_count!=len(expected) or readiness.received_input_hashes!=received):
-            readiness.expected_input_count=len(expected);readiness.received_input_hashes=received;updates.append(readiness)
+            creates.append(StrategyEvaluationReadiness(strategy_instance=instance,strategy_version=version,bar=bar))
     if creates:StrategyEvaluationReadiness.objects.bulk_create(creates,ignore_conflicts=True)
-    if updates:StrategyEvaluationReadiness.objects.bulk_update(updates,["expected_input_count","received_input_hashes","updated_at"])
     readiness_rows=StrategyEvaluationReadiness.objects.filter(
         bar=bar,
         strategy_instance_id__in=[item.pk for item in instances],
@@ -144,17 +210,12 @@ def coordinate_bar_readiness(bar, event_id=None):
     return scheduled
 
 
-def record_indicator_readiness(indicator,bar):
-    return coordinate_bar_readiness(bar)
-
-
-def evaluate_ready_strategies(bar):
-    return coordinate_bar_readiness(bar)
-
-
 def persist_quality(envelope):
     import uuid
     payload = envelope["payload"]
+    mode=processing_mode(payload.get("processing_mode"))
+    if mode!="LIVE":
+        return {"ignored_processing_mode":mode}
     source_value=payload.get("source_event_id")
     try:source_uuid=uuid.UUID(str(source_value)) if source_value else None
     except (ValueError,TypeError,AttributeError):source_uuid=uuid.uuid5(uuid.NAMESPACE_URL,str(source_value))

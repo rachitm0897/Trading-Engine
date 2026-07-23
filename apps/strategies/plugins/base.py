@@ -11,6 +11,8 @@ class StreamInput:
     parameters: dict[str, Any] = field(default_factory=dict)
     bar_fields: tuple[str, ...] = ("open", "high", "low", "close", "volume")
     warmup_bars: int = 0
+    role: str = ""
+    implementation_version: int = 1
 
 
 @dataclass(frozen=True)

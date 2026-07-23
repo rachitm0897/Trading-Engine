@@ -88,6 +88,13 @@ def test_replay_uses_consumer_idempotency():
     request.refresh_from_db();assert request.status=="COMPLETED" and request.processed_count==1 and len(calls)==1
 
 
+def test_market_replay_forces_non_live_processing_mode():
+    request=ReplayRequest.objects.create(topic="market.bars.v1",consumer_name="safe-replay",idempotency_key="safe-replay")
+    values=[envelope_for(event("safe-replay-event"))];calls=[]
+    replay_envelopes(request,values,lambda _name,item:calls.append(item))
+    assert calls[0]["payload"]["processing_mode"]=="REPLAY"
+
+
 def test_replay_status_endpoint_is_pollable(client):
     request=ReplayRequest.objects.create(topic="market.bars.v1",consumer_name="poll-replay",idempotency_key="poll-replay")
     body=client.get(f"/api/v1/streaming/replay/{request.pk}/").json()

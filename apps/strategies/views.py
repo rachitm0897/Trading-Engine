@@ -93,12 +93,13 @@ def _instance(item, detail=False):
     if bindings:
         values={}
         for value in IndicatorValue.objects.filter(instrument=item.instrument,timeframe=item.timeframe,
-                parameters_hash__in=[binding.requirement.parameters_hash for binding in bindings],is_final=True
-                ).order_by("parameters_hash","-event_time","-id"):
-            values.setdefault(value.parameters_hash,value)
-        from apps.market_streams.services import _indicator_output_name
-        latest_indicators={_indicator_output_name(binding.requirement):values[binding.requirement.parameters_hash].value
-            for binding in bindings if binding.requirement.parameters_hash in values}
+                requirement_identity_hash__in=[binding.requirement.identity_hash for binding in bindings],is_final=True
+                ).order_by("requirement_identity_hash","-event_time","-id"):
+            values.setdefault(value.requirement_identity_hash,value)
+        from apps.strategies.input_identity import indicator_output_name
+        latest_indicators={indicator_output_name(binding.requirement.name,binding.requirement.role):
+            values[binding.requirement.identity_hash].value
+            for binding in bindings if binding.requirement.identity_hash in values}
     row={"id":item.pk,"name":item.name,"definition_key":item.definition.key,"definition_name":item.definition.name,
         "portfolio_id":item.portfolio_id,"portfolio":item.portfolio.name,"instrument_id":item.instrument_id,
         "symbol":item.instrument.symbol,"asset_class":item.instrument.asset_class,"exchange":item.instrument.exchange,
@@ -119,7 +120,8 @@ def _instance(item, detail=False):
         row["versions"]=[{"id":x.pk,"version":x.version,"parameter_hash":x.parameter_hash,"configuration_snapshot":x.configuration_snapshot,
             "created_at":x.created_at,"activated_at":x.activated_at,"retired_at":x.retired_at} for x in item.versions.all()]
         row["requirements"]=[{"identity_hash":b.requirement.identity_hash,"input_type":b.requirement.input_type,
-            "name":b.requirement.name,"parameters":b.requirement.parameters,"parameters_hash":b.requirement.parameters_hash,
+            "name":b.requirement.name,"role":b.requirement.role,"parameters":b.requirement.parameters,
+            "implementation_version":b.requirement.implementation_version,
             "warmup_bars":b.requirement.warmup_bars,"shared_by":b.requirement.active_ref_count,"active":b.active}
             for b in item.input_bindings.all() if b.strategy_version.version==item.version]
     return row
