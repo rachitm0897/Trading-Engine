@@ -49,7 +49,11 @@ def test_command_processing_persists_callback():
     broker=MockBrokerAdapter(); broker.connect()
     command=GatewayCommand.objects.create(command_type="PLACE_ORDER",idempotency_key="k",payload={"internal_id":"I1","symbol":"AAPL","side":"BUY","quantity":1})
     process_command(command,broker); command.refresh_from_db()
-    assert command.status=="COMPLETED" and GatewayEvent.objects.count()==1
+    event=GatewayEvent.objects.get()
+    assert command.status=="COMPLETED"
+    assert event.payload["command_id"]==command.pk
+    assert event.payload["command_type"]=="PLACE_ORDER"
+    assert event.payload["payload"]["internal_id"]=="I1"
 
 def test_search_command_returns_multiple_exact_contracts():
     broker=MockBrokerAdapter();broker.connect()
