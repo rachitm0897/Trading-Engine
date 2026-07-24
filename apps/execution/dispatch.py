@@ -795,11 +795,13 @@ def execute_order_intent(intent_id):
         return None
     with transaction.atomic():
         intent = OrderIntent.objects.select_for_update().get(pk=intent.pk)
-        decision, approved, _ = evaluate_intent(intent, state)
+        decision, approved, checks = evaluate_intent(intent, state)
         if decision not in {"APPROVED", "RESIZED"}:
             retryable = decision == "HELD"
             intent.operation_status = "PENDING" if retryable else "RISK_REJECTED"
-            intent.operation_error = "Order did not pass pre-trade risk"
+            intent.operation_error = (
+                checks[-1].reason if checks else "Order did not pass pre-trade risk"
+            )
             intent.retryable = retryable
             intent.save(
                 update_fields=[

@@ -149,10 +149,47 @@ def _page(request, default=250, maximum=500):
 def _order_row(order):
     return {"id":order.pk,"internal_id":order.internal_id,"account_id":order.intent.portfolio.account.account_id,
         "portfolio_id":order.intent.portfolio_id,"symbol":order.intent.instrument.symbol,"side":order.intent.side,
+        "origin":order.intent.origin,
         "order_type":order.intent.order_type,"time_in_force":order.intent.time_in_force,"broker_order_id":order.broker_order_id,
         "broker_permanent_id":order.broker_permanent_id,"status":order.status,"quantity":order.quantity,
         "filled_quantity":order.filled_quantity,"average_fill_price":order.average_fill_price,
         "created_at":order.created_at,"updated_at":order.updated_at}
+
+
+def _manual_intent_row(intent):
+    from apps.execution.dispatch import command_summary
+
+    data = {
+        "intent_id": intent.pk,
+        "origin": intent.origin,
+        "operation_status": intent.operation_status,
+        "retryable": intent.retryable,
+        "message": intent.operation_error or "Manual order intent accepted for asynchronous execution",
+    }
+    if hasattr(intent, "order"):
+        command = intent.order.broker_commands.order_by("-pk").first()
+        data.update({
+            "internal_id": intent.order.internal_id,
+            "status": intent.order.status,
+            "broker_command": command_summary(command) if command else None,
+        })
+    return data
+
+
+def _manual_intent_response(intent):
+    if intent.operation_status == "RISK_REJECTED":
+        return response(status=422, error={
+            "code": "RISK_REJECTED",
+            "message": intent.operation_error,
+            "details": {
+                "decision": "REJECTED",
+                "intent_id": intent.pk,
+                "origin": intent.origin,
+            },
+        })
+    has_order = hasattr(intent, "order")
+    return response(_manual_intent_row(intent), status=200 if has_order else 202)
+
 
 @csrf_exempt
 def gateway(request):
@@ -226,18 +263,20 @@ def rebalances(request):
 
 @csrf_exempt
 def orders(request, internal_id=None, action=None):
-    from decimal import Decimal, InvalidOperation
+    from decimal import InvalidOperation
     from django.db import transaction
     from apps.execution.dispatch import (
         command_summary,
-        execute_order_intent,
         request_order_cancellation,
         request_order_modification,
     )
+    from apps.execution.tasks import execute_order_intents
     from apps.instruments.models import Instrument
     from apps.oms.models import Order, OrderIntent
     from apps.portfolios.models import TradingPortfolio
     from apps.core.validation import decimal_field, validate_order_payload
+    from apps.risk.pricing import OrderPriceUnavailable, resolve_order_risk_price
+    from apps.risk.services import order_quantity_error
     if request.method == "GET":
         if internal_id and action=="detail":
             try:
@@ -293,44 +332,71 @@ def orders(request, internal_id=None, action=None):
             payload=json.loads(request.body or b"{}")
             validated=validate_order_payload(payload)
             side=validated["side"];order_type=validated["order_type"];tif=validated["time_in_force"]
-            quantity=validated["quantity"];reference=validated["reference_price"] or validated["limit_price"] or validated["stop_price"]
-            portfolio=TradingPortfolio.objects.select_related("account","gateway_session").get(pk=payload["portfolio_id"]); instrument=Instrument.objects.get(pk=payload["instrument_id"])
-            if not instrument.active or not instrument.tradable:raise ValueError("Instrument must be active and tradable")
+            quantity=validated["quantity"]
+            portfolio=TradingPortfolio.objects.select_related("account","gateway_session").get(pk=payload["portfolio_id"])
+            instrument=Instrument.objects.select_related("market_state").get(pk=payload["instrument_id"])
             from apps.core.idempotency import canonical_request_hash, require_matching_request
             request_hash=canonical_request_hash("manual_order",payload)
             if not portfolio.gateway_session_id:
                 raise ValueError("Portfolio is not bound to a Gateway session")
-            route_id=str(portfolio.gateway_session_id)
+            session=portfolio.gateway_session
+            route_id=str(session.pk)
             intent_key=f"manual:{route_id}:{hashlib.sha256(key.encode('utf-8')).hexdigest()}"
+            with transaction.atomic():
+                intent=OrderIntent.objects.select_for_update().filter(idempotency_key=intent_key).first()
+                if intent is not None:
+                    require_matching_request(intent.request_hash,request_hash)
+                    if not intent.request_hash:
+                        intent.request_hash=request_hash;intent.save(update_fields=["request_hash"])
+                    if not hasattr(intent,"order") and intent.operation_status=="PENDING":
+                        transaction.on_commit(lambda: execute_order_intents.delay(1))
+            if intent is not None:
+                return _manual_intent_response(intent)
+
+            if not instrument.active or not instrument.tradable:raise ValueError("Instrument must be active and tradable")
+            quantity_error=order_quantity_error(portfolio,instrument,quantity)
+            if quantity_error:raise ValueError(quantity_error)
+            if not session.is_active:
+                raise ValueError("Portfolio Gateway session is not active")
+            from apps.broker_gateway.models import BrokerSessionAccount
+            if not BrokerSessionAccount.objects.filter(
+                session=session,broker_account=portfolio.account,available=True
+            ).exists():
+                raise ValueError("Portfolio account is not available in the selected Gateway session")
+            if session.mode.lower()=="live":
+                return response(status=403,error={
+                    "code":"LIVE_MANUAL_TRADING_DISABLED",
+                    "message":"Live manual order routing is disabled by the current execution policy",
+                    "details":{"allow_live_trading":settings.ALLOW_LIVE_TRADING},
+                })
+            reference=resolve_order_risk_price(
+                instrument,order_type,side,limit_price=validated["limit_price"],
+                stop_price=validated["stop_price"])
             with transaction.atomic():
                 intent,created=OrderIntent.objects.select_for_update().get_or_create(idempotency_key=intent_key,defaults={
                     "request_hash":request_hash,
                     "portfolio":portfolio,"instrument":instrument,"side":side,"quantity":quantity,"order_type":order_type,
                     "limit_price":validated["limit_price"],"stop_price":validated["stop_price"],
                     "reference_price":reference or None,"time_in_force":tif,
-                    "mode":portfolio.gateway_session.mode.upper() if portfolio.gateway_session else "PAPER"})
+                    "source":"MANUAL","origin":OrderIntent.Origin.MANUAL,
+                    "mode":"PAPER","requires_fresh_price":order_type in {"MKT","STP"}})
                 if not created:
                     require_matching_request(intent.request_hash,request_hash)
                     if not intent.request_hash:
                         intent.request_hash=request_hash;intent.save(update_fields=["request_hash"])
-                    if hasattr(intent,"order"):
-                        existing=intent.order.broker_commands.order_by("-pk").first()
-                        return response({"internal_id":intent.order.internal_id,"status":intent.order.status,
-                            "broker_command":command_summary(existing) if existing else None},status=200)
-                    if intent.operation_status=="RISK_REJECTED":
-                        return response(status=422,error={"code":"RISK_REJECTED","message":intent.operation_error,
-                            "details":{"decision":"REJECTED"}})
-            command=execute_order_intent(intent.pk)
-            intent.refresh_from_db()
-            if intent.operation_status=="RISK_REJECTED":
-                return response(status=422,error={"code":"RISK_REJECTED",
-                    "message":intent.operation_error,"details":{"decision":"REJECTED"}})
-            if command is None:
-                return response({"intent_id":intent.pk,"status":intent.operation_status,
-                    "retryable":intent.retryable},status=202)
-            order=command.order
-            return response({"internal_id":order.internal_id,"status":order.status,
-                "approved_quantity":order.quantity,"broker_command":command_summary(command)},status=201)
+                else:
+                    from apps.audit.models import AuditEvent
+                    AuditEvent.objects.create(
+                        event_type="manual_order.intent.accepted",actor="api_operator",
+                        aggregate_type="order_intent",aggregate_id=str(intent.pk),
+                        data={"origin":intent.origin,"portfolio_id":portfolio.pk,
+                            "instrument_id":instrument.pk,"request_hash":request_hash},
+                        idempotency_key=f"audit:manual-order-intent:{intent.pk}:accepted")
+                has_order=hasattr(intent,"order")
+                should_wake=not has_order and intent.operation_status=="PENDING"
+                if should_wake:
+                    transaction.on_commit(lambda: execute_order_intents.delay(1))
+            return _manual_intent_response(intent)
         order=Order.objects.select_related("intent__portfolio__account","intent__portfolio__gateway_session").get(internal_id=internal_id)
         if action=="cancel":
             payload=json.loads(request.body or b"{}");operator_reason=str(payload.get("reason") or "")[:255]
@@ -363,7 +429,10 @@ def orders(request, internal_id=None, action=None):
             "broker_command":command_summary(command)},status=202)
     except IdempotencyConflict as exc:
         return response(status=409,error={"code":"IDEMPOTENCY_CONFLICT","message":str(exc),"details":{}})
-    except (KeyError,ValueError,InvalidOperation,TradingPortfolio.DoesNotExist,Instrument.DoesNotExist,Order.DoesNotExist) as exc:
+    except OrderPriceUnavailable as exc:
+        return response(status=422,error={"code":"MARKET_PRICE_UNAVAILABLE","message":str(exc),"details":{}})
+    except (json.JSONDecodeError,KeyError,ValueError,InvalidOperation,
+            TradingPortfolio.DoesNotExist,Instrument.DoesNotExist,Order.DoesNotExist) as exc:
         return response(status=400,error={"code":"INVALID_ORDER","message":str(exc),"details":{}})
 
 def executions(request):

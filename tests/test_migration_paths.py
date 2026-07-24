@@ -144,6 +144,68 @@ def test_dual_strategy_schema_upgrades_to_instance_only_without_losing_reference
         new_apps.get_model("strategies", "TradingStrategy")
 
 
+def test_order_origin_migration_backfills_existing_intents():
+    executor = MigrationExecutor(connection)
+    final_targets = executor.loader.graph.leaf_nodes()
+    old_target = [("oms", "0008_order_order_status_updated_idx_and_more")]
+    executor.migrate(old_target)
+    old_apps = executor.loader.project_state(old_target).apps
+
+    Account = old_apps.get_model("accounts", "BrokerAccount")
+    Portfolio = old_apps.get_model("portfolios", "TradingPortfolio")
+    Instrument = old_apps.get_model("instruments", "Instrument")
+    OrderIntent = old_apps.get_model("oms", "OrderIntent")
+    account = Account.objects.create(account_id="DU-ORIGIN-MIGRATION")
+    portfolio = Portfolio.objects.create(name="Origin migration", account=account)
+    instrument = Instrument.objects.create(symbol="ORIGIN")
+    manual = OrderIntent.objects.create(
+        portfolio=portfolio,
+        instrument=instrument,
+        side="BUY",
+        quantity=1,
+        source="MANUAL",
+        idempotency_key="manual-origin-migration",
+    )
+    strategy = OrderIntent.objects.create(
+        portfolio=portfolio,
+        instrument=instrument,
+        side="BUY",
+        quantity=1,
+        source="STRATEGY",
+        idempotency_key="strategy-origin-migration",
+    )
+    rebalance = OrderIntent.objects.create(
+        portfolio=portfolio,
+        instrument=instrument,
+        side="BUY",
+        quantity=1,
+        source="REBALANCE",
+        idempotency_key="rebalance-origin-migration",
+    )
+    broker_import = OrderIntent.objects.create(
+        portfolio=portfolio,
+        instrument=instrument,
+        side="BUY",
+        quantity=1,
+        source="MANUAL",
+        idempotency_key="broker-import:paper:DU-ORIGIN-MIGRATION:1",
+    )
+
+    new_target = [("oms", "0009_orderintent_origin")]
+    executor = MigrationExecutor(connection)
+    executor.migrate(new_target)
+    NewOrderIntent = executor.loader.project_state(new_target).apps.get_model(
+        "oms", "OrderIntent"
+    )
+
+    assert NewOrderIntent.objects.get(pk=manual.pk).origin == "MANUAL"
+    assert NewOrderIntent.objects.get(pk=strategy.pk).origin == "STRATEGY"
+    assert NewOrderIntent.objects.get(pk=rebalance.pk).origin == "REBALANCE"
+    assert NewOrderIntent.objects.get(pk=broker_import.pk).origin == "BROKER_IMPORT"
+    executor = MigrationExecutor(connection)
+    executor.migrate(final_targets)
+
+
 def test_portfolio_builder_migration_splits_stocks_and_equal_strategy_shares_then_drops_legacy_model():
     executor = MigrationExecutor(connection)
     final_targets = executor.loader.graph.leaf_nodes()

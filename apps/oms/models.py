@@ -4,6 +4,12 @@ from django.utils import timezone
 ORDER_STATES = [x for x in "CREATED RISK_APPROVED QUEUED BROKER_BLOCKED SUBMITTED ACKNOWLEDGED PARTIALLY_FILLED FILLED CANCEL_PENDING CANCELLED REJECTED EXPIRED UNKNOWN".split()]
 
 class OrderIntent(models.Model):
+    class Origin(models.TextChoices):
+        MANUAL = "MANUAL", "Manual"
+        STRATEGY = "STRATEGY", "Strategy"
+        REBALANCE = "REBALANCE", "Rebalance"
+        BROKER_IMPORT = "BROKER_IMPORT", "Broker import"
+
     rebalance = models.ForeignKey("allocation.RebalanceRun", on_delete=models.PROTECT, null=True, blank=True)
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT)
     strategy_instance = models.ForeignKey("strategies.StrategyInstance", on_delete=models.SET_NULL, null=True, blank=True)
@@ -25,6 +31,7 @@ class OrderIntent(models.Model):
     retryable = models.BooleanField(default=False)
     attempt_count = models.PositiveIntegerField(default=1)
     source = models.CharField(max_length=32, default="MANUAL")
+    origin = models.CharField(max_length=16, choices=Origin.choices, default=Origin.STRATEGY)
     mode = models.CharField(max_length=16, default="PAPER")
     requires_fresh_price = models.BooleanField(default=False)
     execution_priority = models.PositiveIntegerField(default=100)
@@ -32,6 +39,12 @@ class OrderIntent(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(origin__in=["MANUAL", "STRATEGY", "REBALANCE", "BROKER_IMPORT"]),
+                name="order_intent_valid_origin",
+            ),
+        ]
         indexes = [
             models.Index(fields=["portfolio", "-created_at"], name="intent_portfolio_created_idx"),
             models.Index(fields=["operation_status", "eligible", "created_at"], name="intent_operation_queue_idx"),

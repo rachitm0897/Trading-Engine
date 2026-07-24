@@ -237,7 +237,8 @@ def _external_order(row, instrument, portfolio, gateway_session=None):
         defaults={"request_hash":canonical_request_hash("broker_order_import",intent_payload),"portfolio":portfolio,
         "instrument":instrument,"side":intent_payload["side"],"quantity":intent_payload["quantity"],
         "order_type":intent_payload["order_type"],"limit_price":intent_payload["limit_price"],
-        "stop_price":intent_payload["stop_price"],"time_in_force":intent_payload["time_in_force"]})
+        "stop_price":intent_payload["stop_price"],"time_in_force":intent_payload["time_in_force"],
+        "source":"BROKER_IMPORT","origin":OrderIntent.Origin.BROKER_IMPORT})
     order,created=Order.objects.get_or_create(intent=intent,defaults={"internal_id":internal,"quantity":intent.quantity,"status":"ACKNOWLEDGED","broker_order_id":str(row.get("broker_order_id") or ""),"broker_permanent_id":str(row.get("permanent_id") or "")})
     if created: OrderStatusHistory.objects.create(order=order,from_status="",to_status="ACKNOWLEDGED",source="broker_import",reason="Discovered at IBKR",event_key=f"broker-import:{session_key}:{portfolio.account.account_id}:{identity}:ack"[:128])
     return order
