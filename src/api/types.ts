@@ -137,6 +137,7 @@ export interface Order {
   internal_id: string
   account_id: string
   portfolio_id?: number
+  origin?: string
   symbol: string
   side: string
   order_type: string
@@ -171,6 +172,26 @@ export interface OrderDetail {
   risk_decisions: JsonRecord[]
   fills: JsonRecord[]
   strategy_attribution: JsonRecord[]
+}
+
+export interface BrokerCommandSummary {
+  id: number
+  command_type: string
+  status: string
+  attempt_count: number
+  gateway_command_id: string | null
+}
+
+export interface ManualOrderIntentStatus {
+  intent_id: number
+  origin: string
+  operation_status: string
+  retryable: boolean
+  message: string
+  internal_id?: string
+  status?: string
+  approved_quantity?: DecimalValue
+  broker_command?: BrokerCommandSummary | null
 }
 
 export interface Execution {
