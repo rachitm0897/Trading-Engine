@@ -48,5 +48,9 @@ def validate_order_payload(payload,*,partial=False):
     if order_type in {"STP","STP_LMT"} and stop_price is None:raise ValidationError(f"{order_type} orders require stop_price")
     if order_type=="MKT" and (limit_price is not None or stop_price is not None):
         raise ValidationError("MKT orders cannot include limit_price or stop_price")
+    if order_type=="LMT" and stop_price is not None:
+        raise ValidationError("LMT orders cannot include stop_price")
+    if order_type=="STP" and limit_price is not None:
+        raise ValidationError("STP orders cannot include limit_price")
     return {"side":side,"order_type":order_type,"time_in_force":tif,"quantity":quantity,
         "limit_price":limit_price,"stop_price":stop_price,"reference_price":reference_price}

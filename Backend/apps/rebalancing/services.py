@@ -286,7 +286,8 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
                     "rebalance_id":run.pk,"portfolio_id":portfolio.pk,"instrument_id":item["instrument"].pk,
                     "side":"BUY" if is_buy else "SELL","quantity":abs(item["delta"]),"order_type":order_type,
                     "time_in_force":tif,"limit_price":limit_price,"strategy_versions":sorted(version_ids)}), source="REBALANCE",
-                mode="PAPER", requires_fresh_price=True, execution_priority=item["target_row"].rank, eligible=eligible)
+                origin=OrderIntent.Origin.REBALANCE, mode="PAPER", requires_fresh_price=True,
+                execution_priority=item["target_row"].rank, eligible=eligible)
             if strict_market_state:
                 from apps.position_sizing.models import PositionSizingPolicy
                 from apps.position_sizing.services import size_and_record

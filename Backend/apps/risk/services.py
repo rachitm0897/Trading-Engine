@@ -15,6 +15,52 @@ ACTIVE_ORDER_STATUSES = {
     "CREATED", "RISK_APPROVED", "QUEUED", "SUBMITTED", "ACKNOWLEDGED",
     "PARTIALLY_FILLED", "CANCEL_PENDING", "UNKNOWN",
 }
+RESERVED_SELL_INTENT_STATUSES = {
+    "PENDING", "CLAIMED", "RISK_APPROVED", "SUBMITTING", "QUEUED", "BROKER_BLOCKED",
+}
+
+
+def order_quantity_error(portfolio, instrument, quantity):
+    quantity = Decimal(quantity)
+    minimum = Decimal(portfolio.minimum_quantity)
+    if quantity < minimum:
+        return f"quantity must be at least the portfolio minimum of {minimum}"
+    lot_size = Decimal(instrument.lot_size or 1)
+    if lot_size <= 0:
+        return "Instrument lot_size must be positive"
+    if not instrument.fractional_support and quantity % lot_size != 0:
+        return (
+            f"quantity must be a whole multiple of lot_size {lot_size} "
+            "because fractional trading is disabled"
+        )
+    return ""
+
+
+def _reserved_sell_quantity(intent):
+    from apps.oms.models import OrderIntent
+
+    candidates = (
+        OrderIntent.objects.filter(
+            portfolio=intent.portfolio,
+            instrument=intent.instrument,
+            side="SELL",
+        )
+        .exclude(pk=intent.pk)
+        .select_related("order")
+    )
+    reserved = Decimal(0)
+    for candidate in candidates:
+        if hasattr(candidate, "order"):
+            if candidate.order.status in ACTIVE_ORDER_STATUSES:
+                reserved += max(
+                    Decimal(candidate.order.quantity)
+                    - Decimal(candidate.order.filled_quantity),
+                    Decimal(0),
+                )
+            continue
+        if candidate.operation_status in RESERVED_SELL_INTENT_STATUSES:
+            reserved += Decimal(candidate.quantity)
+    return reserved
 
 
 def _matching_kill_switches(intent):
@@ -97,7 +143,8 @@ def evaluate_intent(intent, gateway_state=None):
             partition_key=intent.idempotency_key,
             payload={
                 "risk_check_id":check.pk,"check":name,"decision":decision,
-                "requested_quantity":str(requested),"approved_quantity":str(approved),"reason":reason,
+                "requested_quantity":str(requested),"approved_quantity":str(approved),
+                "reason":reason,"origin":intent.origin,
             },
             idempotency_key=f"risk-check:{check.pk}:recorded",
         )
@@ -137,14 +184,37 @@ def evaluate_intent(intent, gateway_state=None):
     if not intent.eligible:
         add("execution_sequence", "HELD", "Intent is waiting for sell-stage completion", 0)
         return "HELD", Decimal(0), checks
-    if intent.requires_fresh_price:
-        try:
-            usable = intent.instrument.market_state.is_usable()
-        except Exception:
-            usable = False
-        if not usable:
-            add("market_freshness", "REJECTED", "Persisted reference price is stale or unavailable", 0)
-            return "REJECTED", Decimal(0), checks
+    quantity_error = order_quantity_error(intent.portfolio, intent.instrument, requested)
+    if quantity_error:
+        add("order_quantity", "REJECTED", quantity_error, 0)
+        return "REJECTED", Decimal(0), checks
+
+    from apps.risk.pricing import (
+        OrderPriceUnavailable,
+        resolve_order_risk_price,
+        trusted_market_price,
+    )
+
+    try:
+        if intent.requires_fresh_price:
+            trusted_market_price(intent.instrument)
+        if intent.origin == OrderIntent.Origin.MANUAL or intent.requires_fresh_price:
+            price = resolve_order_risk_price(
+                intent.instrument,
+                intent.order_type,
+                intent.side,
+                limit_price=intent.limit_price,
+                stop_price=intent.stop_price,
+            )
+            if intent.reference_price != price:
+                intent.reference_price = price
+                intent.save(update_fields=["reference_price"])
+        else:
+            price = Decimal(intent.reference_price or intent.limit_price or 0)
+    except OrderPriceUnavailable as exc:
+        add("market_freshness", "REJECTED", str(exc), 0)
+        return "REJECTED", Decimal(0), checks
+
     if hasattr(intent, "sizing_decision"):
         sized = Decimal(intent.sizing_decision.approved_quantity)
         if sized <= 0:
@@ -153,7 +223,6 @@ def evaluate_intent(intent, gateway_state=None):
         approved = min(approved, sized)
 
     approved = min(approved, Decimal(policy.maximum_order_quantity))
-    price = Decimal(intent.reference_price or intent.limit_price or 0)
     if price > 0:
         approved = min(approved, Decimal(policy.maximum_order_notional) / price)
     if approved <= 0:
@@ -161,6 +230,35 @@ def evaluate_intent(intent, gateway_state=None):
         return "REJECTED", Decimal(0), checks
 
     decision = "RESIZED" if approved < requested else "APPROVED"
+    if intent.side == "SELL":
+        from apps.portfolios.models import PortfolioPosition
+
+        position = (
+            PortfolioPosition.objects.select_for_update()
+            .filter(portfolio=intent.portfolio, instrument=intent.instrument)
+            .first()
+        )
+        long_position = max(
+            Decimal(position.quantity) if position is not None else Decimal(0),
+            Decimal(0),
+        )
+        reserved_sell = _reserved_sell_quantity(intent)
+        available_position = max(long_position - reserved_sell, Decimal(0))
+        if requested > available_position:
+            add(
+                "available_position",
+                "REJECTED",
+                "SELL quantity exceeds the available unreserved long position; short selling is disabled",
+                0,
+                {
+                    "long_position": str(long_position),
+                    "reserved_sell_quantity": str(reserved_sell),
+                    "available_position_quantity": str(available_position),
+                    "short_selling_enabled": False,
+                },
+            )
+            return "REJECTED", Decimal(0), checks
+
     if intent.side == "BUY" and price > 0:
         notional = approved * price
         fees = notional * Decimal(policy.estimated_commission_rate) + Decimal(policy.estimated_fixed_fee)
