@@ -171,6 +171,7 @@ def _manual_intent_row(intent):
         data.update({
             "internal_id": intent.order.internal_id,
             "status": intent.order.status,
+            "approved_quantity": intent.order.quantity,
             "broker_command": command_summary(command) if command else None,
         })
     return data
@@ -189,6 +190,26 @@ def _manual_intent_response(intent):
         })
     has_order = hasattr(intent, "order")
     return response(_manual_intent_row(intent), status=200 if has_order else 202)
+
+
+def manual_order_intent_status(request, intent_id):
+    invalid = method_guard(request, "GET")
+    if invalid:
+        return invalid
+    from apps.oms.models import OrderIntent
+
+    try:
+        intent = OrderIntent.objects.select_related("order").get(
+            pk=intent_id,
+            origin=OrderIntent.Origin.MANUAL,
+        )
+    except OrderIntent.DoesNotExist:
+        return response(status=404, error={
+            "code": "MANUAL_ORDER_INTENT_NOT_FOUND",
+            "message": "Manual order intent was not found",
+            "details": {"intent_id": intent_id},
+        })
+    return response(_manual_intent_row(intent))
 
 
 @csrf_exempt

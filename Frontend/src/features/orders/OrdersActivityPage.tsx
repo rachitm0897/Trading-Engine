@@ -1,29 +1,43 @@
-import {useEffect, useMemo, useState} from 'react'
+import {useEffect, useMemo, useRef, useState} from 'react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
-import {ExternalLink, Filter, Search, SlidersHorizontal, X} from 'lucide-react'
-import {mutationOptions, request} from '../../api/client'
+import {ExternalLink, Filter, Search, X} from 'lucide-react'
+import {ApiError, mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
-import type {Execution, Order, OrderDetail, OrderStatusHistory} from '../../api/types'
+import type {Execution, ManualOrderIntentStatus, Order, OrderDetail, OrderStatusHistory} from '../../api/types'
 import {ActivityTimeline} from '../../components/ActivityTimeline'
 import {FillProgress} from '../../components/FillProgress'
 import {ConfirmActionDialog, DataTable, DetailDrawer, EmptyState, ErrorState, Freshness, PageHeader, Skeleton, StatusBadge, TerminalPanel, formatDateTime, formatMoney, formatNumber} from '../../components/ui'
 import {useSelection} from '../../stores/useSelection'
+import {ManualOrderTicket} from './ManualOrderTicket'
+import {isManualIntentTerminal, type ManualOrderPayload} from './manualOrder'
 import {canCancelOrder, canModifyOrder} from './orderEligibility'
 
 export function OrdersActivityPage() {
   const queryClient = useQueryClient()
-  const {selectedPortfolioId} = useSelection()
+  const selection = useSelection()
+  const {selectedPortfolioId, session, account, portfolio} = selection
   const [status, setStatus] = useState('')
   const [symbol, setSymbol] = useState('')
   const [search, setSearch] = useState('')
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null)
+  const [manualResult, setManualResult] = useState<ManualOrderIntentStatus>()
+  const [activeIntent, setActiveIntent] = useState<{intentId: number; startedAt: number} | null>(null)
+  const [pollTimedOut, setPollTimedOut] = useState(false)
+  const manualSubmissionInFlight = useRef(false)
+  const surfacedManualOrder = useRef('')
   const desktopInspector = useDesktopInspector()
   const orders = useQuery(queries.orders({portfolioId: selectedPortfolioId, status, symbol}))
   const executions = useQuery(queries.executions({portfolioId: selectedPortfolioId, symbol}))
   const audit = useQuery(queries.audit({limit: 100}))
   const instruments = useQuery(queries.instruments())
+  const positions = useQuery(queries.positions(selectedPortfolioId))
   const orderDetail = useQuery(queries.orderDetail(selectedOrder?.internal_id || ''))
+  const manualIntentStatus = useQuery({
+    ...queries.manualOrderIntent(activeIntent?.intentId),
+    refetchInterval: activeIntent && !pollTimedOut ? 1_000 : false,
+    refetchOnWindowFocus: false,
+  })
   const rows = useMemo(() => (orders.data || []).filter((order) => !search || `${order.internal_id} ${order.broker_order_id} ${order.symbol} ${order.side}`.toLowerCase().includes(search.toLowerCase())), [orders.data, search])
 
   const refresh = async () => {
@@ -43,13 +57,65 @@ export function OrdersActivityPage() {
     onSuccess: async () => {setCancelOrder(null); setSelectedOrder(null); await refresh()},
   })
   const createOrder = useMutation({
-    mutationFn: (payload: Record<string, string | number>) => request<{internal_id: string; status: string; decision?: string}>('orders/', mutationOptions('POST', {portfolio_id: selectedPortfolioId, ...payload}, true)),
-    onSuccess: refresh,
+    mutationFn: ({payload, idempotencyKey}: {payload: ManualOrderPayload; idempotencyKey: string}) =>
+      request<ManualOrderIntentStatus>('orders/', mutationOptions('POST', {portfolio_id: selectedPortfolioId, ...payload}, true, idempotencyKey)),
+    retry: (failureCount, error) => failureCount < 2 && error instanceof ApiError && (error.status === 0 || error.status >= 500),
+    retryDelay: 250,
+    onSuccess: (result) => {
+      setManualResult(result)
+      setPollTimedOut(false)
+      if (!result.internal_id && !isManualIntentTerminal(result)) {
+        setActiveIntent({intentId: result.intent_id, startedAt: Date.now()})
+      } else {
+        setActiveIntent(null)
+      }
+    },
+    onSettled: () => {
+      manualSubmissionInFlight.current = false
+    },
   })
+
+  useEffect(() => {
+    const result = manualIntentStatus.data
+    if (!result) return
+    setManualResult(result)
+    if (isManualIntentTerminal(result)) setActiveIntent(null)
+  }, [manualIntentStatus.data])
+
+  useEffect(() => {
+    if (!activeIntent) return
+    const remaining = Math.max(0, 90_000 - (Date.now() - activeIntent.startedAt))
+    const timeout = window.setTimeout(() => {
+      setPollTimedOut(true)
+      setActiveIntent(null)
+    }, remaining)
+    return () => window.clearTimeout(timeout)
+  }, [activeIntent])
+
+  useEffect(() => {
+    const internalId = manualResult?.internal_id
+    if (!internalId || surfacedManualOrder.current === internalId) return
+    surfacedManualOrder.current = internalId
+    setActiveIntent(null)
+    void (async () => {
+      await refresh()
+      const detail = await queryClient.fetchQuery(queries.orderDetail(internalId))
+      setSelectedOrder(detail.order)
+    })()
+  }, [manualResult?.internal_id])
+
+  const submitManualOrder = (payload: ManualOrderPayload) => {
+    if (manualSubmissionInFlight.current || createOrder.isPending || activeIntent) return
+    manualSubmissionInFlight.current = true
+    surfacedManualOrder.current = ''
+    setManualResult(undefined)
+    setPollTimedOut(false)
+    createOrder.mutate({payload, idempotencyKey: crypto.randomUUID()})
+  }
 
   const orderColumns = [
     {id: 'order', header: 'Order', cell: (order: Order) => <div className="primary-cell"><button className="link-button mono" onClick={() => setSelectedOrder(order)}>{order.internal_id.slice(0, 12)}</button><span>{order.broker_order_id ? `Broker ${order.broker_order_id}` : 'Awaiting broker ID'}</span></div>},
-    {id: 'instrument', header: 'Instrument', cell: (order: Order) => <div className="primary-cell"><strong className="mono">{order.symbol}</strong><span>{order.side} · {order.order_type} · {order.time_in_force}</span></div>},
+    {id: 'instrument', header: 'Instrument', cell: (order: Order) => <div className="primary-cell"><strong className="mono">{order.symbol}</strong><span>{order.origin ? `${order.origin} · ` : ''}{order.side} · {order.order_type} · {order.time_in_force}</span></div>},
     {id: 'status', header: 'Status', cell: (order: Order) => <StatusBadge status={order.status} />},
     {id: 'fill', header: 'Fill progress', cell: (order: Order) => <FillProgress filled={order.filled_quantity} total={order.quantity} />},
     {id: 'price', header: 'Average fill', align: 'right' as const, className: 'mono', cell: (order: Order) => formatMoney(order.average_fill_price)},
@@ -78,7 +144,19 @@ export function OrdersActivityPage() {
     </TerminalPanel>}
     </div>
     <div className="activity-grid"><TerminalPanel id="executions" title="Executions" description="Append-only broker fill ledger">{executions.isLoading ? <Skeleton lines={4} /> : executions.isError ? <ErrorState error={executions.error} onRetry={() => void executions.refetch()} compact /> : <DataTable rows={executions.data || []} columns={executionColumns} getRowKey={(fill) => fill.execution_id} emptyTitle="No executions" />}</TerminalPanel><TerminalPanel id="operational-activity" title="Operational activity" description="Recent audit events">{audit.isError ? <ErrorState error={audit.error} onRetry={() => void audit.refetch()} compact /> : <ActivityTimeline items={activity.slice(0, 12)} />}</TerminalPanel></div>
-    <TerminalPanel id="manual-order-ticket" title="Manual order ticket" description="Advanced operator action. Manual orders still run pre-trade risk and use an idempotency key." defaultOpen={false}><ManualOrderTicket instruments={instruments.data || []} pending={createOrder.isPending} error={createOrder.error} result={createOrder.data} onSubmit={(payload) => createOrder.mutate(payload)} /></TerminalPanel>
+    <TerminalPanel id="manual-order-ticket" title="Manual order ticket" description="Advanced operator action. Manual orders use the durable intent, risk, OMS, and Gateway pipeline." defaultOpen={false}><ManualOrderTicket
+      instruments={instruments.data || []}
+      positions={positions.data || []}
+      session={session}
+      account={account}
+      portfolio={portfolio}
+      pending={createOrder.isPending}
+      polling={Boolean(activeIntent)}
+      pollTimedOut={pollTimedOut}
+      error={createOrder.error || manualIntentStatus.error}
+      result={manualResult}
+      onSubmit={submitManualOrder}
+    /></TerminalPanel>
     {!desktopInspector && <OrderDrawer order={selectedOrder} detail={orderDetail.data} detailLoading={orderDetail.isLoading} executions={(executions.data || []).filter((fill) => fill.order_id === selectedOrder?.internal_id)} modifying={modify.isPending} error={modify.error || cancel.error || orderDetail.error} onClose={() => setSelectedOrder(null)} onModify={(payload) => selectedOrder && modify.mutate({order: selectedOrder, payload})} onCancel={() => selectedOrder && setCancelOrder(selectedOrder)} />}
     <ConfirmActionDialog open={Boolean(cancelOrder)} title={`Cancel ${cancelOrder?.symbol || ''} order?`} description="Cancellation is submitted through OMS and Gateway. A fill may still arrive while the cancel is pending." confirmLabel="Request cancellation" pending={cancel.isPending} onClose={() => setCancelOrder(null)} onConfirm={(reason) => {if (cancelOrder) cancel.mutate({order: cancelOrder, reason})}} />
   </div>
@@ -106,12 +184,26 @@ function orderHistoryItem(item: OrderStatusHistory) {
     status:item.to_status,detail:`${code}${reason} · ${item.source}${broker}${operator}`}
 }
 
+function riskDecisionItem(item: Record<string, unknown>, index: number) {
+  const requested = item.requested_quantity === null || item.requested_quantity === undefined ? '—' : String(item.requested_quantity)
+  const approved = item.approved_quantity === null || item.approved_quantity === undefined ? '—' : String(item.approved_quantity)
+  return {
+    id: typeof item.id === 'number' ? item.id : index,
+    time: typeof item.created_at === 'string' ? item.created_at : '',
+    type: 'RISK_DECISION',
+    title: String(item.check_name || 'Pre-trade risk'),
+    status: String(item.decision || 'UNKNOWN'),
+    detail: `${String(item.reason || 'No risk reason supplied')} · requested ${requested} · approved ${approved}`,
+  }
+}
+
 function OrderDetailContent({order, detail, detailLoading, executions, modifying, error, onModify, onCancel, showCancel = false}: {order: Order; detail?: OrderDetail; detailLoading: boolean; executions: Execution[]; modifying: boolean; error: unknown; onModify: (payload: Record<string, string>) => void; onCancel: () => void; showCancel?: boolean}) {
-  const submit = (event: React.FormEvent<HTMLFormElement>) => {event.preventDefault(); const form = new FormData(event.currentTarget); const payload: Record<string, string> = {quantity: String(form.get('quantity')), time_in_force: String(form.get('time_in_force'))}; if (form.get('limit_price')) payload.limit_price = String(form.get('limit_price')); onModify(payload)}
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {event.preventDefault(); const form = new FormData(event.currentTarget); const payload: Record<string, string> = {quantity: String(form.get('quantity')), time_in_force: String(form.get('time_in_force'))}; if (form.get('limit_price')) payload.limit_price = String(form.get('limit_price')); if (form.get('stop_price')) payload.stop_price = String(form.get('stop_price')); onModify(payload)}
   return <div className="order-detail-content">
-    <div className="order-summary"><StatusBadge status={order.status} /><FillProgress filled={order.filled_quantity} total={order.quantity} /><dl className="detail-list"><div><dt>Type</dt><dd>{order.order_type}</dd></div><div><dt>Time in force</dt><dd>{order.time_in_force}</dd></div><div><dt>Broker order ID</dt><dd><code>{order.broker_order_id || 'Pending'}</code></dd></div><div><dt>Average fill</dt><dd className="mono">{formatMoney(order.average_fill_price)}</dd></div><div><dt>Created</dt><dd>{formatDateTime(order.created_at)}</dd></div><div><dt>Updated</dt><dd>{formatDateTime(order.updated_at)}</dd></div></dl></div>
-    {canModifyOrder(order) ? <form className="drawer-form" onSubmit={submit}><h3>Modify eligible fields</h3><label>Total quantity<input name="quantity" type="number" min={Number(order.filled_quantity)} step="any" defaultValue={String(order.quantity)} required /></label><label>Limit price<input name="limit_price" type="number" min="0" step="any" /></label><label>Time in force<select name="time_in_force" defaultValue={order.time_in_force}><option>DAY</option><option>GTC</option></select></label><button className="button-primary" disabled={modifying}>{modifying ? 'Submitting…' : 'Submit modification'}</button></form> : <div className="inline-note">This order’s current state does not permit modification.</div>}
+    <div className="order-summary"><StatusBadge status={order.status} /><FillProgress filled={order.filled_quantity} total={order.quantity} /><dl className="detail-list"><div><dt>Origin</dt><dd>{order.origin || 'STRATEGY'}</dd></div><div><dt>Type</dt><dd>{order.order_type}</dd></div><div><dt>Time in force</dt><dd>{order.time_in_force}</dd></div><div><dt>Broker order ID</dt><dd><code>{order.broker_order_id || 'Pending'}</code></dd></div><div><dt>Average fill</dt><dd className="mono">{formatMoney(order.average_fill_price)}</dd></div><div><dt>Created</dt><dd>{formatDateTime(order.created_at)}</dd></div><div><dt>Updated</dt><dd>{formatDateTime(order.updated_at)}</dd></div></dl></div>
+    {canModifyOrder(order) ? <form className="drawer-form" onSubmit={submit}><h3>Modify eligible fields</h3><label>Total quantity<input name="quantity" type="number" min={Number(order.filled_quantity)} step="any" defaultValue={String(order.quantity)} required /></label>{['LMT', 'STP_LMT'].includes(order.order_type) && <label>Limit price<input name="limit_price" type="number" min="0" step="any" /></label>}{['STP', 'STP_LMT'].includes(order.order_type) && <label>Stop price<input name="stop_price" type="number" min="0" step="any" /></label>}<label>Time in force<select name="time_in_force" defaultValue={order.time_in_force}><option>DAY</option><option>GTC</option></select></label><button className="button-primary" disabled={modifying}>{modifying ? 'Submitting…' : 'Submit modification'}</button></form> : <div className="inline-note">This order’s current state does not permit modification.</div>}
     {error ? <ErrorState title="Order action failed" error={error} compact /> : null}
+    <h3>Risk decisions</h3>{detailLoading ? <Skeleton lines={2} /> : <ActivityTimeline items={(detail?.risk_decisions || []).map(riskDecisionItem)} emptyDescription="No risk decisions are attached to this order." />}
     <h3>Status timeline</h3>{detailLoading ? <Skeleton lines={3} /> : <ActivityTimeline items={(detail?.status_history || []).map(orderHistoryItem)} emptyDescription="No order status has been persisted." />}
     <h3>Fills</h3><DataTable rows={executions} columns={[{id: 'id', header: 'Execution', cell: (fill) => <code>{fill.execution_id}</code>}, {id: 'qty', header: 'Quantity', cell: (fill) => formatNumber(fill.quantity)}, {id: 'price', header: 'Price', cell: (fill) => formatMoney(fill.price, fill.currency)}, {id: 'time', header: 'Time', cell: (fill) => formatDateTime(fill.executed_at)}]} getRowKey={(fill) => fill.execution_id} emptyTitle="No fills for this order" />
     {showCancel && <div className="drawer-actions"><button className="button-danger-subtle" disabled={!canCancelOrder(order)} onClick={onCancel}>Cancel order</button></div>}
@@ -123,9 +215,4 @@ function OrderDrawer({order, detail, detailLoading, executions, modifying, error
   return <DetailDrawer open title={`${order.symbol} ${order.side}`} subtitle={order.internal_id} onClose={onClose}>
     <OrderDetailContent order={order} detail={detail} detailLoading={detailLoading} executions={executions} modifying={modifying} error={error} onModify={onModify} onCancel={onCancel} showCancel />
   </DetailDrawer>
-}
-
-function ManualOrderTicket({instruments, pending, error, result, onSubmit}: {instruments: {id: number; symbol: string; exchange: string}[]; pending: boolean; error: unknown; result?: {internal_id: string; status: string; decision?: string}; onSubmit: (payload: Record<string, string | number>) => void}) {
-  const submit = (event: React.FormEvent<HTMLFormElement>) => {event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({instrument_id: Number(form.get('instrument_id')), side: String(form.get('side')), order_type: String(form.get('order_type')), quantity: String(form.get('quantity')), reference_price: String(form.get('reference_price')), time_in_force: String(form.get('time_in_force'))})}
-  return <><form className="form-grid four-columns" onSubmit={submit}><label>Instrument<select name="instrument_id" required><option value="">Choose</option>{instruments.map((instrument) => <option key={instrument.id} value={instrument.id}>{instrument.symbol} · {instrument.exchange}</option>)}</select></label><label>Side<select name="side"><option>BUY</option><option>SELL</option></select></label><label>Type<select name="order_type"><option>MKT</option><option>LMT</option><option>STP</option><option>STP_LMT</option></select></label><label>Quantity<input aria-label="Quantity" name="quantity" type="number" min="0.00000001" step="any" required /></label><label>Reference price<input aria-label="Reference price" name="reference_price" type="number" min="0.00000001" step="any" required /></label><label>Time in force<select name="time_in_force"><option>DAY</option><option>GTC</option></select></label><button className="button-primary form-submit" disabled={pending}><SlidersHorizontal />{pending ? 'Running risk…' : 'Submit to risk'}</button></form>{error && <ErrorState title="Manual order was blocked" error={error} compact />}{result && <div className="inline-success"><StatusBadge status={result.decision || result.status} />Order <code>{result.internal_id}</code> entered OMS.</div>}</>
 }

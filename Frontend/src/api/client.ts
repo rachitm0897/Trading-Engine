@@ -60,8 +60,8 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   return body.data
 }
 
-export function mutationOptions(method: 'POST' | 'PATCH' | 'DELETE', payload?: unknown, idempotent = false): RequestInit {
+export function mutationOptions(method: 'POST' | 'PATCH' | 'DELETE', payload?: unknown, idempotent = false, idempotencyKey?: string): RequestInit {
   const headers: Record<string, string> = {}
-  if (idempotent) headers['Idempotency-Key'] = crypto.randomUUID()
+  if (idempotent) headers['Idempotency-Key'] = idempotencyKey || crypto.randomUUID()
   return {method, headers, body: payload === undefined ? undefined : JSON.stringify(payload)}
 }

@@ -11,6 +11,7 @@ import type {
   Execution,
   GatewayStatus,
   Instrument,
+  ManualOrderIntentStatus,
   Order,
   OrderDetail,
   Portfolio,
@@ -105,6 +106,11 @@ export const queries = {
     queryFn: () => request<OrderDetail>(`orders/${internalId}/detail/`),
     enabled: Boolean(internalId),
     refetchInterval: POLL_INTERVAL,
+  }),
+  manualOrderIntent: (intentId?: number | null) => queryOptions({
+    queryKey: ['manual-order-intent', intentId ?? 'none'],
+    queryFn: () => request<ManualOrderIntentStatus>(`orders/intents/${intentId}/status/`),
+    enabled: Boolean(intentId),
   }),
   executions: (filters: {portfolioId?: number | null; symbol?: string} = {}) => queryOptions({
     queryKey: ['executions', filters],

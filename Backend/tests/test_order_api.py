@@ -115,6 +115,67 @@ def test_manual_market_order_creates_one_pending_origin_intent(client, settings,
     assert AuditEvent.objects.get(aggregate_id=str(intent.pk)).data["origin"] == "MANUAL"
 
 
+def test_manual_intent_status_reports_durable_pending_state(client, settings, monkeypatch):
+    _, portfolio, _, instrument = _manual_case(settings)
+    _disable_task_enqueue(monkeypatch)
+    accepted = _post(client, _payload(portfolio, instrument), "manual-status-pending")
+    intent_id = accepted.json()["data"]["intent_id"]
+
+    status = client.get(f"/api/v1/orders/intents/{intent_id}/status/")
+
+    assert status.status_code == 200
+    assert status.json()["data"] == accepted.json()["data"]
+
+
+def test_manual_intent_status_reports_real_oms_order_and_command(client, settings, monkeypatch):
+    _, portfolio, _, instrument = _manual_case(settings)
+    _disable_task_enqueue(monkeypatch)
+    _healthy_gateway(monkeypatch)
+    accepted = _post(client, _payload(portfolio, instrument), "manual-status-order")
+    command = execute_order_intent(accepted.json()["data"]["intent_id"])
+
+    status = client.get(f"/api/v1/orders/intents/{command.order.intent_id}/status/")
+
+    assert status.status_code == 200
+    assert status.json()["data"] == {
+        "intent_id": command.order.intent_id,
+        "origin": "MANUAL",
+        "operation_status": "QUEUED",
+        "retryable": False,
+        "message": "Manual order intent accepted for asynchronous execution",
+        "internal_id": command.order.internal_id,
+        "status": "QUEUED",
+        "approved_quantity": "5.00000000",
+        "broker_command": {
+            "id": command.pk,
+            "command_type": "PLACE",
+            "status": "PENDING",
+            "attempt_count": 0,
+            "gateway_command_id": None,
+        },
+    }
+
+
+def test_manual_intent_status_does_not_expose_non_manual_or_missing_intents(client, settings):
+    _, portfolio, _, instrument = _manual_case(settings)
+    automatic = OrderIntent.objects.create(
+        portfolio=portfolio,
+        instrument=instrument,
+        side="BUY",
+        quantity=1,
+        reference_price=101,
+        idempotency_key="strategy-intent",
+        origin=OrderIntent.Origin.STRATEGY,
+    )
+
+    automatic_result = client.get(f"/api/v1/orders/intents/{automatic.pk}/status/")
+    missing_result = client.get("/api/v1/orders/intents/999999/status/")
+
+    assert automatic_result.status_code == 404
+    assert automatic_result.json()["error"]["code"] == "MANUAL_ORDER_INTENT_NOT_FOUND"
+    assert missing_result.status_code == 404
+
+
 def test_manual_http_request_never_calls_gateway(client, settings, monkeypatch):
     _, portfolio, _, instrument = _manual_case(settings)
     _disable_task_enqueue(monkeypatch)

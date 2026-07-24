@@ -18,7 +18,7 @@ api_patterns = [
     path("system/", views.system), path("auth/session/",views.auth_session), path("gateway/", views.gateway), path("accounts/", views.accounts),
     path("instruments/", views.instruments), path("portfolios/", views.portfolios), path("positions/", views.positions),
     path("rebalances/", views.rebalances),
-    path("orders/", views.orders), path("orders/<str:internal_id>/detail/", views.orders, {"action":"detail"}), path("orders/<str:internal_id>/", views.orders), path("orders/<str:internal_id>/cancel/", views.orders, {"action":"cancel"}), path("executions/", views.executions), path("reconciliation/", views.reconciliation),
+    path("orders/", views.orders), path("orders/intents/<int:intent_id>/status/", views.manual_order_intent_status), path("orders/<str:internal_id>/detail/", views.orders, {"action":"detail"}), path("orders/<str:internal_id>/", views.orders), path("orders/<str:internal_id>/cancel/", views.orders, {"action":"cancel"}), path("executions/", views.executions), path("reconciliation/", views.reconciliation),
     path("risk/", views.risk), path("audit/", views.audit),
 ]
 new_api = [

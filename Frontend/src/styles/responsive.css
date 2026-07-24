@@ -1,6 +1,7 @@
 @media (max-width: 1280px) {
   .metric-grid, .metric-grid.compact { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .form-grid.four-columns { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .manual-order-context { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .context-selectors label { grid-template-columns: minmax(100px, 140px); }
   .context-selectors label > span { display: none; }
   .row-actions { flex-direction: column; align-items: flex-end; }
@@ -63,7 +64,7 @@
   .session-start-form, .replacement-credentials { grid-template-columns: 1fr; }
   .context-selectors label { grid-template-columns: 100px; }
   .context-selectors .icon-button { display: none; }
-  .metric-grid, .metric-grid.compact, .form-grid.two-columns, .form-grid.three-columns, .form-grid.four-columns, .review-grid, .indicator-list, .configuration-list { grid-template-columns: 1fr; }
+  .metric-grid, .metric-grid.compact, .form-grid.two-columns, .form-grid.three-columns, .form-grid.four-columns, .review-grid, .indicator-list, .configuration-list, .manual-order-context { grid-template-columns: 1fr; }
   .metric-card { padding: .85rem; }
   .wizard-content { min-height: 0; }
   .wizard-footer { flex-wrap: wrap; }
