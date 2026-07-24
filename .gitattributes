@@ -1,1 +1,6 @@
+# Container scripts and build definitions must stay Unix-readable even when
+# the repository is checked out from Windows.
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose*.yml text eol=lf
 Trading_Engine_Stock_Strategy_Universe_JSON/*.json text eol=lf

@@ -57,7 +57,12 @@ services:
 
   kafka-init:
     image: apache/kafka:3.9.0
-    entrypoint: ["/bin/bash", "/create-topics.sh"]
+    entrypoint:
+      - /bin/bash
+      - -ec
+      - |
+        sed 's/\r$//' /create-topics.sh > /tmp/create-topics.sh
+        exec /bin/bash /tmp/create-topics.sh
     volumes:
       - ./streaming/kafka/create-topics.sh:/create-topics.sh:ro
     networks: [private]
