@@ -3,10 +3,12 @@ import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {Check, Plus, Trash2} from 'lucide-react'
 import {Link} from 'react-router-dom'
 
-import {API_BASE_URL, mutationOptions, request} from '../../api/client'
+import {API_BASE_URL, mutationOptions, request, withQuery} from '../../api/client'
 import {queries} from '../../api/queries'
 import type {
   GoalTimeframe,
+  PortfolioBuilderReadiness,
+  PortfolioBuilderReadinessBlocker,
   PortfolioConstructionPlan,
   PortfolioConstructionRun,
   PortfolioGoalAllocation,
@@ -76,6 +78,8 @@ export function PortfolioBuilderPage() {
   const [batch, setBatch] = useState<RecommendationBatch | null>(null)
   const [preview, setPreview] = useState<PortfolioConstructionRun | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const readiness = useQuery(queries.builderReadiness(selectedPortfolioId, plan?.id))
+  const batchQuery = useQuery(queries.recommendationBatch(batch?.id))
 
   useEffect(() => setDrafts((plan?.goals || []).map(asDraft)), [plan?.id, plan?.version])
   useEffect(() => {
@@ -88,6 +92,7 @@ export function PortfolioBuilderPage() {
     await Promise.all([
       queryClient.invalidateQueries({queryKey: ['construction-plans', selectedPortfolioId ?? 'none']}),
       queryClient.invalidateQueries({queryKey: ['construction-runs', selectedPortfolioId ?? 'none']}),
+      queryClient.invalidateQueries({queryKey: ['portfolio-builder-readiness', selectedPortfolioId ?? 'none']}),
     ])
   }
   const createPlan = useMutation({
@@ -125,6 +130,17 @@ export function PortfolioBuilderPage() {
           display_order: goal.display_order,
         }),
       )))
+      const preflight = await request<PortfolioBuilderReadiness>(withQuery(
+        'portfolio-construction/readiness/',
+        {portfolio: selectedPortfolioId, plan: plan.id},
+      ))
+      queryClient.setQueryData(
+        ['portfolio-builder-readiness', selectedPortfolioId ?? 'none', plan.id],
+        preflight,
+      )
+      if (!preflight.ready) {
+        throw new Error(preflight.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`).join(' · '))
+      }
       return request<RecommendationBatch>(
         `portfolio-construction/plans/${plan.id}/recommendations/`,
         mutationOptions('POST', {}, true),
@@ -173,6 +189,9 @@ export function PortfolioBuilderPage() {
     ...(Math.abs(allocated - 100) > 0.000001 ? ['Enabled goals must total exactly 100%'] : []),
     ...drafts.filter((goal) => goal.enabled && goal.risk_level > MAXIMUM_RISK[goal.timeframe_bucket]).map((goal) => `${goal.name} exceeds the risk allowed for ${goal.timeframe_bucket}`),
   ]
+  const shownBatch = batchQuery.data || batch
+  const shownReadiness = readiness.data
+  const recommendationPending = Boolean(shownBatch && ['QUEUED', 'RUNNING'].includes(shownBatch.status))
   const shownPreview = preview || runs.data?.find((item) => item.status === 'COMPLETED') || null
 
   if (!selectedPortfolioId) return <EmptyState title="Select a portfolio" description="Portfolio Builder needs one broker-backed portfolio context." />
@@ -199,7 +218,9 @@ export function PortfolioBuilderPage() {
       </ol>
 
       {step === 1 && <TerminalPanel id="portfolio-goals" title="1. Goals" description="Enabled goal allocations must total exactly 100%." collapsible={false}>
-        <div className="builder-total"><strong>Allocated: {formatNumber(allocated)}% of 100%</strong><span className={localErrors.length ? 'field-error' : 'positive-text'}>{localErrors.length ? localErrors.join(' · ') : 'Ready to generate'}</span></div>
+        <div className="builder-total"><strong>Allocated: {formatNumber(allocated)}% of 100%</strong><span className={localErrors.length || shownReadiness?.blockers?.length ? 'field-error' : 'positive-text'}>{localErrors.length ? localErrors.join(' · ') : readiness.isLoading ? 'Checking recommendation readiness' : shownReadiness?.ready ? 'Ready to generate' : 'Recommendation setup is blocked'}</span></div>
+        {readiness.isError && <ErrorState title="Readiness preflight failed" error={readiness.error} compact />}
+        {shownReadiness && !shownReadiness.ready && <BuilderReadinessBlockers blockers={shownReadiness.blockers} />}
         <div className="goal-editor-list">
           {drafts.map((goal, index) => <GoalEditor key={goal.id} goal={goal} plan={plan} index={index}
             onChange={(changes) => setDrafts((current) => current.map((item) => item.id === goal.id ? {...item, ...changes} : item))}
@@ -208,13 +229,13 @@ export function PortfolioBuilderPage() {
         {!drafts.length && <EmptyState title="No goals yet" description="Add a goal row to begin." />}
         <div className="system-actions">
           <button className="button-secondary" disabled={addGoal.isPending || drafts.length >= 10} onClick={() => addGoal.mutate()}><Plus />Add goal</button>
-          <button className="button-primary" disabled={Boolean(localErrors.length) || generate.isPending} onClick={() => generate.mutate()}>{generate.isPending ? 'Generating recommendations…' : 'Save goals & generate recommendations'}</button>
+          <button className="button-primary" disabled={Boolean(localErrors.length) || readiness.isLoading || !shownReadiness?.ready || generate.isPending} onClick={() => generate.mutate()}>{generate.isPending ? 'Queueing recommendations…' : 'Save goals & generate recommendations'}</button>
         </div>
         {(addGoal.isError || removeGoal.isError || generate.isError) && <ErrorState title="Recommendations could not be generated" error={addGoal.error || removeGoal.error || generate.error} compact />}
       </TerminalPanel>}
 
-      {step === 2 && <RecommendationStep batch={batch} pending={generate.isPending || previewMutation.isPending}
-        error={generate.error || previewMutation.error} onBack={() => setStep(1)} onRegenerate={() => generate.mutate()}
+      {step === 2 && <RecommendationStep batch={shownBatch} pending={generate.isPending || recommendationPending || previewMutation.isPending}
+        error={generate.error || batchQuery.error || previewMutation.error} onBack={() => setStep(1)} onRegenerate={() => generate.mutate()}
         onPreview={() => previewMutation.mutate()} />}
 
       {step === 3 && <PreviewApplyStep run={shownPreview} mode={system.data?.execution_mode || 'SHADOW'}
@@ -226,6 +247,16 @@ export function PortfolioBuilderPage() {
         onClose={() => setConfirmOpen(false)} onConfirm={async () => { await applyMutation.mutateAsync() }} />
     </>}
   </div>
+}
+
+function BuilderReadinessBlockers({blockers}: {blockers: PortfolioBuilderReadinessBlocker[]}) {
+  return <section className="inline-warning" role="status" aria-label="Portfolio Builder readiness blockers">
+    <div>
+      <strong>Portfolio Builder is not ready</strong>
+      <p>Resolve these setup requirements, then retry the preflight:</p>
+      <ul>{blockers.map((blocker) => <li key={blocker.code}><code>{blocker.code}</code> — {blocker.message}</li>)}</ul>
+    </div>
+  </section>
 }
 
 function GoalEditor({goal, plan, onChange, onRemove, removeDisabled, index}: {
@@ -261,8 +292,9 @@ function RecommendationStep({batch, pending, error, onBack, onRegenerate, onPrev
 }) {
   return <TerminalPanel id="plan-recommendations" title="2. Recommendations" description="Each goal receives a diversified stock set with one primary strategy per stock." collapsible={false}>
     {!batch ? <EmptyState title="No recommendation batch" description="Return to Goals and generate recommendations for the complete plan." /> : <>
-      <div className="apply-summary"><StatusBadge status={batch.status} /><div><strong>Recommendations ready</strong><span>{batch.goals.length} goals · generated {new Date(batch.created_at).toLocaleString()}</span></div></div>
-      {batch.goals.map((goal) => <RecommendationGoalCard key={goal.goal_id} goal={goal} />)}
+      <div className="apply-summary"><StatusBadge status={batch.status} /><div><strong>{batch.status === 'COMPLETED' ? 'Recommendations ready' : batch.status === 'FAILED' ? 'Recommendation generation failed' : 'Recommendation generation is queued'}</strong><span>{batch.goals.length} goals · requested {new Date(batch.created_at).toLocaleString()}</span></div></div>
+      {batch.status === 'COMPLETED' && batch.goals.map((goal) => <RecommendationGoalCard key={goal.goal_id} goal={goal} />)}
+      {['QUEUED', 'RUNNING'].includes(batch.status) && <p className="inline-note">The research worker is generating this batch. This page is polling its durable status.</p>}
       {batch.error && <ErrorState title="Recommendation batch failed" error={new Error(batch.error)} compact />}
     </>}
     {error ? <ErrorState title="Recommendation workflow failed" error={error} compact /> : null}
@@ -282,7 +314,9 @@ function RecommendationGoalCard({goal}: {goal: RecommendationBatchGoal}) {
       <p><strong>{stock.strategy_name || stock.research_strategy_id}</strong> · primary strategy · {stock.execution_timeframe}</p>
       <p className="field-help">Expected return {formatPercent(stock.expected_return)} · volatility {formatPercent(stock.expected_volatility)} · drawdown {formatPercent(stock.expected_drawdown)}</p>
       <p className="field-help">{stock.reason}</p>
-    </article>)}</div> : <p className="inline-note">This goal is intentionally 100% cash.</p>}
+    </article>)}</div> : goal.timeframe === 'NOW'
+      ? <p className="inline-note">This NOW goal is intentionally 100% cash.</p>
+      : <p className="inline-warning">Invalid recommendation: a non-NOW goal returned no stock/strategy sleeves.</p>}
     {goal.fallback_tier === 5 && <p className="field-help">Using the latest validated snapshot during a provider outage. Freshness: {formatCompact(goal.freshness)}</p>}
   </section>
 }
