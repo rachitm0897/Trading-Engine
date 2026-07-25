@@ -47,6 +47,13 @@ def gateway_environment(session, username, password, gateway_token, novnc_passwo
         "NOVNC_PASSWORD": novnc_password,
         "BROKER_ADAPTER": "ib_async",
         "PORT": "8080",
+        "GATEWAY_CONTRACT_SEARCH_MAX_RESULTS": str(settings.GATEWAY_CONTRACT_SEARCH_MAX_RESULTS),
+        "GATEWAY_IBKR_REQUEST_TIMEOUT_SEARCH_CONTRACTS_SECONDS": str(
+            settings.GATEWAY_IBKR_REQUEST_TIMEOUT_SEARCH_CONTRACTS_SECONDS
+        ),
+        "GATEWAY_IBKR_REQUEST_TIMEOUT_QUALIFY_SECONDS": str(
+            settings.GATEWAY_IBKR_REQUEST_TIMEOUT_QUALIFY_SECONDS
+        ),
     }
 
 

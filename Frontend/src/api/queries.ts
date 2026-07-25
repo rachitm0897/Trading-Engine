@@ -34,6 +34,7 @@ import type {
   PortfolioOptimizationRun,
   PortfolioConstructionPlan,
   PortfolioConstructionRun,
+  PortfolioBuilderReadiness,
   RecommendationBatch,
 } from './types'
 
@@ -235,6 +236,15 @@ export const queries = {
     queryFn: () => request<PortfolioConstructionRun[]>(withQuery('portfolio-construction/runs/', {portfolio: portfolioId})),
     enabled: Boolean(portfolioId),
     refetchInterval: POLL_INTERVAL,
+  }),
+  builderReadiness: (portfolioId?: number | null, planId?: number | null) => queryOptions({
+    queryKey: ['portfolio-builder-readiness', portfolioId ?? 'none', planId ?? 'none'],
+    queryFn: () => request<PortfolioBuilderReadiness>(withQuery('portfolio-construction/readiness/', {
+      portfolio: portfolioId,
+      plan: planId,
+    })),
+    enabled: Boolean(portfolioId),
+    refetchInterval: 10_000,
   }),
   recommendationBatch: (batchId?: number | null) => queryOptions({
     queryKey: ['recommendation-batch', batchId ?? 'none'],

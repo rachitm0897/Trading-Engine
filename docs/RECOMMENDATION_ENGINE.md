@@ -19,9 +19,12 @@ A missing deployment snapshot is an operational failure, not a user-facing `BLOC
 ```text
 POST /api/v1/portfolio-construction/plans/{plan_id}/recommendations/
 GET  /api/v1/portfolio-construction/recommendation-batches/{batch_id}/
+GET  /api/v1/portfolio-construction/readiness/?portfolio={portfolio_id}&plan={plan_id}
 ```
 
-POST requires an `Idempotency-Key` and an empty object/body. It locks and snapshots the plan, processes all enabled goals atomically, attaches fixed recommendations, updates selections/assignments, and bumps the plan version once. Calling it again regenerates and replaces the attached recommendation rows.
+POST requires an `Idempotency-Key` and an empty object/body. It locks and snapshots the plan, durably returns a `QUEUED` batch with HTTP 202, and dispatches `generate_recommendation_batch` to Celery. The frontend polls the batch GET until `COMPLETED` or `FAILED`. The worker processes all enabled goals atomically, attaches fixed recommendations, updates selections/assignments, and bumps the plan version once. Re-delivery of the same task cannot process a non-queued batch twice.
+
+The readiness preflight names concrete blockers: bundle validation, active dataset/protocol/universe, the complete 97-strategy registry, runtime mappings, construction profiles, 500 canonical instruments, research coverage, current features, required cache profiles, and a connected command-ready Gateway for non-NOW goals. A non-NOW result with no positive stock/strategy sleeve fails the batch; only NOW may be intentionally cash-only.
 
 Generation creates no order, rebalance, strategy instance, enablement, preview, or LIVE path. Preview remains mandatory and creates no order. Apply remains an explicit separate action through the existing SHADOW/PAPER rebalancing, risk, sizing, OMS, Gateway, ledger, and reconciliation controls. Created or updated strategy instances remain disabled in SHADOW.
 

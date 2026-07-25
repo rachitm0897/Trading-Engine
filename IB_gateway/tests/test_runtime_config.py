@@ -81,6 +81,9 @@ def test_invalid_adapter_fails(adapter):
         ("IBKR_CLIENT_ID", "-1"),
         ("TWS_MAJOR_VRSN", "not-a-number"),
         ("BROKER_REFRESH_SECONDS", "0"),
+        ("GATEWAY_CONTRACT_SEARCH_MAX_RESULTS", "51"),
+        ("GATEWAY_IBKR_REQUEST_TIMEOUT_SEARCH_CONTRACTS_SECONDS", "0"),
+        ("GATEWAY_IBKR_REQUEST_TIMEOUT_QUALIFY_SECONDS", "3601"),
         ("IBC_AUTO_RESTART_TIME", "25:99"),
     ],
 )
@@ -92,11 +95,19 @@ def test_invalid_numeric_and_timeout_configuration_fails_by_variable_name(name, 
 
 
 def test_backend_child_environment_contract_validates_without_public_base_path():
-    environment = valid_real_environment(PORT="8080")
+    environment = valid_real_environment(
+        PORT="8080",
+        GATEWAY_CONTRACT_SEARCH_MAX_RESULTS="12",
+        GATEWAY_IBKR_REQUEST_TIMEOUT_SEARCH_CONTRACTS_SECONDS="12",
+        GATEWAY_IBKR_REQUEST_TIMEOUT_QUALIFY_SECONDS="15",
+    )
 
     configuration = validate_environment(environment)
 
     assert configuration["PORT"] == "8080"
+    assert configuration["GATEWAY_CONTRACT_SEARCH_MAX_RESULTS"] == "12"
+    assert configuration["GATEWAY_IBKR_REQUEST_TIMEOUT_SEARCH_CONTRACTS_SECONDS"] == "12"
+    assert configuration["GATEWAY_IBKR_REQUEST_TIMEOUT_QUALIFY_SECONDS"] == "15"
     assert "TWS_MAJOR_VRSN" not in configuration
     assert "APP_BASE_PATH" not in configuration
 

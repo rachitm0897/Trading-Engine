@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
+from io import StringIO
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,13 +8,20 @@ from unittest.mock import patch
 
 import pytest
 import numpy as np
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.utils import timezone
 
 from apps.accounts.models import BrokerAccount
 from apps.allocation.models import RebalanceRun
 from apps.instruments.models import BrokerContract, InstrumentProviderMapping
 from apps.oms.models import Order
-from apps.portfolio_construction.models import GoalStrategyAssignment, PortfolioConstructionPlan, PortfolioGoalAllocation
+from apps.portfolio_construction.models import (
+    GoalStrategyAssignment,
+    PortfolioConstructionPlan,
+    PortfolioGoalAllocation,
+    StrategyConstructionProfile,
+)
 from apps.portfolio_construction.rules import MAXIMUM_RISK, resolved_goal_rules
 from apps.portfolios.models import TradingPortfolio
 from apps.research.configuration import RecommendationSystemConfiguration
@@ -25,6 +33,7 @@ from apps.research.models import (
     InstrumentEligibilitySnapshot,
     InstrumentFeatureSnapshot,
     RecommendationCacheSnapshot,
+    RecommendationBatchRun,
     ResearchFundamentalFact,
     ResearchIntradayBar,
     ResearchDatasetVersion,
@@ -47,6 +56,7 @@ from apps.research.services.recommendation_cache import (
     _fallback_copy,
     _gics_exposure,
     _price_fallback_candidates,
+    build_cache_snapshot,
     calculate_role_scores,
     target_stock_count,
 )
@@ -189,6 +199,51 @@ def test_bundle_import_registers_every_strategy_and_keeps_pair_models_research_o
         children__children__children__classifications__issuer_id__in=members.values("issuer_id"),
     ).distinct()
     assert represented_sectors.count() == 11
+
+
+def test_local_bootstrap_is_idempotent_and_never_fabricates_research_data():
+    first=StringIO()
+    call_command(
+        "bootstrap_recommendation_system",
+        "--bundle-path",str(BUNDLE),
+        "--skip-external",
+        stdout=first,
+    )
+    second=StringIO()
+    call_command(
+        "bootstrap_recommendation_system",
+        "--bundle-path",str(BUNDLE),
+        "--skip-external",
+        stdout=second,
+    )
+
+    dataset=ResearchDatasetVersion.objects.get(status="ACTIVE")
+    runtime_mappings=ResearchStrategyImplementation.objects.filter(
+        research_strategy__dataset_version=dataset,
+        executable_strategy_definition__isnull=False,
+    )
+    assert dataset.strategies.filter(active=True).count()==97
+    assert dataset.universes.get(key="US_LARGE_CAP_GICS").members.filter(
+        active=True,membership_end__isnull=True,instrument__isnull=False,
+    ).count()==500
+    assert runtime_mappings.exists()
+    assert StrategyConstructionProfile.objects.filter(
+        strategy_definition_id__in=runtime_mappings.values("executable_strategy_definition_id"),
+        construction_enabled=True,
+    ).count()==runtime_mappings.count()
+    assert dataset.protocols.filter(active=True).count()==1
+    assert RecommendationCacheSnapshot.objects.filter(goal_timeframe="NOW",status="COMPLETED").exists()
+    assert ResearchFundamentalFact.objects.count()==0
+    output=second.getvalue()
+    assert "SKIPPED_EXPLICITLY" in output
+    assert '"demo_research_data_created": false' in output
+    assert "no production research data was fabricated" in output
+
+
+def test_bootstrap_requires_explicit_session_or_explicit_external_skip():
+    with pytest.raises(CommandError,match="broker-session-id is required"):
+        call_command("bootstrap_recommendation_system","--bundle-path",str(BUNDLE))
+    assert not ResearchDatasetVersion.objects.exists()
 
 
 def test_all_valid_goal_profiles_have_bounded_counts_and_live_constraints():
@@ -463,6 +518,10 @@ def test_plan_batch_attaches_all_goals_once_without_orders_rebalances_or_instanc
     completed = run_recommendation_batch(batch)
     completed.refresh_from_db(); plan.refresh_from_db(); goal.refresh_from_db()
     assert completed.status == "COMPLETED"
+    recommendation_count=GoalRecommendationRun.objects.count()
+    replayed=run_recommendation_batch(batch)
+    assert replayed.status=="COMPLETED"
+    assert GoalRecommendationRun.objects.count()==recommendation_count
     assert completed.metrics["orders_created"] == completed.metrics["rebalances_created"] == 0
     assert completed.metrics["strategy_instances_created"] == 0
     assert plan.version == original_version + 1
@@ -535,9 +594,15 @@ def test_plan_recommendation_unexpected_failure_is_a_readable_json_envelope(clie
     account = BrokerAccount.objects.create(account_id="DU-REC-ERROR", net_liquidation=10_000, available_cash=10_000)
     portfolio = TradingPortfolio.objects.create(name="Recommendation error envelope", account=account)
     plan = PortfolioConstructionPlan.objects.create(portfolio=portfolio)
-    with patch(
-        "apps.portfolio_construction.views.create_recommendation_batch",
-        side_effect=RuntimeError("private database failure"),
+    with (
+        patch(
+            "apps.portfolio_construction.views.portfolio_builder_readiness",
+            return_value={"ready":True,"blockers":[],"details":{}},
+        ),
+        patch(
+            "apps.portfolio_construction.views.create_recommendation_batch",
+            side_effect=RuntimeError("private database failure"),
+        ),
     ):
         result = client.post(
             f"/api/v1/portfolio-construction/plans/{plan.pk}/recommendations/",
@@ -551,6 +616,119 @@ def test_plan_recommendation_unexpected_failure_is_a_readable_json_envelope(clie
         "details": {},
     }
     assert "private database failure" not in result.content.decode()
+
+
+def test_plan_recommendation_post_only_queues_and_dispatches_celery(client,settings):
+    settings.RESEARCH_BUNDLE_PATH=str(BUNDLE)
+    import_bundle(BUNDLE,activate=True)
+    build_cache_snapshot("NOW",1)
+    account=BrokerAccount.objects.create(
+        account_id="DU-ASYNC-REC",net_liquidation=10_000,available_cash=10_000,
+    )
+    portfolio=TradingPortfolio.objects.create(name="Async recommendation",account=account)
+    plan=PortfolioConstructionPlan.objects.create(portfolio=portfolio)
+    PortfolioGoalAllocation.objects.create(
+        plan=plan,name="Immediate reserve",allocation_weight=1,timeframe_bucket="NOW",risk_level=1,
+    )
+    with patch("apps.portfolio_construction.views.generate_recommendation_batch.delay") as dispatch:
+        result=client.post(
+            f"/api/v1/portfolio-construction/plans/{plan.pk}/recommendations/",
+            data="{}",content_type="application/json",HTTP_IDEMPOTENCY_KEY="async-batch",
+        )
+    body=result.json()["data"]
+    assert result.status_code==202
+    assert body["status"]=="QUEUED"
+    dispatch.assert_called_once_with(body["id"])
+    assert RecommendationBatchRun.objects.get(pk=body["id"]).status=="QUEUED"
+
+
+def test_portfolio_builder_preflight_reports_exact_missing_components(client,settings):
+    settings.RESEARCH_BUNDLE_PATH=str(BUNDLE)
+    account=BrokerAccount.objects.create(account_id="DU-PREFLIGHT")
+    portfolio=TradingPortfolio.objects.create(name="Blocked builder",account=account)
+    plan=PortfolioConstructionPlan.objects.create(portfolio=portfolio)
+    PortfolioGoalAllocation.objects.create(
+        plan=plan,name="Long-term goal",allocation_weight=1,timeframe_bucket="BUILD",risk_level=3,
+    )
+    result=client.get(
+        f"/api/v1/portfolio-construction/readiness/?portfolio={portfolio.pk}&plan={plan.pk}"
+    )
+    body=result.json()["data"]
+    codes={item["code"] for item in body["blockers"]}
+    assert result.status_code==200
+    assert body["ready"] is False
+    assert {
+        "ACTIVE_RESEARCH_DATASET_MISSING",
+        "RECOMMENDATION_CACHES_MISSING",
+        "BROKER_GATEWAY_NOT_CONNECTED",
+    } <= codes
+    blocked=client.post(
+        f"/api/v1/portfolio-construction/plans/{plan.pk}/recommendations/",
+        data="{}",content_type="application/json",HTTP_IDEMPOTENCY_KEY="blocked-preflight",
+    )
+    assert blocked.status_code==503
+    assert blocked.json()["error"]["code"]=="PORTFOLIO_BUILDER_NOT_READY"
+    assert not RecommendationBatchRun.objects.exists()
+
+
+def test_portfolio_builder_preflight_audits_registry_data_features_profiles_and_caches(client,settings):
+    settings.RESEARCH_BUNDLE_PATH=str(BUNDLE)
+    dataset,_=import_bundle(BUNDLE,activate=True)
+    mapped=ResearchStrategyImplementation.objects.filter(
+        research_strategy__dataset_version=dataset,
+        executable_strategy_definition__isnull=False,
+    ).first()
+    assert mapped is not None
+    mapped.executable_strategy_definition=None
+    mapped.save(update_fields=["executable_strategy_definition"])
+    account=BrokerAccount.objects.create(account_id="DU-DETAILED-PREFLIGHT")
+    portfolio=TradingPortfolio.objects.create(name="Detailed blocked builder",account=account)
+    plan=PortfolioConstructionPlan.objects.create(portfolio=portfolio)
+    PortfolioGoalAllocation.objects.create(
+        plan=plan,name="Long-term goal",allocation_weight=1,timeframe_bucket="GROW",risk_level=4,
+    )
+
+    result=client.get(
+        f"/api/v1/portfolio-construction/readiness/?portfolio={portfolio.pk}&plan={plan.pk}"
+    )
+    body=result.json()["data"]
+    codes={item["code"] for item in body["blockers"]}
+    assert body["ready"] is False
+    assert {
+        "STRATEGY_RUNTIME_MAPPINGS_INCOMPLETE",
+        "CONSTRUCTION_PROFILES_INCOMPLETE",
+        "RESEARCH_DATA_MISSING",
+        "RESEARCH_FEATURES_MISSING",
+        "RECOMMENDATION_CACHES_MISSING",
+        "BROKER_GATEWAY_NOT_CONNECTED",
+    } <= codes
+
+
+def test_non_now_empty_cache_fails_instead_of_becoming_intentional_cash():
+    dataset,_=import_bundle(BUNDLE,activate=True)
+    protocol=dataset.protocols.get(active=True)
+    RecommendationCacheSnapshot.objects.create(
+        dataset_version=dataset,protocol_version=protocol,goal_timeframe="FAST",risk_level=3,
+        as_of_date=timezone.localdate(),input_hash="empty-cache".ljust(64,"0"),
+        candidate_pool=[],selected_stocks=[],expected_metrics={"cash_weight":1},
+        fallback_tier=1,status="COMPLETED",expires_at=timezone.now()+timedelta(days=1),
+    )
+    account=BrokerAccount.objects.create(
+        account_id="DU-EMPTY-REC",net_liquidation=10_000,available_cash=10_000,
+    )
+    portfolio=TradingPortfolio.objects.create(name="Empty recommendation",account=account)
+    plan=PortfolioConstructionPlan.objects.create(portfolio=portfolio)
+    PortfolioGoalAllocation.objects.create(
+        plan=plan,name="Growth goal",allocation_weight=1,timeframe_bucket="FAST",risk_level=3,
+    )
+    batch,_=create_recommendation_batch(plan,"empty-non-now")
+
+    with pytest.raises(ValueError,match="cannot be treated as intentional cash-only"):
+        run_recommendation_batch(batch,gateway=SimpleNamespace())
+
+    batch.refresh_from_db()
+    assert batch.status=="FAILED"
+    assert "no positive stock/strategy sleeves" in batch.error
 
 
 def test_now_goal_batch_is_cash_only_and_never_qualifies_or_blocks():

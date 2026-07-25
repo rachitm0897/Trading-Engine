@@ -19,7 +19,10 @@ pytest
 docker build -t trading-engine-backend .
 ```
 
-The image builds from `Backend` alone. Its research bundle and Kafka schemas are below that build context.
+The production image builds from `Backend` alone. Local Compose deliberately
+mounts the trusted root `Trading_Engine_Stock_Strategy_Universe_JSON` bundle
+read-only at `/app/research_bundle`, replacing the stale image-baked sample
+without copying mutable research files into the container.
 
 ## Public routing and health
 

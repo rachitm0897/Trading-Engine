@@ -2,6 +2,8 @@
 
 Portfolio Builder divides one broker-backed `TradingPortfolio` into up to ten virtual goal slices. Goals are construction inputs; they do not own cash, positions, fills, orders, or ledgers.
 
+Before generation, the frontend runs a readiness preflight and shows exact setup blockers for the research bundle, active dataset/protocol, strategy registry, runtime mappings, construction profiles, provider data/features, caches, and the portfolio's Gateway connection. Generation creates a durable queued batch, dispatches it to Celery, and polls the batch endpoint to terminal status.
+
 ## Normal workflow
 
 The `/portfolio-builder` frontend has three steps:
@@ -27,9 +29,10 @@ POST         /api/v1/portfolio-construction/plans/{plan_id}/goals/
 PATCH/DELETE /api/v1/portfolio-construction/goals/{goal_id}/
 POST         /api/v1/portfolio-construction/plans/{plan_id}/recommendations/
 GET          /api/v1/portfolio-construction/recommendation-batches/{batch_id}/
+GET          /api/v1/portfolio-construction/readiness/?portfolio={portfolio_id}&plan={plan_id}
 POST         /api/v1/portfolio-construction/preview/
 GET          /api/v1/portfolio-construction/runs/{run_id}/
 POST         /api/v1/portfolio-construction/runs/{run_id}/apply/
 ```
 
-Recommendation, preview, and apply POSTs require `Idempotency-Key`. Preview and apply runs are polled to terminal status. A failed preview is never rendered as an empty successful allocation.
+Recommendation, preview, and apply POSTs require `Idempotency-Key`. Recommendation batches, previews, and apply runs are polled to terminal status. A failed preview is never rendered as an empty successful allocation, and an empty non-NOW recommendation is never labelled intentional cash.

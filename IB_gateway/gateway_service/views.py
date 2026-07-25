@@ -55,7 +55,14 @@ def _queued(request, command_type, payload):
         return response(status=409,error={"code":"IDEMPOTENCY_CONFLICT","message":str(exc),"details":{}})
     except CommandRetryNotAllowed as exc:
         return response(status=409,error={"code":"RETRY_NOT_ALLOWED","message":str(exc),"details":{}})
-    return response({"command_id":command.pk,"status":command.status},202)
+    return response({
+        "command_id": command.pk,
+        "command_type": command.command_type,
+        "status": command.status,
+        "retryable": command.retryable,
+        "attempt_count": command.attempt_count,
+        "last_error": command.last_error,
+    }, 202)
 
 @protected
 def health(request):
@@ -136,7 +143,12 @@ def contract_search(request):
     if invalid:return invalid
     payload=_payload(request)
     query=str(payload.get("query","")).strip()
-    if not query: return response(status=400,error={"code":"QUERY_REQUIRED","message":"Instrument search query is required","details":{}})
+    if len(query) < 2:
+        return response(status=400,error={
+            "code":"QUERY_TOO_SHORT",
+            "message":"Instrument search query must contain at least 2 characters",
+            "details":{"minimum_length":2},
+        })
     return _queued(request,"SEARCH_CONTRACTS",{"query":query})
 @csrf_exempt
 @protected

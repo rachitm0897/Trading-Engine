@@ -61,6 +61,71 @@ def test_search_command_returns_multiple_exact_contracts():
     process_command(command,broker);command.refresh_from_db()
     assert command.status=="COMPLETED" and len(command.result["results"])==2
 
+
+@override_settings(GATEWAY_CONTRACT_SEARCH_MAX_RESULTS=2)
+def test_ibkr_search_prioritizes_exact_stocks_without_unbounded_detail_requests():
+    def contract(conid, symbol, sec_type):
+        return SimpleNamespace(
+            conId=conid,
+            symbol=symbol,
+            localSymbol=symbol,
+            secType=sec_type,
+            exchange="SMART",
+            primaryExchange="NASDAQ",
+            currency="USD",
+        )
+
+    contracts = [
+        contract(1, "AAPL", "OPT"),
+        contract(2, "AAPLX", "STK"),
+        contract(3, "AAPL", "STK"),
+        contract(4, "AAP", "STK"),
+        contract(5, "AAPL", "STK"),
+    ]
+
+    class FakeIB:
+        RequestTimeout=0
+
+        def reqMatchingSymbols(self, query):
+            assert query == "AAPL"
+            assert self.RequestTimeout == 12
+            return [SimpleNamespace(contract=value) for value in contracts]
+
+        def reqContractDetails(self, value):
+            raise AssertionError("symbol search must not expand every match with reqContractDetails")
+
+    adapter=IBAsyncBrokerAdapter.__new__(IBAsyncBrokerAdapter)
+    adapter.ib=FakeIB()
+    results=adapter.search_contracts("aapl")
+    assert [row["conid"] for row in results]==[3,5]
+    assert all(row["asset_class"]=="STK" for row in results)
+    assert adapter.ib.RequestTimeout==0
+
+
+def test_ibkr_qualification_uses_operation_deadline_and_restores_client_timeout():
+    contract=SimpleNamespace(
+        conId=265598,symbol="AAPL",localSymbol="AAPL",secType="STK",
+        exchange="SMART",primaryExchange="NASDAQ",currency="USD",
+    )
+
+    class FakeIB:
+        RequestTimeout=0
+
+        def qualifyContracts(self,value):
+            assert value is contract
+            assert self.RequestTimeout==15
+            return [value]
+
+    adapter=IBAsyncBrokerAdapter.__new__(IBAsyncBrokerAdapter)
+    adapter.ib=FakeIB()
+    adapter.contracts={}
+    adapter._contract=lambda payload:contract
+    result=adapter.qualify_contract({"conid":contract.conId})
+    assert result["qualified"] is True
+    assert result["conid"]==contract.conId
+    assert adapter.ib.RequestTimeout==0
+
+
 def test_market_subscription_commands_are_idempotent():
     broker=MockBrokerAdapter();broker.connect();payload={"subscription_key":"1:1m","instrument_id":1,"conid":123,
         "symbol":"AAPL","timeframe":"1m","historical_bars":20}

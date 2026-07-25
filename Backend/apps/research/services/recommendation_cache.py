@@ -488,6 +488,23 @@ def warm_all_recommendation_caches(*, as_of_date=None):
     return {"snapshots":rows,"count":len(rows)}
 
 
+def prepare_recommendation_caches(*, as_of_date=None):
+    """Build every cache profile independently and report real data blockers."""
+    dataset=ResearchDatasetVersion.objects.filter(status="ACTIVE").first()
+    if not dataset:raise ValueError("No active research dataset")
+    calculate_role_scores(dataset,as_of_date=as_of_date)
+    rows=[];failures=[]
+    for timeframe,maximum_risk in MAXIMUM_RISK.items():
+        for risk_level in range(1,maximum_risk+1):
+            try:
+                snapshot=build_cache_snapshot(timeframe,risk_level,as_of_date=as_of_date)
+                rows.append({"timeframe":timeframe,"risk_level":risk_level,"snapshot_id":snapshot.pk,
+                             "fallback_tier":snapshot.fallback_tier})
+            except ValueError as exc:
+                failures.append({"timeframe":timeframe,"risk_level":risk_level,"error":str(exc)})
+    return {"snapshots":rows,"count":len(rows),"failures":failures,"ready":not failures}
+
+
 def best_cached_recommendation(timeframe,risk_level):
     now=timezone.now();universe=active_recommendation_universe();dataset=universe.dataset_version
     protocol=BacktestProtocolVersion.objects.get(dataset_version=dataset,active=True)

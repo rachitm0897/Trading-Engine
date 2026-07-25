@@ -66,6 +66,7 @@ new_api = [
     path("portfolio-construction/plans/<int:plan_id>/goals/",construction_views.plan_goals),
     path("portfolio-construction/plans/<int:plan_id>/recommendations/",construction_views.plan_recommendations),
     path("portfolio-construction/recommendation-batches/<int:batch_id>/",construction_views.recommendation_batches),
+    path("portfolio-construction/readiness/",construction_views.builder_readiness),
     path("portfolio-construction/goals/<int:goal_id>/",construction_views.goal_detail),
     path("portfolio-construction/goals/<int:goal_id>/eligible-strategies/",construction_views.goal_eligible_strategies),
     path("portfolio-construction/goals/<int:goal_id>/instruments/",construction_views.goal_instruments),

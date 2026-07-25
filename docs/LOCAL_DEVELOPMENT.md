@@ -29,6 +29,24 @@ Docker Compose is only a local stack for PostgreSQL, Redis, Kafka, topic initial
 
    QCH and `IBKR_GATEWAY_IMAGE` are intentionally absent by default. Managed broker-session creation is unavailable, but health, research, portfolio, streaming, and all other non-broker features continue to start normally. Every broker operation still requires a real managed session; there is no static local route.
 
+   Compose mounts the trusted root research bundle read-only at
+   `/app/research_bundle`. Prepare the local recommendation registry and
+   database with one idempotent command:
+
+   ```bash
+   docker compose exec backend python manage.py bootstrap_recommendation_system --skip-external
+   ```
+
+   This explicit skip installs the 500-stock/97-strategy bundle, mappings,
+   construction profiles, and protocol, but does not fabricate history,
+   features, or recommendation caches that require provider data. To perform
+   real IBKR qualification and Finnhub verification, bind a connected broker
+   session and run:
+
+   ```bash
+   docker compose exec backend python manage.py bootstrap_recommendation_system --broker-session-id <connected-session-uuid>
+   ```
+
 4. Start the Frontend:
 
    ```bash

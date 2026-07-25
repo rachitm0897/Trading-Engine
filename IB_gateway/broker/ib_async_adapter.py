@@ -1,5 +1,6 @@
 from django.conf import settings
 from collections import deque
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 import hashlib
 import json
@@ -17,6 +18,17 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
         return {"connected":self.ib.isConnected()}
     def disconnect(self): self.ib.disconnect()
     def is_connected(self): return self.ib.isConnected()
+    @contextmanager
+    def _request_timeout(self, seconds):
+        """Bound one synchronous ib_async request and restore the shared client setting."""
+        previous = getattr(self.ib, "RequestTimeout", None)
+        if previous is not None:
+            self.ib.RequestTimeout = float(seconds)
+        try:
+            yield
+        finally:
+            if previous is not None:
+                self.ib.RequestTimeout = previous
     def _contract(self, payload):
         from ib_async import Contract, Stock, Forex, Future
         if payload.get("conid"):
@@ -31,27 +43,50 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
             "asset_class":contract.secType,"exchange":contract.exchange or contract.primaryExchange,
             "primary_exchange":contract.primaryExchange,"currency":contract.currency,
             "description":getattr(details,"longName","") or getattr(details,"marketName","") or ""}
-    def _details(self, contract):
-        details = self.ib.reqContractDetails(contract)
-        return next((item for item in details if item.contract.conId == contract.conId), details[0] if details else None)
+    @staticmethod
+    def _search_rank(contract, query):
+        symbol = str(getattr(contract, "symbol", "") or "").upper()
+        local_symbol = str(getattr(contract, "localSymbol", "") or "").upper()
+        security_type = str(getattr(contract, "secType", "") or "").upper()
+        exact = query in {symbol, local_symbol}
+        prefix = symbol.startswith(query) or local_symbol.startswith(query)
+        return (
+            0 if security_type == "STK" and exact else
+            1 if security_type == "STK" and prefix else
+            2 if security_type == "STK" else
+            3 if exact else
+            4 if prefix else
+            5,
+            symbol,
+            local_symbol,
+            int(getattr(contract, "conId", 0) or 0),
+        )
     def search_contracts(self, query):
-        matches = self.ib.reqMatchingSymbols(str(query).strip())
+        normalized = str(query).strip().upper()
+        with self._request_timeout(settings.GATEWAY_IBKR_REQUEST_TIMEOUT_SEARCH_CONTRACTS_SECONDS):
+            matches = self.ib.reqMatchingSymbols(normalized)
         results = []
         seen = set()
-        for match in matches:
+        ranked = sorted(matches or [], key=lambda match: self._search_rank(match.contract, normalized))
+        for match in ranked:
             contract = match.contract
             if contract.conId <= 0 or contract.conId in seen:
                 continue
             seen.add(contract.conId)
-            details = self._details(contract)
-            exact = details.contract if details else contract
-            results.append(self._contract_data(exact, details))
+            # reqMatchingSymbols already returns exact contract identities. Calling
+            # reqContractDetails once per unbounded match serializes IBKR round
+            # trips and can monopolize the sole broker worker for minutes.
+            results.append(self._contract_data(contract))
+            if len(results) >= settings.GATEWAY_CONTRACT_SEARCH_MAX_RESULTS:
+                break
         return results
     def qualify_contract(self, payload):
-        contract = self._contract(payload); qualified = self.ib.qualifyContracts(contract)
+        contract = self._contract(payload)
+        with self._request_timeout(settings.GATEWAY_IBKR_REQUEST_TIMEOUT_QUALIFY_SECONDS):
+            qualified = self.ib.qualifyContracts(contract)
         if not qualified: raise RuntimeError("Contract qualification returned no result")
         contract = qualified[0]; self.contracts[str(contract.conId)] = contract
-        return {**self._contract_data(contract, self._details(contract)), "qualified":True}
+        return {**self._contract_data(contract), "qualified":True}
     def historical_bars(self, payload):
         qualified=self.ib.qualifyContracts(self._contract(payload))
         if not qualified:raise RuntimeError("Selected exact IBKR contract could not be qualified for historical data")

@@ -109,6 +109,9 @@ def validate_environment(environment: Mapping[str, str] | None = None) -> dict[s
         "IBC_2FA_TIMEOUT": ("180", 86400),
         "IBKR_CLIENT_ID": ("17", 999999),
         "BROKER_REFRESH_SECONDS": ("5", 86400),
+        "GATEWAY_CONTRACT_SEARCH_MAX_RESULTS": ("12", 50),
+        "GATEWAY_IBKR_REQUEST_TIMEOUT_SEARCH_CONTRACTS_SECONDS": ("12", 3600),
+        "GATEWAY_IBKR_REQUEST_TIMEOUT_QUALIFY_SECONDS": ("15", 3600),
     }
     for name, (default, maximum) in integer_fields.items():
         try:

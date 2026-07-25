@@ -50,10 +50,16 @@ Compose starts PostgreSQL, Redis, Kafka, topic initialization, Flink, Backend, a
 ```bash
 cp .env.example .env
 docker compose up --build -d
+docker compose exec backend python manage.py bootstrap_recommendation_system --skip-external
 docker compose ps
 powershell -NoProfile -File docs/compose_smoke.ps1
 powershell -NoProfile -File docs/automatic_execution_smoke.ps1
 ```
+
+The bootstrap command uses the root research bundle mounted read-only into
+Backend. The explicit local skip installs the 500-stock/97-strategy registry,
+protocol, mappings, and profiles without inventing provider history; Portfolio
+Builder readiness names the remaining external-data and Gateway blockers.
 
 - Frontend: <http://localhost:5173>
 - Backend system API: <http://localhost:8000/api/v1/system/>

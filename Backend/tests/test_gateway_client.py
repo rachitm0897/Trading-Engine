@@ -1,5 +1,13 @@
+import pytest
 import responses
-from apps.broker_gateway.client import GatewayClient, GatewayRoute
+from django.test import override_settings
+
+from apps.broker_gateway.client import (
+    GatewayClient,
+    GatewayCommandFailed,
+    GatewayCommandTimeout,
+    GatewayRoute,
+)
 
 @responses.activate
 def test_gateway_auth_and_safe_retry():
@@ -24,6 +32,82 @@ def test_gateway_contract_search_replays_completed_command_result():
     responses.get("http://gateway/api/v1/commands/7/",json={"ok":True,"data":{"command_id":7,"status":"COMPLETED","result":{"results":[{"symbol":"AAPL","conid":265598}]}}})
     results=GatewayClient(GatewayRoute("test-replay", "http://gateway/api/v1", "secret")).search_contracts("AAPL")
     assert results==[{"symbol":"AAPL","conid":265598}]
+
+
+@responses.activate
+def test_search_explicitly_retries_a_stored_retryable_failure():
+    failed={"command_id":7,"command_type":"SEARCH_CONTRACTS","status":"FAILED","retryable":True,
+            "attempt_count":1,"last_error":"IBKR temporarily unavailable"}
+    responses.post("http://gateway/api/v1/contracts/search/",json={"ok":True,"data":failed},status=202)
+    responses.get("http://gateway/api/v1/commands/7/",json={"ok":True,"data":failed})
+    responses.post("http://gateway/api/v1/contracts/search/",
+                   json={"ok":True,"data":{"command_id":7,"status":"PENDING"}},status=202)
+    responses.get("http://gateway/api/v1/commands/7/",json={"ok":True,"data":{
+        "command_id":7,"command_type":"SEARCH_CONTRACTS","status":"COMPLETED",
+        "result":{"results":[{"symbol":"AAPL","conid":265598}]}}})
+
+    results=GatewayClient(GatewayRoute("test-retry-stored","http://gateway/api/v1","secret")).search_contracts("AAPL")
+
+    assert results[0]["conid"]==265598
+    posts=[call for call in responses.calls if call.request.method=="POST"]
+    assert "Idempotency-Retry" not in posts[0].request.headers
+    assert posts[1].request.headers["Idempotency-Retry"]=="true"
+    assert posts[0].request.headers["Idempotency-Key"]==posts[1].request.headers["Idempotency-Key"]
+
+
+@responses.activate
+def test_search_retries_a_new_transient_command_failure():
+    failed={"command_id":8,"command_type":"SEARCH_CONTRACTS","status":"FAILED","retryable":True,
+            "attempt_count":1,"last_error":"connection reset"}
+    responses.post("http://gateway/api/v1/contracts/search/",
+                   json={"ok":True,"data":{"command_id":8,"status":"PENDING"}},status=202)
+    responses.get("http://gateway/api/v1/commands/8/",json={"ok":True,"data":failed})
+    responses.post("http://gateway/api/v1/contracts/search/",
+                   json={"ok":True,"data":{"command_id":8,"status":"PENDING"}},status=202)
+    responses.get("http://gateway/api/v1/commands/8/",json={"ok":True,"data":{
+        "command_id":8,"command_type":"SEARCH_CONTRACTS","status":"COMPLETED",
+        "result":{"results":[{"symbol":"AAPL","conid":265598}]}}})
+
+    results=GatewayClient(GatewayRoute("test-retry-new","http://gateway/api/v1","secret")).search_contracts("AAPL")
+    assert results[0]["symbol"]=="AAPL"
+    assert responses.calls[2].request.headers["Idempotency-Retry"]=="true"
+
+
+@responses.activate
+@override_settings(
+    GATEWAY_COMMAND_TIMEOUT_SEARCH_CONTRACTS_SECONDS=0,
+    GATEWAY_COMMAND_POLL_INTERVAL_SECONDS=0,
+)
+def test_search_timeout_exposes_durable_command_metadata():
+    responses.post("http://gateway/api/v1/contracts/search/",json={"ok":True,"data":{
+        "command_id":9,"command_type":"SEARCH_CONTRACTS","status":"PROCESSING",
+        "attempt_count":1,"last_error":""}},status=202)
+
+    with pytest.raises(GatewayCommandTimeout) as raised:
+        GatewayClient(GatewayRoute("test-timeout","http://gateway/api/v1","secret")).search_contracts("AAPL")
+
+    assert raised.value.http_status==504
+    assert raised.value.details["command_id"]==9
+    assert raised.value.details["command_status"]=="PROCESSING"
+    assert raised.value.details["retryable"] is True
+
+
+@responses.activate
+def test_non_retryable_command_failure_preserves_exact_error_details():
+    failed={"command_id":10,"command_type":"QUALIFY","status":"FAILED","retryable":False,
+            "attempt_count":1,"last_error":"No security definition has been found"}
+    responses.post("http://gateway/api/v1/contracts/qualify/",json={"ok":True,"data":failed},status=202)
+    responses.get("http://gateway/api/v1/commands/10/",json={"ok":True,"data":failed})
+
+    with pytest.raises(GatewayCommandFailed) as raised:
+        GatewayClient(GatewayRoute("test-failed","http://gateway/api/v1","secret")).qualify_contract_exact(
+            {"conid":999,"symbol":"NOPE","sec_type":"STK","exchange":"SMART","currency":"USD"},
+            "qualify:NOPE",
+        )
+
+    assert raised.value.http_status==503
+    assert raised.value.retryable is False
+    assert raised.value.details["last_error"]=="No security definition has been found"
 
 
 @responses.activate

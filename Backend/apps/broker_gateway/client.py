@@ -4,12 +4,18 @@ import json
 import time
 
 import requests
+from django.conf import settings
 
 from .crypto import decrypt_secret
 
 
 class GatewayError(RuntimeError):
-    pass
+    def __init__(self, message, *, code="GATEWAY_ERROR", details=None, retryable=False, http_status=None):
+        super().__init__(message)
+        self.code = code
+        self.details = dict(details or {})
+        self.retryable = bool(retryable)
+        self.http_status = http_status
 
 
 class GatewayRouteError(GatewayError):
@@ -21,11 +27,66 @@ class GatewaySessionUnavailable(GatewayRouteError):
 
 
 class GatewayTransportError(GatewayError):
-    pass
+    def __init__(self, message="Broker gateway request failed", *, details=None):
+        super().__init__(
+            message,
+            code="GATEWAY_TRANSPORT_ERROR",
+            details=details,
+            retryable=True,
+            http_status=503,
+        )
 
 
 class GatewayCommandRejected(GatewayError):
-    pass
+    def __init__(self, message, *, code="GATEWAY_COMMAND_REJECTED", details=None, http_status=None):
+        super().__init__(
+            message,
+            code=code,
+            details=details,
+            retryable=False,
+            http_status=http_status,
+        )
+
+
+class GatewayCommandFailed(GatewayError):
+    def __init__(self, message, *, command):
+        details = {
+            "command_id": command.get("command_id"),
+            "command_type": command.get("command_type"),
+            "command_status": command.get("status"),
+            "attempt_count": command.get("attempt_count", 0),
+            "retryable": bool(command.get("retryable")),
+            "last_error": command.get("last_error") or message,
+        }
+        super().__init__(
+            message,
+            code="GATEWAY_COMMAND_FAILED",
+            details=details,
+            retryable=details["retryable"],
+            http_status=503,
+        )
+        self.command = command
+
+
+class GatewayCommandTimeout(GatewayError):
+    def __init__(self, message, *, command, timeout):
+        details = {
+            "command_id": command.get("command_id"),
+            "command_type": command.get("command_type"),
+            "command_status": command.get("status"),
+            "attempt_count": command.get("attempt_count", 0),
+            "retryable": True,
+            "timeout_seconds": timeout,
+            "last_error": command.get("last_error") or "",
+        }
+        super().__init__(
+            message,
+            code="GATEWAY_COMMAND_TIMEOUT",
+            details=details,
+            retryable=True,
+            http_status=504,
+        )
+        self.command = command
 
 
 @dataclass(frozen=True)
@@ -116,10 +177,11 @@ class GatewayClient:
     def _session_key(self, key):
         return f"session:{self.route.session_id}:{key}"[:255]
 
-    def request(self, method, path, *, idempotency_key=None, retries=2, timeout=10, **kwargs):
+    def request(self, method, path, *, idempotency_key=None, retries=2, timeout=None, **kwargs):
         headers = {"Authorization": f"Bearer {self.token}", **kwargs.pop("headers", {})}
         if idempotency_key:
             headers["Idempotency-Key"] = self._session_key(idempotency_key)
+        timeout = float(timeout if timeout is not None else settings.GATEWAY_HTTP_TIMEOUT_SECONDS)
         safe = method.upper() == "GET"
         for attempt in range(retries + 1):
             try:
@@ -138,20 +200,34 @@ class GatewayClient:
                         body = response.json()
                         error = body.get("error") or {}
                         message = error.get("message") if isinstance(error, dict) else error
+                        code = error.get("code") if isinstance(error, dict) else None
+                        details = error.get("details") if isinstance(error, dict) else None
                     except (TypeError, ValueError):
                         message = response.text
+                        code = None
+                        details = None
                     raise GatewayCommandRejected(
-                        str(message or f"Gateway rejected request with HTTP {response.status_code}")
+                        str(message or f"Gateway rejected request with HTTP {response.status_code}"),
+                        code=str(code or "GATEWAY_COMMAND_REJECTED"),
+                        details=details,
+                        http_status=response.status_code,
                     )
                 response.raise_for_status()
                 body = response.json()
                 if not body.get("ok", False):
                     error = body.get("error") or {}
-                    raise GatewayError(str(error.get("message") if isinstance(error, dict) else error))
+                    raise GatewayError(
+                        str(error.get("message") if isinstance(error, dict) else error),
+                        code=str(error.get("code") or "GATEWAY_ERROR") if isinstance(error, dict) else "GATEWAY_ERROR",
+                        details=error.get("details") if isinstance(error, dict) else None,
+                    )
                 return body.get("data")
             except requests.RequestException as exc:
                 if not safe or attempt >= retries:
-                    raise GatewayTransportError("Broker gateway request failed") from exc
+                    raise GatewayTransportError(
+                        "Broker gateway request failed",
+                        details={"operation": path.lstrip("/"), "cause": exc.__class__.__name__},
+                    ) from exc
                 time.sleep(0.05 * (2 ** attempt))
 
     def health(self):
@@ -188,29 +264,95 @@ class GatewayClient:
     def command(self, command_id):
         return self.request("GET", f"commands/{int(command_id)}/")
 
-    def wait_for_command(self, queued, timeout=20):
+    @staticmethod
+    def _operation_timeout(operation):
+        name = str(operation or "DEFAULT").upper()
+        return float(getattr(
+            settings,
+            f"GATEWAY_COMMAND_TIMEOUT_{name}_SECONDS",
+            settings.GATEWAY_COMMAND_TIMEOUT_DEFAULT_SECONDS,
+        ))
+
+    def wait_for_command(self, queued, timeout=None, *, operation=None):
+        timeout = float(timeout if timeout is not None else self._operation_timeout(operation))
         command_id = int(queued["command_id"])
         deadline = time.monotonic() + timeout
         current = queued
+        fetched = False
         while current.get("status") not in {"COMPLETED", "FAILED", "UNKNOWN"} and time.monotonic() < deadline:
-            time.sleep(0.1)
+            time.sleep(float(settings.GATEWAY_COMMAND_POLL_INTERVAL_SECONDS))
             current = self.command(command_id)
-        if current.get("status") in {"COMPLETED", "FAILED", "UNKNOWN"} and "result" not in current:
+            fetched = True
+        if (
+            current.get("status") in {"COMPLETED", "FAILED", "UNKNOWN"}
+            and "result" not in current
+            and not fetched
+        ):
             current = self.command(command_id)
         if current.get("status") in {"FAILED", "UNKNOWN"}:
-            raise GatewayError(current.get("last_error") or f"Gateway command {command_id} failed")
+            raise GatewayCommandFailed(
+                current.get("last_error") or f"Gateway command {command_id} failed",
+                command=current,
+            )
         if current.get("status") != "COMPLETED":
-            raise GatewayError(f"Gateway command {command_id} timed out")
+            raise GatewayCommandTimeout(
+                f"Gateway command {command_id} timed out after {timeout:g} seconds",
+                command=current,
+                timeout=timeout,
+            )
         return current.get("result") or {}
+
+    def _enqueue_retryable_command(self, path, payload, key):
+        queued = self.request(
+            "POST", path, json=payload, idempotency_key=key, retries=0
+        )
+        if queued.get("status") != "FAILED":
+            return queued
+        current = self.command(int(queued["command_id"]))
+        if not current.get("retryable"):
+            raise GatewayCommandFailed(
+                current.get("last_error") or f"Gateway command {current['command_id']} failed",
+                command=current,
+            )
+        return self.request(
+            "POST",
+            path,
+            json=payload,
+            idempotency_key=key,
+            retries=0,
+            headers={"Idempotency-Retry": "true"},
+        )
+
+    def _execute_retryable_command(self, path, payload, key, operation):
+        queued = self._enqueue_retryable_command(path, payload, key)
+        retries = int(settings.GATEWAY_SAFE_COMMAND_RETRIES)
+        for attempt in range(retries + 1):
+            try:
+                return self.wait_for_command(queued, operation=operation)
+            except GatewayCommandFailed as exc:
+                if not exc.retryable or attempt >= retries:
+                    raise
+                queued = self.request(
+                    "POST",
+                    path,
+                    json=payload,
+                    idempotency_key=key,
+                    retries=0,
+                    headers={"Idempotency-Retry": "true"},
+                )
+        raise AssertionError("unreachable")
 
     def search_contracts(self, query):
         self._require_session_purpose("command")
         query = str(query).strip()
         digest = hashlib.sha256(query.casefold().encode()).hexdigest()[:32]
-        queued = self.request(
-            "POST", "contracts/search/", json={"query": query}, idempotency_key=f"contract-search:{digest}", retries=0
+        result = self._execute_retryable_command(
+            "contracts/search/",
+            {"query": query},
+            f"contract-search:{digest}",
+            "SEARCH_CONTRACTS",
         )
-        return self.wait_for_command(queued).get("results", [])
+        return result.get("results", [])
 
     def events(self, after=0):
         return self.request("GET", f"events/?after={int(after)}")
@@ -234,28 +376,29 @@ class GatewayClient:
 
     def qualify_contract(self, payload, key):
         self._require_session_purpose("command")
-        return self.request("POST", "contracts/qualify/", json=payload, idempotency_key=key, retries=0)
+        return self._enqueue_retryable_command("contracts/qualify/", payload, key)
 
     def qualify_contract_exact(self, payload, key):
-        return self.wait_for_command(self.qualify_contract(payload, key))
+        self._require_session_purpose("command")
+        return self._execute_retryable_command("contracts/qualify/", payload, key, "QUALIFY")
 
-    def historical_bars(self, payload, timeout=60):
+    def historical_bars(self, payload, timeout=None):
         self._require_session_purpose("command")
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         digest = hashlib.sha256(canonical.encode()).hexdigest()[:40]
         queued = self.request(
             "POST", "market-data/history/", json=payload, idempotency_key=f"historical-data:{digest}", retries=0
         )
-        return self.wait_for_command(queued, timeout=timeout)
+        return self.wait_for_command(queued, timeout=timeout, operation="HISTORICAL_DATA")
 
-    def historical_schedule(self, payload, timeout=30):
+    def historical_schedule(self, payload, timeout=None):
         self._require_session_purpose("command")
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         digest = hashlib.sha256(canonical.encode()).hexdigest()[:40]
         queued = self.request(
             "POST", "market-data/schedule/", json=payload, idempotency_key=f"historical-schedule:{digest}", retries=0
         )
-        return self.wait_for_command(queued, timeout=timeout)
+        return self.wait_for_command(queued, timeout=timeout, operation="HISTORICAL_SCHEDULE")
 
     def subscribe_market_data(self, payload, key):
         self._require_session_purpose("command")

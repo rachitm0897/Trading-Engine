@@ -833,6 +833,18 @@ export interface PortfolioConstructionPlan {
   updated_at: string
 }
 
+export interface PortfolioBuilderReadinessBlocker {
+  code: string
+  message: string
+  details: JsonRecord
+}
+
+export interface PortfolioBuilderReadiness {
+  ready: boolean
+  blockers: PortfolioBuilderReadinessBlocker[]
+  details: JsonRecord
+}
+
 export interface GoalConstructionStrategy {
   assignment_id: number
   strategy_definition_id: number

@@ -100,13 +100,25 @@ const recommendationBatch = {
 const data: Record<string, unknown> = {
   system: {mode: 'PAPER', execution_mode: 'SHADOW', is_admin: true, global_kill_switch: false, material_breaks: 0, time: '2026-07-13T01:00:00Z'},
   gateway: {connected: true, reconciled: true, mode: 'paper', last_callback: '2026-07-13T01:00:00Z', worker: 'paper-worker'},
+  'broker-sessions': [
+    {id: 'session-1', display_name: 'Primary paper gateway', username_hint: 'du••ry', mode: 'paper',
+      status: 'CONNECTED', connected: true, commands_enabled: true, last_error: '', accounts: [],
+      container_status: 'running', account_count: 2, last_gateway_state: {connected: true, reconciled: true},
+      provisioned_at: null, connected_at: '2026-07-13T00:01:00Z', last_checked_at: '2026-07-13T01:00:00Z',
+      deleted_at: null, needs_novnc: false, novnc_url: null,
+      created_at: '2026-07-13T00:00:00Z', updated_at: '2026-07-13T01:00:00Z'},
+  ],
   accounts: [
     {id: 1, account_id: 'DU-PRIMARY', alias: 'Primary', base_currency: 'USD', net_liquidation: 100000, available_cash: 40000, buying_power: 200000, daily_pnl: 250, is_reconciled: true, kill_switch: false, updated_at: '2026-07-13T01:00:00Z'},
     {id: 2, account_id: 'DU-SECONDARY', alias: 'Secondary', base_currency: 'USD', net_liquidation: 50000, available_cash: 20000, buying_power: 100000, daily_pnl: -25, is_reconciled: true, kill_switch: false, updated_at: '2026-07-13T01:00:00Z'},
   ],
+  'broker-sessions/session-1/accounts': [
+    {id: 1, account_id: 'DU-PRIMARY', alias: 'Primary', base_currency: 'USD', net_liquidation: 100000, available_cash: 40000, buying_power: 200000, daily_pnl: 250, is_reconciled: true, kill_switch: false, available: true, last_seen_at: '2026-07-13T01:00:00Z', default_portfolio_id: 10, updated_at: '2026-07-13T01:00:00Z'},
+    {id: 2, account_id: 'DU-SECONDARY', alias: 'Secondary', base_currency: 'USD', net_liquidation: 50000, available_cash: 20000, buying_power: 100000, daily_pnl: -25, is_reconciled: true, kill_switch: false, available: true, last_seen_at: '2026-07-13T01:00:00Z', default_portfolio_id: 20, updated_at: '2026-07-13T01:00:00Z'},
+  ],
   portfolios: [
-    {id: 10, name: 'Primary paper', account_id: 1, account: 'DU-PRIMARY', cash_buffer_pct: .02, margin_buffer_pct: .1, minimum_notional: 10, minimum_quantity: 1, minimum_drift: .001, kill_switch: false},
-    {id: 20, name: 'Secondary paper', account_id: 2, account: 'DU-SECONDARY', cash_buffer_pct: .02, margin_buffer_pct: .1, minimum_notional: 10, minimum_quantity: 1, minimum_drift: .001, kill_switch: false},
+    {id: 10, name: 'Primary paper', account_id: 1, account: 'DU-PRIMARY', gateway_session_id: 'session-1', cash_buffer_pct: .02, margin_buffer_pct: .1, minimum_notional: 10, minimum_quantity: 1, minimum_drift: .001, kill_switch: false},
+    {id: 20, name: 'Secondary paper', account_id: 2, account: 'DU-SECONDARY', gateway_session_id: 'session-1', cash_buffer_pct: .02, margin_buffer_pct: .1, minimum_notional: 10, minimum_quantity: 1, minimum_drift: .001, kill_switch: false},
   ],
   instruments: [{id: 5, symbol: 'NVDA', asset_class: 'STK', exchange: 'SMART', currency: 'USD', sector: 'Technology', multiplier: 1, lot_size: 1, min_tick: .01, fractional_support: false, trading_calendar: 'XNYS', active: true, tradable: true}, {id: 6, symbol: 'MSFT', asset_class: 'STK', exchange: 'SMART', currency: 'USD', sector: 'Technology', multiplier: 1, lot_size: 1, min_tick: .01, fractional_support: false, trading_calendar: 'XNYS', active: true, tradable: true}],
   positions: [{id: 1, portfolio_id: 10, portfolio: 'Primary paper', account_id: 'DU-PRIMARY', instrument_id: 5, symbol: 'NVDA', asset_class: 'STK', currency: 'USD', quantity: 4, average_cost: 100, market_price: 125, market_value: 500, updated_at: '2026-07-13T01:00:00Z'}],
@@ -171,6 +183,7 @@ const optimizationPreview = {
 let failDashboard = false
 let failStrategyDelete = false
 let failConstructionPreview = false
+let builderReadinessReady = true
 
 function apiPath(input: string) {
   const url = new URL(input, 'http://localhost')
@@ -185,6 +198,7 @@ beforeEach(() => {
   failDashboard = false
   failStrategyDelete = false
   failConstructionPreview = false
+  builderReadinessReady = true
   const firstBuilderAssignment = (data['portfolio-construction/instruments/701/assignments'] as Array<Record<string, unknown>>)[0]
   firstBuilderAssignment.strategy_share = .5
   firstBuilderAssignment.parameter_overrides = {...definition.default_parameters, direction: 'LONG'}
@@ -210,7 +224,12 @@ beforeEach(() => {
       if (path === 'orders') return {ok: true, status: 201, json: async () => ({ok: true, data: {internal_id: 'created-order', status: 'QUEUED', decision: 'APPROVED'}, error: null, meta: {}})} as Response
       if (path === 'portfolio-optimization/preview') return {ok: true, status: 201, json: async () => ({ok: true, data: optimizationPreview, error: null, meta: {}})} as Response
       if (path === 'portfolio-optimization/run') return {ok: true, status: 201, json: async () => ({ok: true, data: {...optimizationPreview, application_status: 'APPLIED', applied_at: '2026-07-13T01:02:00Z', applied_rebalance: {id: 82, mode: 'SHADOW', status: 'PLANNED', phase: 'SHADOW_COMPLETE', planned_turnover: .24}}, error: null, meta: {}})} as Response
-      if (path === 'portfolio-construction/plans/301/recommendations') return {ok: true, status: 201, json: async () => ({ok: true, data: recommendationBatch, error: null, meta: {}})} as Response
+      if (path === 'portfolio-construction/plans/301/recommendations') return {ok: true, status: 202, json: async () => ({
+        ok: true,
+        data: {...recommendationBatch, status: 'QUEUED', goals: recommendationBatch.goals.map((goal) => ({...goal, status: 'QUEUED'}))},
+        error: null,
+        meta: {},
+      })} as Response
       if (path === 'portfolio-construction/preview') {
         const preview = failConstructionPreview
           ? {...constructionPreview, status: 'FAILED', retryable: true, last_error: 'Finnhub API key is not configured', final_target_weights: {}, metrics: {}, goals: [], targets: [], planned_trades: [], rebalance: null}
@@ -222,6 +241,18 @@ beforeEach(() => {
       if (path === 'data-providers/finnhub/configure') return {ok: true, status: 200, json: async () => ({ok: true, data: {...data['data-providers/finnhub'] as object, database_configured: true, masked_api_key: '••••CRET'}, error: null, meta: {}})} as Response
       if (path === 'data-providers/finnhub/test') return {ok: true, status: 200, json: async () => ({ok: true, data: {...data['data-providers/finnhub'] as object, connected: true, source: 'TRANSIENT'}, error: null, meta: {}})} as Response
       return {ok: true, status: 200, json: async () => ({ok: true, data: {}, error: null, meta: {}})} as Response
+    }
+    if (path === 'portfolio-construction/readiness') {
+      const result = builderReadinessReady
+        ? {ready: true, blockers: [], details: {}}
+        : {ready: false, blockers: [
+          {code: 'RESEARCH_DATA_MISSING', message: 'Research history is ready for 0 members; at least 5 are required', details: {current: 0, minimum: 5}},
+          {code: 'BROKER_GATEWAY_NOT_CONNECTED', message: 'The selected portfolio needs a connected, command-ready IBKR broker session', details: {status: 'DISCONNECTED'}},
+        ], details: {}}
+      return {ok: true, status: 200, json: async () => ({ok: true, data: result, error: null, meta: {}})} as Response
+    }
+    if (path === `portfolio-construction/recommendation-batches/${recommendationBatch.id}`) {
+      return {ok: true, status: 200, json: async () => ({ok: true, data: recommendationBatch, error: null, meta: {}})} as Response
     }
     const result = data[path]
     return {ok: true, status: 200, json: async () => ({ok: true, data: result ?? [], error: null, meta: {}})} as Response
@@ -368,6 +399,10 @@ test('portfolio builder generates one-click recommendations, previews merged goa
   await user.click(screen.getByRole('button', {name: 'Save goals & generate recommendations'}))
   expect(await screen.findByRole('heading', {name: '2. Recommendations'})).toBeInTheDocument()
   expect(await screen.findByRole('heading', {name: 'Near-term reserve'})).toBeInTheDocument()
+  expect(vi.mocked(fetch).mock.calls.some(([input, init]) =>
+    String(input).includes(`/portfolio-construction/recommendation-batches/${recommendationBatch.id}/`)
+    && (!init?.method || init.method === 'GET'),
+  )).toBe(true)
   expect(screen.getByRole('heading', {name: 'Long-term growth'})).toBeInTheDocument()
   expect(screen.getByText('Buy and Hold')).toBeInTheDocument()
   expect(screen.getByText('Quality Composite')).toBeInTheDocument()
@@ -383,6 +418,23 @@ test('portfolio builder generates one-click recommendations, previews merged goa
   const applyCalls = vi.mocked(fetch).mock.calls.filter(([input, init]) => String(input).includes('/portfolio-construction/runs/501/apply/') && init?.method === 'POST')
   expect(applyCalls).toHaveLength(1)
 })
+
+
+test('portfolio builder preflight names blockers and prevents recommendation dispatch', async () => {
+  builderReadinessReady = false
+  window.history.replaceState({}, '', '/portfolio-builder')
+  render(<App />)
+
+  expect(await screen.findByText('RESEARCH_DATA_MISSING')).toBeInTheDocument()
+  expect(screen.getByText('BROKER_GATEWAY_NOT_CONNECTED')).toBeInTheDocument()
+  expect(screen.getByText(/Research history is ready for 0 members/)).toBeInTheDocument()
+  expect(screen.getByRole('button', {name: 'Save goals & generate recommendations'})).toBeDisabled()
+  expect(vi.mocked(fetch).mock.calls.some(([input, init]) =>
+    String(input).includes('/portfolio-construction/plans/301/recommendations/')
+    && init?.method === 'POST',
+  )).toBe(false)
+})
+
 
 test('portfolio builder reports a failed preview instead of rendering an empty result', async () => {
   failConstructionPreview = true

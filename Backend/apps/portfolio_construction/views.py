@@ -15,8 +15,10 @@ from apps.core.views import response
 from apps.instruments.models import Instrument
 from apps.portfolios.models import TradingPortfolio
 from apps.strategies.models import OrderPolicy, StrategyDefinition, StrategyRiskPolicy
-from apps.research.models import RecommendationBatchRun
-from apps.research.services.recommendation_batch import create_recommendation_batch, run_recommendation_batch
+from apps.research.models import BacktestProtocolVersion, RecommendationBatchRun, ResearchDatasetVersion
+from apps.research.services.builder_readiness import portfolio_builder_readiness
+from apps.research.services.recommendation_batch import create_recommendation_batch
+from apps.research.tasks import generate_recommendation_batch
 
 from .models import (
     GoalInstrumentSelection,
@@ -268,12 +270,40 @@ def plan_recommendations(request, plan_id):
         payload = _payload(request)
         if payload:
             raise ValueError("The request body must be empty; enabled goals are read from the locked plan")
+        plan = PortfolioConstructionPlan.objects.select_related("portfolio__gateway_session").get(pk=plan_id)
+        readiness = portfolio_builder_readiness(portfolio=plan.portfolio, plan=plan)
+        if not readiness["ready"]:
+            return response(status=503, error={
+                "code": "PORTFOLIO_BUILDER_NOT_READY",
+                "message": "Portfolio Builder prerequisites are not ready",
+                "details": readiness,
+            })
         batch, created = create_recommendation_batch(plan_id, key)
-        if created or batch.status in {"QUEUED", "RUNNING"}:
-            batch = run_recommendation_batch(batch, actor=_actor(request))
-        return response(_recommendation_batch_row(batch), status=201 if created else 200)
+        if batch.status == "QUEUED":
+            try:
+                generate_recommendation_batch.delay(batch.pk)
+            except Exception as exc:
+                logger.exception("Could not dispatch recommendation batch %s", batch.pk)
+                return response(status=503, error={
+                    "code": "RECOMMENDATION_QUEUE_UNAVAILABLE",
+                    "message": "Recommendation batch was created but the worker queue is unavailable",
+                    "details": {
+                        "batch_id": batch.pk,
+                        "batch_status": batch.status,
+                        "retryable": True,
+                        "error": str(exc)[:500],
+                    },
+                })
+        status = 202 if batch.status in {"QUEUED", "RUNNING"} else 200
+        return response(_recommendation_batch_row(batch), status=status)
     except PortfolioConstructionPlan.DoesNotExist:
         return response(status=404, error={"code": "NOT_FOUND", "message": "Construction plan not found", "details": {}})
+    except (ResearchDatasetVersion.DoesNotExist, BacktestProtocolVersion.DoesNotExist) as exc:
+        return response(status=503, error={
+            "code": "RECOMMENDATION_SYSTEM_NOT_READY",
+            "message": "Portfolio Builder research dataset or protocol is not active",
+            "details": {"retryable": False, "blocker": exc.__class__.__name__},
+        })
     except (ValueError, json.JSONDecodeError) as exc:
         return response(status=409, error={"code": "RECOMMENDATION_BATCH_FAILED", "message": str(exc), "details": {}})
     except Exception:
@@ -293,6 +323,23 @@ def recommendation_batches(request, batch_id):
         return response(_recommendation_batch_row(batch))
     except RecommendationBatchRun.DoesNotExist:
         return response(status=404, error={"code": "NOT_FOUND", "message": "Recommendation batch not found", "details": {}})
+
+
+def builder_readiness(request):
+    if request.method != "GET":
+        return response(status=405, error={"code": "METHOD_NOT_ALLOWED", "message": "GET required", "details": {}})
+    try:
+        portfolio_id = request.GET.get("portfolio")
+        if not portfolio_id:
+            raise ValueError("portfolio query parameter is required")
+        portfolio = TradingPortfolio.objects.select_related("gateway_session").get(pk=portfolio_id)
+        plan = None
+        if request.GET.get("plan"):
+            plan = PortfolioConstructionPlan.objects.get(pk=request.GET["plan"], portfolio=portfolio)
+        return response(portfolio_builder_readiness(portfolio=portfolio, plan=plan))
+    except (ValueError, TradingPortfolio.DoesNotExist, PortfolioConstructionPlan.DoesNotExist) as exc:
+        status = 404 if isinstance(exc, (TradingPortfolio.DoesNotExist, PortfolioConstructionPlan.DoesNotExist)) else 400
+        return response(status=status, error={"code": "INVALID_BUILDER_PREFLIGHT", "message": str(exc), "details": {}})
 
 
 def plans(request, plan_id=None):

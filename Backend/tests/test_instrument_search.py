@@ -19,6 +19,11 @@ def test_search_returns_multiple_unseeded_exact_contracts():
     assert all(row["instrument_id"] is None for row in rows)
 
 
+def test_search_rejects_queries_too_short_for_ibkr_symbol_matching():
+    with pytest.raises(ValueError, match="at least 2"):
+        search_broker_instruments("A",BrokerStub())
+
+
 def test_selected_conid_is_qualified_and_persisted_exactly():
     row=BrokerStub.result
     instrument,contract,command=resolve_instrument(ticker=row["symbol"],asset_class=row["asset_class"],exchange=row["exchange"],

@@ -5,13 +5,20 @@
 ## Activate and bootstrap
 
 ```powershell
-cd Backend
-..\.venv\Scripts\python.exe manage.py validate_research_bundle ..\Trading_Engine_Stock_Strategy_Universe_JSON
-..\.venv\Scripts\python.exe manage.py import_research_bundle ..\Trading_Engine_Stock_Strategy_Universe_JSON --activate
-..\.venv\Scripts\python.exe manage.py bootstrap_recommendation_system
+# From the repository root, after rebuilding Backend:
+docker compose up --build -d backend
+
+# Install/activate the bundle, synchronize the 97-strategy registry, create
+# runtime mappings/profiles, activate the protocol, and prepare available caches.
+docker compose exec backend python manage.py bootstrap_recommendation_system --skip-external
+
+# Or include real IBKR qualification and Finnhub mapping verification:
+docker compose exec backend python manage.py bootstrap_recommendation_system --broker-session-id <connected-session-uuid>
 ```
 
-Validation checks schemas, manifest sizes and SHA-256 hashes, fixed counts, taxonomy paths, enum values, symbols, CIKs, and all 97 registry entries. Import is transactional and idempotent, retires the previous active version, registers every explicit implementation, and never evaluates formula text from JSON.
+Compose mounts `Trading_Engine_Stock_Strategy_Universe_JSON/` read-only at the configured `/app/research_bundle` path. The bootstrap command is idempotent and performs validation, import/activation, canonical mapping, registry synchronization, construction-profile creation, protocol activation, explicit external verification, and cache preparation in one operator entry point. `--skip-external` is an explicit local setup choice: it does not pretend IBKR/Finnhub work succeeded, and missing real research data remains visible in Portfolio Builder readiness.
+
+Validation checks schemas, manifest sizes and SHA-256 hashes, fixed counts, taxonomy paths, enum values, symbols, CIKs, and all 97 registry entries. Import is transactional and idempotent, retires the previous active version, registers every explicit implementation, and never evaluates formula text from JSON. The command never fabricates research history, features, scores, or production recommendations.
 
 Issuer identity uses CIK; instrument identity remains exchange/currency/symbol. Mapping is batched and failure-isolated. Finnhub mappings must be verified. IBKR contracts are qualified separately through the authenticated Gateway; Backend never connects to TWS directly. Background qualification covers the universe, while the online path rechecks and substitutes finalists only.
 

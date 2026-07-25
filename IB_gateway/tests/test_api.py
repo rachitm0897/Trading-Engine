@@ -89,6 +89,56 @@ def test_contract_search_and_command_detail(client):
     detail=client.get(f"/api/v1/commands/{command.pk}/",**AUTH).json()["data"]
     assert detail["status"]=="COMPLETED" and detail["result"]["results"][0]["conid"]==123
 
+
+def test_contract_search_rejects_too_short_query_before_enqueue(client):
+    response=client.post(
+        "/api/v1/contracts/search/",
+        json.dumps({"query":"A"}),
+        content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="search:A",
+        **AUTH,
+    )
+    assert response.status_code==400
+    assert response.json()["error"]["code"]=="QUERY_TOO_SHORT"
+    assert response.json()["error"]["details"]["minimum_length"]==2
+    assert GatewayCommand.objects.count()==0
+
+
+@pytest.mark.parametrize(
+    ("path","payload","command_type"),
+    [
+        ("/api/v1/contracts/search/",{"query":"AAPL"},"SEARCH_CONTRACTS"),
+        (
+            "/api/v1/contracts/qualify/",
+            {"conid":265598,"symbol":"AAPL","sec_type":"STK","exchange":"SMART","currency":"USD"},
+            "QUALIFY",
+        ),
+    ],
+)
+def test_safe_contract_commands_can_explicitly_retry_transient_failure(client,path,payload,command_type):
+    headers={
+        **AUTH,
+        "HTTP_IDEMPOTENCY_KEY":f"retry:{command_type}",
+        "content_type":"application/json",
+    }
+    first=client.post(path,json.dumps(payload),**headers)
+    command=GatewayCommand.objects.get(pk=first.json()["data"]["command_id"])
+    command.status="FAILED";command.retryable=True;command.last_error="temporary IBKR connectivity loss";command.save()
+
+    stored=client.post(path,json.dumps(payload),**headers)
+    retried=client.post(path,json.dumps(payload),HTTP_IDEMPOTENCY_RETRY="true",**headers)
+
+    stored_data=stored.json()["data"]
+    assert stored_data["status"]=="FAILED"
+    assert stored_data["retryable"] is True
+    assert stored_data["last_error"]=="temporary IBKR connectivity loss"
+    assert retried.status_code==202
+    assert retried.json()["data"]["status"]=="PENDING"
+    command.refresh_from_db()
+    assert command.command_type==command_type
+    assert command.last_error==""
+    assert command.retryable is False
+
 def test_market_subscription_requires_exact_contract(client):
     bad=client.post("/api/v1/market-data/subscriptions/",json.dumps({"symbol":"AAPL"}),content_type="application/json",**AUTH)
     assert bad.status_code==400
