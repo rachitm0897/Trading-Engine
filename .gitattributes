@@ -4,3 +4,4 @@
 Dockerfile text eol=lf
 docker-compose*.yml text eol=lf
 Trading_Engine_Stock_Strategy_Universe_JSON/*.json text eol=lf
+IB_gateway/ibgateway_version.py text eol=lf
