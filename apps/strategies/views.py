@@ -5,6 +5,14 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from apps.core.views import method_guard, response
 from apps.core.idempotency import IdempotencyConflict, canonical_request_hash, require_matching_request
+from apps.broker_gateway.client import (
+    GatewayCommandRejected,
+    GatewayCommandTimeout,
+    GatewayError,
+    GatewayRouteError,
+    GatewaySessionUnavailable,
+)
+from apps.broker_gateway.models import BrokerGatewaySession
 from apps.instruments.models import Instrument
 from apps.instruments.services import resolve_instrument, search_broker_instruments
 from apps.portfolios.models import TradingPortfolio
@@ -343,30 +351,83 @@ def policies(request):
         "cancel_at_session_end":x.cancel_at_session_end,"outside_regular_hours":x.outside_regular_hours} for x in OrderPolicy.objects.filter(enabled=True)]})
 
 
+def _gateway_failure(exc, *, operation):
+    if isinstance(exc, GatewayCommandTimeout):
+        status = 504
+    elif isinstance(exc, GatewayCommandRejected):
+        status = exc.http_status if exc.http_status in {400, 404, 409, 422} else 502
+    else:
+        status = 503
+    details = {
+        **getattr(exc, "details", {}),
+        "operation": operation,
+        "retryable": bool(getattr(exc, "retryable", False)),
+    }
+    code = getattr(exc, "code", "GATEWAY_UNAVAILABLE")
+    if isinstance(exc, GatewaySessionUnavailable):
+        code = "BROKER_SESSION_UNAVAILABLE"
+    elif isinstance(exc, GatewayRouteError):
+        code = "GATEWAY_ROUTE_UNAVAILABLE"
+    return response(status=status,error={"code":code,"message":str(exc),"details":details})
+
+
 @csrf_exempt
 def resolve(request):
     invalid=method_guard(request,"GET","POST")
     if invalid:return invalid
     try:
         payload=json.loads(request.body or b"{}") if request.method=="POST" else request.GET
-        from apps.broker_gateway.models import BrokerGatewaySession
+        qualification_requested=bool(payload.get("qualify",request.method=="POST"))
+        if qualification_requested and not payload.get("session_id"):
+            return response(status=400,error={
+                "code":"BROKER_SESSION_REQUIRED",
+                "message":"Select a connected broker session before qualifying an IBKR instrument",
+                "details":{"retryable":False},
+            })
         gateway_session=BrokerGatewaySession.objects.get(pk=payload.get("session_id")) if payload.get("session_id") else None
         instrument,contract,command=resolve_instrument(instrument_id=payload.get("instrument_id"),ticker=payload.get("ticker"),
             asset_class=payload.get("asset_class","STK"),exchange=payload.get("exchange","SMART"),currency=payload.get("currency","USD"),
             primary_exchange=payload.get("primary_exchange"),conid=payload.get("conid"),local_symbol=payload.get("local_symbol"),
-            description=payload.get("description"),qualify=bool(payload.get("qualify",request.method=="POST")),gateway_session=gateway_session)
+            description=payload.get("description"),qualify=qualification_requested,gateway_session=gateway_session)
         return response({"instrument_id":instrument.pk,"symbol":instrument.symbol,"asset_class":instrument.asset_class,
             "exchange":instrument.exchange,"currency":instrument.currency,"conid":contract.conid if contract else None,
             "primary_exchange":contract.primary_exchange if contract else None,"qualification_command":command})
-    except Exception as exc:return response(status=400,error={"code":"INSTRUMENT_RESOLUTION_FAILED","message":str(exc),"details":{}})
+    except GatewayError as exc:
+        return _gateway_failure(exc,operation="QUALIFY")
+    except BrokerGatewaySession.DoesNotExist:
+        return response(status=404,error={"code":"BROKER_SESSION_NOT_FOUND","message":"Broker session not found","details":{}})
+    except ValueError as exc:
+        return response(status=400,error={"code":"INSTRUMENT_RESOLUTION_FAILED","message":str(exc),"details":{}})
+    except Exception as exc:
+        return response(status=503,error={
+            "code":"INSTRUMENT_RESOLUTION_FAILED",
+            "message":str(exc),
+            "details":{"operation":"QUALIFY","retryable":True},
+        })
 
 
 def search_instruments(request):
     invalid=method_guard(request,"GET")
     if invalid:return invalid
     try:
-        from apps.broker_gateway.models import BrokerGatewaySession
         raw_session=request.GET.get("session_id")
-        session=BrokerGatewaySession.objects.get(pk=raw_session) if raw_session else None
+        if not raw_session:
+            return response(status=400,error={
+                "code":"BROKER_SESSION_REQUIRED",
+                "message":"Select a connected broker session before searching IBKR instruments",
+                "details":{"retryable":False},
+            })
+        session=BrokerGatewaySession.objects.get(pk=raw_session)
         return response(search_broker_instruments(request.GET.get("query"),gateway_session=session))
-    except Exception as exc:return response(status=502,error={"code":"INSTRUMENT_SEARCH_FAILED","message":str(exc),"details":{}})
+    except BrokerGatewaySession.DoesNotExist:
+        return response(status=404,error={"code":"BROKER_SESSION_NOT_FOUND","message":"Broker session not found","details":{}})
+    except GatewayError as exc:
+        return _gateway_failure(exc,operation="SEARCH_CONTRACTS")
+    except ValueError as exc:
+        return response(status=400,error={"code":"INVALID_INSTRUMENT_SEARCH","message":str(exc),"details":{"minimum_length":2}})
+    except Exception as exc:
+        return response(status=503,error={
+            "code":"INSTRUMENT_SEARCH_FAILED",
+            "message":str(exc),
+            "details":{"operation":"SEARCH_CONTRACTS","retryable":True},
+        })

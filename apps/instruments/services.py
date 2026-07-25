@@ -14,7 +14,7 @@ def _gateway(gateway=None,gateway_session=None):
 
 def search_broker_instruments(query, gateway=None, gateway_session=None):
     query=str(query or "").strip()
-    if len(query)<1:raise ValueError("Instrument search query is required")
+    if len(query)<2:raise ValueError("Instrument search query must contain at least 2 characters")
     rows=_gateway(gateway,gateway_session).search_contracts(query)
     results=[]
     for row in rows:

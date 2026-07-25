@@ -160,6 +160,11 @@ def _create_goal_run(goal, batch, cache, selected_members, *, substitutions, fai
         )
     weighted_rows = [(row, weight) for row, weight in zip(rows, weights) if float(weight) > 1e-10]
     rows = [row for row, _ in weighted_rows]; weights = [weight for _, weight in weighted_rows]
+    if goal.timeframe_bucket != "NOW" and not weighted_rows:
+        raise ValueError(
+            f"Operational deployment failure: {goal.name} produced no positive stock/strategy sleeves; "
+            "non-NOW goals cannot be treated as intentional cash-only recommendations"
+        )
     strategy_ids = {
         item.research_id: item.pk for item in batch.dataset.strategies.filter(
             research_id__in={row["research_strategy_id"] for row in rows}
@@ -237,12 +242,17 @@ def run_recommendation_batch(batch_or_id, *, gateway=None, actor="recommendation
     batch=RecommendationBatchRun.objects.select_related(
         "plan__portfolio__account", "plan__portfolio__gateway_session"
     ).get(pk=batch_id)
-    if gateway is None and batch.plan.portfolio.gateway_session_id:
-        from apps.broker_gateway.client import GatewayClient
-        gateway=GatewayClient.for_portfolio(batch.plan.portfolio,require_commands=True)
-    if batch.status=="COMPLETED":return batch
-    batch.status="RUNNING";batch.started_at=timezone.now();batch.save(update_fields=["status","started_at"])
+    with transaction.atomic():
+        locked = RecommendationBatchRun.objects.select_for_update().get(pk=batch_id)
+        if locked.status != "QUEUED":
+            return batch
+        locked.status="RUNNING";locked.started_at=timezone.now()
+        locked.save(update_fields=["status","started_at"])
+        batch.status=locked.status;batch.started_at=locked.started_at
     try:
+        if gateway is None and batch.plan.portfolio.gateway_session_id:
+            from apps.broker_gateway.client import GatewayClient
+            gateway=GatewayClient.for_portfolio(batch.plan.portfolio,require_commands=True)
         with transaction.atomic():
             batch=RecommendationBatchRun.objects.select_for_update().select_related("plan").get(pk=batch_id)
             plan=PortfolioConstructionPlan.objects.select_for_update().get(pk=batch.plan_id)

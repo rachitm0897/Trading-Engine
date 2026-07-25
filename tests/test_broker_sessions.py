@@ -341,7 +341,13 @@ def test_provision_consumes_secret_builds_required_environment_and_live_waits_fo
     assert set(environment) == {
         "DJANGO_SECRET_KEY", "IB_USERNAME", "IB_PASSWORD", "IBC_TRADING_MODE",
         "GATEWAY_SERVICE_TOKEN", "NOVNC_PASSWORD", "BROKER_ADAPTER", "PORT",
+        "GATEWAY_CONTRACT_SEARCH_MAX_RESULTS",
+        "GATEWAY_IBKR_REQUEST_TIMEOUT_SEARCH_CONTRACTS_SECONDS",
+        "GATEWAY_IBKR_REQUEST_TIMEOUT_QUALIFY_SECONDS",
     }
+    assert environment["GATEWAY_CONTRACT_SEARCH_MAX_RESULTS"] == "12"
+    assert environment["GATEWAY_IBKR_REQUEST_TIMEOUT_SEARCH_CONTRACTS_SECONDS"] == "12"
+    assert environment["GATEWAY_IBKR_REQUEST_TIMEOUT_QUALIFY_SECONDS"] == "15"
     assert environment["GATEWAY_SERVICE_TOKEN"] != environment["NOVNC_PASSWORD"]
     assert len(environment["DJANGO_SECRET_KEY"]) >= 64
     assert "command" not in qch.created[0]
