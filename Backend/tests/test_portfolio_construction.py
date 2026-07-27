@@ -406,7 +406,8 @@ def test_apply_api_queues_polls_and_returns_identical_one_time_result(client):
 
     apply_construction_run_task.run(run.pk, "api-apply-once", "PAPER")
     polled = client.get(f"/api/v1/portfolio-construction/runs/{run.pk}/").json()["data"]
-    assert polled["application_status"] == "APPLIED"
+    assert polled["application_status"] == "ACTIVATING"
+    assert polled["metrics"]["application"]["strategy_activation"] == "QUEUED"
     assert polled["applied_rebalance"]["id"]
     assert polled["strategy_instances"][0]["strategy_instance_id"]
     same = client.post(

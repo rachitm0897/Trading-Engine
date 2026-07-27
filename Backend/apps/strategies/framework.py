@@ -18,6 +18,20 @@ from .plugins import get_plugin
 from .plugins.base import EvaluationContext
 
 
+AUTOMATIC_EXECUTION_STREAMING_DISABLED = "AUTOMATIC_EXECUTION_STREAMING_DISABLED"
+ACTIVATION_IN_PROGRESS_STATES = {"ACTIVATING", "SUBSCRIBING"}
+EVALUATION_READY_STATES = {
+    "READY_WAITING_FOR_LIVE_BAR", "FLAT", "ENTRY_PENDING", "PARTIALLY_LONG", "LONG",
+    "EXIT_PENDING", "PARTIALLY_SHORT", "SHORT",
+}
+
+
+class StrategyActivationError(ValueError):
+    def __init__(self, message, *, retryable=False):
+        super().__init__(message)
+        self.retryable = bool(retryable)
+
+
 def _json_hash(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
@@ -59,7 +73,7 @@ def create_instance(*, name, definition_key, portfolio, timeframe, parameters, t
     with transaction.atomic():
         instance = StrategyInstance.objects.create(name=name, definition=definition, portfolio=portfolio, instrument=instrument,
             timeframe=timeframe, parameters=parameters, target_configuration=target_configuration or {}, risk_policy=risk_policy,
-            order_policy=order_policy, execution_mode=mode, state="BLOCKED" if not contract else "WARMING_UP",
+            order_policy=order_policy, execution_mode=mode, enabled=False, state="DISABLED",
             block_reason="IBKR contract qualification pending" if not contract else "")
         version = _create_version(instance)
         StrategyAllocation.objects.create(strategy_instance=instance, portfolio=portfolio,
@@ -92,7 +106,10 @@ def update_instance(instance, changes):
     if material & set(changes):
         retire_version(instance)
         instance.version += 1
-        instance.state="WARMING_UP";instance.warmup_progress=0;instance.warmup_started_at=timezone.now();instance.warmup_last_progress_at=instance.warmup_started_at
+        instance.state="WARMING_UP" if instance.enabled else "DISABLED"
+        instance.warmup_progress=0
+        instance.warmup_started_at=timezone.now() if instance.enabled else None
+        instance.warmup_last_progress_at=instance.warmup_started_at
     if "instrument" in changes and not hasattr(instance.instrument,"broker_contract"):
         instance.enabled=False;instance.state="BLOCKED";instance.block_reason="Instrument does not have a qualified IBKR contract"
     instance.clean();instance.save()
@@ -150,49 +167,176 @@ def register_inputs(instance, version=None):
         if binding.active!=instance.enabled:binding.active=instance.enabled;binding.save(update_fields=["active"])
         requirement.active_ref_count=requirement.bindings.filter(active=True).count();requirement.save(update_fields=["active_ref_count","updated_at"])
         requirements.append(requirement)
-    cycle=instance.effective_from.isoformat() if instance.enabled and instance.effective_from else "draft"
-    OutboxEvent.objects.get_or_create(idempotency_key=f"strategy-inputs:{instance.pk}:v{version.version}:{cycle}",defaults={
-        "topic":"strategy.inputs.v1","event_type":"strategy.inputs.changed","aggregate_type":"strategy_instance",
-        "aggregate_id":str(instance.pk),"partition_key":str(instance.instrument_id),"payload":{"strategy_instance_id":instance.pk,
-        "strategy_version":version.version,"instrument_id":instance.instrument_id,"timeframe":instance.timeframe,
-        "requirements":[{"identity_hash":x.identity_hash,"input_type":x.input_type,"name":x.name,"role":x.role,
-        "parameters":x.parameters,"implementation_version":x.implementation_version,
-        "warmup_bars":x.warmup_bars} for x in requirements] if instance.enabled else [],"removed_requirement_hashes":[]}})
+    if instance.enabled:
+        cycle=instance.effective_from.isoformat() if instance.effective_from else "active"
+        OutboxEvent.objects.get_or_create(idempotency_key=f"strategy-inputs:{instance.pk}:v{version.version}:{cycle}",defaults={
+            "topic":"strategy.inputs.v1","event_type":"strategy.inputs.changed","aggregate_type":"strategy_instance",
+            "aggregate_id":str(instance.pk),"partition_key":str(instance.instrument_id),"payload":{"strategy_instance_id":instance.pk,
+            "strategy_version":version.version,"instrument_id":instance.instrument_id,"timeframe":instance.timeframe,
+            "requirements":[{"identity_hash":x.identity_hash,"input_type":x.input_type,"name":x.name,"role":x.role,
+            "parameters":x.parameters,"implementation_version":x.implementation_version,
+            "warmup_bars":x.warmup_bars} for x in requirements],"removed_requirement_hashes":[]}})
     return requirements
 
 
-def enable_instance(instance,gateway=None):
+def _activation_queryset():
+    return StrategyInstance.objects.select_related(
+        "definition", "instrument__broker_contract", "portfolio__account",
+        "portfolio__gateway_session",
+    )
+
+
+def _activation_failure(instance_id, reason):
+    reason=str(reason)[:255]
     with transaction.atomic():
-        instance=StrategyInstance.objects.select_for_update().select_related(
-            "instrument", "portfolio__gateway_session"
-        ).get(pk=instance.pk)
-        mode = require_portfolio_execution_mode(
-            instance.portfolio,
-            instance.execution_mode,
-        )
-        require_live_trading_allowed(mode)
-        if not hasattr(instance.instrument,"broker_contract"):
-            instance.state="BLOCKED";instance.block_reason="Instrument does not have a qualified IBKR contract"
-            instance.save(update_fields=["state","block_reason","updated_at"]);raise ValueError(instance.block_reason)
-        now=timezone.now();instance.enabled=True;instance.state="WARMING_UP";instance.block_reason="";instance.effective_from=now;instance.effective_to=None
-        instance.warmup_started_at=now;instance.warmup_last_progress_at=now;instance.warmup_progress=0
-        instance.kill_switch=False
-        instance.save(update_fields=["enabled","kill_switch","state","block_reason","effective_from","effective_to","warmup_started_at","warmup_last_progress_at","warmup_progress","updated_at"])
-        StrategyVersion.objects.filter(pk=current_version(instance).pk).update(activated_at=now)
-        register_inputs(instance)
-        if settings.KAFKA_ENABLED or gateway is not None:
-            from apps.market_streams.subscriptions import reconcile_market_subscription
-            subscription = reconcile_market_subscription(
-                instance.instrument,
-                instance.timeframe,
-                gateway,
-                gateway_session=instance.portfolio.gateway_session,
-            )
-            if subscription.state == "ERROR":
-                raise ValueError(
-                    subscription.last_error or "Market-data subscription setup failed"
-                )
+        instance=StrategyInstance.objects.select_for_update().get(pk=instance_id)
+        if instance.input_bindings.filter(active=True).exists():
+            deactivate_inputs(instance)
+        instance.enabled=False
+        instance.state="BLOCKED"
+        instance.block_reason=reason
+        instance.effective_to=timezone.now()
+        instance.save(update_fields=["enabled","state","block_reason","effective_to","updated_at"])
     return instance
+
+
+def _validate_activation(instance):
+    mode=require_portfolio_execution_mode(instance.portfolio,instance.execution_mode)
+    require_live_trading_allowed(mode)
+    if not settings.KAFKA_ENABLED:
+        raise StrategyActivationError(AUTOMATIC_EXECUTION_STREAMING_DISABLED)
+    contract=getattr(instance.instrument,"broker_contract",None)
+    if not contract or not contract.conid:
+        raise StrategyActivationError("Instrument does not have a qualified IBKR contract")
+    session=instance.portfolio.gateway_session
+    if session is None:
+        raise StrategyActivationError("Portfolio does not have a broker Gateway session")
+    from apps.broker_gateway.models import BrokerGatewaySession
+    if (session.deleted_at or session.status!=BrokerGatewaySession.Status.CONNECTED
+            or not session.commands_enabled or not (session.last_gateway_state or {}).get("connected")):
+        raise StrategyActivationError("Portfolio broker Gateway session is not connected and command-ready",retryable=True)
+    if not session.session_accounts.filter(
+            broker_account_id=instance.portfolio.account_id,available=True).exists():
+        raise StrategyActivationError("Portfolio account is not available through its broker Gateway session")
+    if not instance.definition.enabled:
+        raise StrategyActivationError("Strategy definition is disabled")
+    get_plugin(instance.definition).validate_configuration(instance.parameters,instance.target_configuration)
+    return instance
+
+
+def _complete_action(action_id, *, status, instance, subscription=None, error="", retryable=False):
+    if not action_id:return
+    from .models import StrategyAction
+    result={"strategy_instance_id":instance.pk,"activation_status":instance.state}
+    if subscription is not None:
+        result.update({"market_subscription_id":subscription.pk,"subscription_state":subscription.state})
+    StrategyAction.objects.filter(pk=action_id).update(
+        status=status,result=result,last_error=str(error)[:1000],retryable=retryable,
+        completed_at=timezone.now() if status!="PROCESSING" else None)
+
+
+def enable_instance(instance,gateway=None, *, action=None, construction_run_id=None):
+    """Durably stage activation; explicit fake clients execute synchronously for integration tests."""
+    instance=_activation_queryset().get(pk=instance.pk)
+    try:
+        _validate_activation(instance)
+    except Exception as exc:
+        blocked=_activation_failure(instance.pk,exc)
+        _complete_action(getattr(action,"pk",None),status="FAILED",instance=blocked,error=exc,
+            retryable=bool(getattr(exc,"retryable",False)))
+        raise
+    with transaction.atomic():
+        locked=StrategyInstance.objects.select_for_update().get(pk=instance.pk)
+        version_needs_activation=current_version(locked).activated_at is None
+        if (locked.enabled and locked.state not in {"BLOCKED","ERROR"}
+                and not version_needs_activation):
+            _complete_action(getattr(action,"pk",None),status="COMPLETED",instance=locked)
+            return locked
+        if locked.state=="ACTIVATING":
+            return locked
+        if not version_needs_activation:
+            locked.enabled=False
+        locked.state="ACTIVATING"
+        locked.block_reason=""
+        locked.effective_to=None
+        locked.save(update_fields=["enabled","state","block_reason","effective_to","updated_at"])
+        action_id=getattr(action,"pk",None)
+        if action_id:
+            _complete_action(action_id,status="PROCESSING",instance=locked)
+        if gateway is None:
+            from .tasks import activate_strategy_instance
+            transaction.on_commit(lambda: activate_strategy_instance.delay(
+                locked.pk,action_id,construction_run_id))
+    if gateway is not None:
+        return activate_instance(instance.pk,gateway=gateway,action_id=getattr(action,"pk",None),
+            construction_run_id=construction_run_id)
+    return StrategyInstance.objects.get(pk=instance.pk)
+
+
+def activate_instance(instance_id, *, gateway=None, action_id=None, construction_run_id=None):
+    """Perform idempotent input/subscription activation without holding a DB lock during Gateway I/O."""
+    subscription=None
+    try:
+        instance=_activation_queryset().get(pk=instance_id)
+        _validate_activation(instance)
+        with transaction.atomic():
+            instance=StrategyInstance.objects.select_for_update().select_related(
+                "definition","instrument","portfolio__gateway_session").get(pk=instance_id)
+            now=timezone.now()
+            first_activation=not instance.enabled
+            instance.enabled=True
+            instance.state="ACTIVATING"
+            instance.block_reason=""
+            instance.effective_from=instance.effective_from or now
+            instance.effective_to=None
+            instance.warmup_started_at=instance.warmup_started_at or now
+            instance.warmup_last_progress_at=instance.warmup_last_progress_at or now
+            if first_activation:instance.warmup_progress=0
+            instance.kill_switch=False
+            instance.save(update_fields=["enabled","kill_switch","state","block_reason","effective_from",
+                "effective_to","warmup_started_at","warmup_last_progress_at","warmup_progress","updated_at"])
+            version=current_version(instance)
+            requirements=register_inputs(instance,version)
+            declared=list(get_plugin(instance.definition).required_stream_inputs(instance.parameters))
+            if declared and (not requirements or instance.input_bindings.filter(
+                    strategy_version=version,active=True).count()!=len(requirements)):
+                raise StrategyActivationError("Enabled strategy has no active current-version input bindings")
+            instance.state="SUBSCRIBING"
+            instance.save(update_fields=["state","updated_at"])
+        from apps.market_streams.subscriptions import reconcile_market_subscription
+        subscription=reconcile_market_subscription(
+            instance.instrument,instance.timeframe,gateway,
+            gateway_session=instance.portfolio.gateway_session)
+        if subscription.state=="ERROR":
+            raise StrategyActivationError(
+                subscription.last_error or "Market-data subscription setup failed",
+                retryable=True)
+        StrategyVersion.objects.filter(pk=version.pk,activated_at__isnull=True).update(
+            activated_at=timezone.now())
+        instance=StrategyInstance.objects.get(pk=instance_id)
+        if subscription.state in {"ACTIVE","DEGRADED"}:
+            from apps.market_streams.services import refresh_strategy_warmup_state
+            refresh_strategy_warmup_state(instance)
+        else:
+            StrategyInstance.objects.filter(pk=instance_id).update(state="SUBSCRIBING",block_reason="")
+        instance=StrategyInstance.objects.get(pk=instance_id)
+        _complete_action(action_id,status="COMPLETED",instance=instance,subscription=subscription)
+        if construction_run_id:
+            from apps.portfolio_construction.services import record_strategy_activation_result
+            record_strategy_activation_result(construction_run_id,instance.pk)
+        return instance
+    except Exception as exc:
+        instance=_activation_failure(instance_id,exc)
+        if subscription is not None:
+            from apps.market_streams.subscriptions import refresh_market_subscription_counts
+            refresh_market_subscription_counts(subscription)
+        retryable=bool(getattr(exc,"retryable",False))
+        _complete_action(action_id,status="FAILED",instance=instance,subscription=subscription,
+            error=exc,retryable=retryable)
+        if construction_run_id:
+            from apps.portfolio_construction.services import record_strategy_activation_result
+            record_strategy_activation_result(construction_run_id,instance.pk)
+        raise StrategyActivationError(str(exc),retryable=retryable) from exc
 
 
 def pause_instance(instance,gateway=None):
@@ -217,9 +361,11 @@ def _latest_target_weight(instance):
 def evaluate_instance(instance, *, bar, indicators, previous_indicators=None, event_id=None, source_data_version=1,
                       event_time=None, force=False, retry_failed=False):
     instance=StrategyInstance.objects.select_for_update().select_related("definition","instrument","portfolio").get(pk=instance.pk)
-    if not force and (not instance.enabled or instance.state in {"PAUSED","BLOCKED"} or
-            (instance.state=="ERROR" and not retry_failed)):
-        raise ValueError("Strategy instance is not ready for evaluation")
+    if not force:
+        state_ready=instance.state in EVALUATION_READY_STATES
+        retrying_error=instance.state=="ERROR" and retry_failed
+        if not instance.enabled or not (state_ready or retrying_error):
+            raise ValueError("Strategy instance is not ready for evaluation")
     if not bar.get("is_final",True):
         raise ValueError("Strategies evaluate final bars only")
     if str(bar.get("processing_mode","LIVE")).upper()!="LIVE":

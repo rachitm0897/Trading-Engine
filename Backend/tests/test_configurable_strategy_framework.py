@@ -1,6 +1,7 @@
 from decimal import Decimal
 import pytest
 from django.core.exceptions import ValidationError
+from django.test import override_settings
 from apps.accounts.models import BrokerAccount
 from apps.allocation.models import OrderIntentAttribution, RebalancePolicy
 from apps.instruments.models import BrokerContract, Instrument
@@ -17,6 +18,7 @@ from apps.strategies.evaluation_jobs import process_strategy_evaluation_jobs
 from apps.strategies.framework import create_instance, enable_instance, evaluate_instance, pause_instance, update_instance
 from apps.strategies.models import StrategyAttributedPosition, StrategyDefinition, StrategyTarget, StrategyVersion
 from tests.managed_gateway import bind_gateway_mode
+from tests.strategy_activation import activate_strategy
 
 pytestmark=pytest.mark.django_db
 
@@ -59,7 +61,7 @@ def test_rsi_plugin_is_ticker_portable_and_replay_safe(portfolio):
     instances=[make(portfolio,instrument("TSLA",1),"RSI_MEAN_REVERSION","TSLA_RSI",cfg),
         make(portfolio,instrument("AAPL",2),"RSI_MEAN_REVERSION","AAPL_RSI",cfg)]
     for instance in instances:
-        enable_instance(instance)
+        activate_strategy(instance)
         run=evaluate_instance(instance,bar={"bar_id":f"bar-{instance.instrument.symbol}","close":"100","is_final":True},
             indicators={"rsi":"31"},previous_indicators={"rsi":"29"},event_id=f"event-{instance.instrument.symbol}")
         replay=evaluate_instance(instance,bar={"bar_id":f"bar-{instance.instrument.symbol}","close":"100","is_final":True},
@@ -72,7 +74,7 @@ def test_tsla_rsi_14_five_minute_paper_example_enters_shared_execution_path(port
     tsla=instrument("TSLA",8)
     item=make(portfolio,tsla,"RSI_MEAN_REVERSION","TSLA_RSI_14_5M_PAPER",{"window":14,"entry_threshold":30,
         "exit_threshold":65,"entry_rule":"CROSS_ABOVE","exit_rule":"CROSS_ABOVE","direction":"LONG"},"0.05","PAPER")
-    enable_instance(item)
+    activate_strategy(item)
     run=evaluate_instance(item,bar={"bar_id":"tsla-5m-final","interval":"5m","close":"100","is_final":True},
         indicators={"rsi":"31"},previous_indicators={"rsi":"29"},event_id="tsla-5m-final:1")
     target=run.targets.get();assert target.target_type=="WEIGHT" and target.target_weight==Decimal("0.05")
@@ -86,7 +88,7 @@ def test_tsla_rsi_14_five_minute_paper_example_enters_shared_execution_path(port
 def test_hold_run_keeps_last_changed_target_for_rebalancing(portfolio):
     tsla=instrument("TSLA",9);item=make(portfolio,tsla,"RSI_MEAN_REVERSION","PERSIST_TARGET",{"window":14,
         "entry_threshold":30,"exit_threshold":65,"direction":"LONG"})
-    enable_instance(item)
+    activate_strategy(item)
     evaluate_instance(item,bar={"bar_id":"entry","close":"100","is_final":True},indicators={"rsi":"31"},
         previous_indicators={"rsi":"29"},event_id="entry")
     hold=evaluate_instance(item,bar={"bar_id":"hold","close":"101","is_final":True},indicators={"rsi":"40"},
@@ -100,15 +102,15 @@ def test_strategy_portability_separate_state_and_shared_indicator(portfolio):
     rsi1=make(portfolio,tsla,"RSI_MEAN_REVERSION","TSLA_RSI_A",{"window":14,"entry_threshold":30,"exit_threshold":65,"direction":"LONG"})
     rsi2=make(portfolio,tsla,"RSI_MEAN_REVERSION","TSLA_RSI_B",{"window":14,"entry_threshold":25,"exit_threshold":70,"direction":"LONG"})
     sma=make(portfolio,tsla,"SMA_CROSSOVER","TSLA_SMA",{"fast_window":20,"slow_window":50,"direction":"LONG"})
-    enable_instance(rsi1);enable_instance(rsi2)
+    activate_strategy(rsi1);activate_strategy(rsi2)
     shared=rsi1.input_bindings.get(requirement__name="rsi").requirement
     assert shared.active_ref_count==2
     assert rsi2.input_bindings.get(requirement__name="rsi").requirement_id==shared.pk
-    enable_instance(sma)
+    activate_strategy(sma)
     evaluate_instance(rsi1,bar={"bar_id":"r","close":"100","is_final":True},indicators={"rsi":"31"},previous_indicators={"rsi":"29"},event_id="r")
     evaluate_instance(sma,bar={"bar_id":"s","close":"100","is_final":True},indicators={"sma_fast":"11","sma_slow":"10"},previous_indicators={"sma_fast":"9","sma_slow":"10"},event_id="s")
     rsi1.refresh_from_db();sma.refresh_from_db();rsi2.refresh_from_db()
-    assert rsi1.state=="LONG" and sma.state=="LONG" and rsi2.state=="WARMING_UP"
+    assert rsi1.state=="LONG" and sma.state=="LONG" and rsi2.state=="READY_WAITING_FOR_LIVE_BAR"
 
 
 def test_multi_strategy_targets_net_to_one_paper_intent_with_attribution(portfolio):
@@ -116,7 +118,7 @@ def test_multi_strategy_targets_net_to_one_paper_intent_with_attribution(portfol
     long=make(portfolio,tsla,"FIXED_WEIGHT_REBALANCE","TSLA_FIXED_LONG",{"direction":"BOTH"},"0.05","PAPER")
     short=make(portfolio,tsla,"FIXED_WEIGHT_REBALANCE","TSLA_FIXED_SHORT",{"direction":"BOTH"},"-0.02","PAPER")
     for item,event in [(long,"long"),(short,"short")]:
-        enable_instance(item);evaluate_instance(item,bar={"bar_id":event,"close":"100","is_final":True},indicators={},event_id=event)
+        activate_strategy(item);evaluate_instance(item,bar={"bar_id":event,"close":"100","is_final":True},indicators={},event_id=event)
     RebalancePolicy.objects.create(portfolio=portfolio,minimum_trade_notional=1,maximum_turnover=1,mode="PAPER")
     snapshot=build_portfolio_target_snapshot(portfolio,prices={tsla.pk:100})
     assert Decimal(snapshot.net_targets[str(tsla.pk)])==Decimal("0.03")
@@ -137,7 +139,7 @@ def test_multi_strategy_targets_net_to_one_paper_intent_with_attribution(portfol
 
 def test_plugin_failure_isolated_to_its_version(portfolio,monkeypatch):
     tsla=instrument("TSLA",5);item=make(portfolio,tsla,"FIXED_WEIGHT_REBALANCE","FAIL_ONLY_THIS",{"direction":"LONG"})
-    enable_instance(item)
+    activate_strategy(item)
     class Broken:
         def evaluate(self,context):raise RuntimeError("plugin exploded")
     monkeypatch.setattr("apps.strategies.framework.get_plugin",lambda definition:Broken())
@@ -155,7 +157,7 @@ def test_plugin_failure_isolated_to_its_version(portfolio,monkeypatch):
 def test_persisted_final_inputs_trigger_once_and_corrected_bar_gets_new_namespace(portfolio):
     from django.utils import timezone
     tsla=instrument("TSLA",6);item=make(portfolio,tsla,"SMA_CROSSOVER","STREAMING_SMA",{"fast_window":2,"slow_window":3,"direction":"LONG"})
-    enable_instance(item);now=timezone.now()
+    activate_strategy(item);now=timezone.now()
     def bar(version):
         return MarketBar.objects.create(instrument=tsla,bar_id="stable",interval="5m",window_start=now,window_end=now,
             open=100,high=101,low=99,close=101,volume=10,version=version,is_final=True,source_event_count=1,produced_at=now)
@@ -215,7 +217,7 @@ def test_shared_strategies_reuse_and_reference_count_market_subscription(portfol
     gateway=Gateway();item=instrument("SHARED",321)
     first=make(portfolio,item,"FIXED_WEIGHT_REBALANCE","SHARED_A",{"direction":"LONG"})
     second=make(portfolio,item,"FIXED_WEIGHT_REBALANCE","SHARED_B",{"direction":"LONG"})
-    enable_instance(first,gateway);enable_instance(second,gateway)
+    activate_strategy(first,gateway=gateway);activate_strategy(second,gateway=gateway)
     subscription=MarketDataSubscription.objects.get();assert subscription.consumer_count==2 and len(gateway.subscribes)==1
     pause_instance(first,gateway);assert MarketDataSubscription.objects.get().consumer_count==1 and not gateway.cancels
     pause_instance(second,gateway);assert MarketDataSubscription.objects.get().consumer_count==0 and len(gateway.cancels)==1
@@ -238,20 +240,22 @@ def test_strategy_activation_rolls_back_when_subscription_setup_fails(portfolio)
         {"direction":"LONG"},
     )
 
-    with pytest.raises(ValueError, match="subscription rejected"):
-        enable_instance(instance, FailingGateway())
+    with override_settings(KAFKA_ENABLED=True):
+        with pytest.raises(ValueError, match="subscription rejected"):
+            enable_instance(instance, FailingGateway())
 
     instance.refresh_from_db()
     assert instance.enabled is False
     assert instance.versions.get().activated_at is None
     assert instance.input_bindings.exists()
     assert not instance.input_bindings.filter(active=True).exists()
-    assert not MarketDataSubscription.objects.exists()
+    subscription=MarketDataSubscription.objects.get()
+    assert subscription.state=="ERROR" and subscription.consumer_count==0
 
 
 def test_real_final_bar_advances_strategy_warmup(portfolio):
     item=instrument("WARM",654);instance=make(portfolio,item,"FIXED_WEIGHT_REBALANCE","WARMUP_FINAL",{"direction":"LONG"})
-    enable_instance(instance)
+    activate_strategy(instance,ready=False)
     persist_bar({"produced_at":"2026-07-13T00:01:01+00:00","payload":{"bar_id":"warm-1","instrument_id":item.pk,
         "interval":"5m","window_start":"2026-07-13T00:00:00+00:00","window_end":"2026-07-13T00:05:00+00:00",
         "open":"10","high":"11","low":"9","close":"10.5","volume":"100","is_final":True,"version":1}})
@@ -260,7 +264,7 @@ def test_real_final_bar_advances_strategy_warmup(portfolio):
         "open":"10","high":"11","low":"9","close":"10.5","volume":"100","is_final":True,"version":1}})
     instance.refresh_from_db()
     assert instance.warmup_progress==1 and instance.warmup_last_progress_at is not None
-    assert instance.state=="WARMING_UP" and instance.runs.count()==0
+    assert instance.state=="READY_WAITING_FOR_LIVE_BAR" and instance.runs.count()==0
     assert process_strategy_evaluation_jobs()["completed"]==1
     instance.refresh_from_db()
     assert instance.state!="WARMING_UP"

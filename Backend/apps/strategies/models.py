@@ -53,7 +53,8 @@ class StrategyInstance(models.Model):
     MODES = ExecutionMode.choices
     STATES = [(x, x) for x in ["FLAT", "ENTRY_PENDING", "PARTIALLY_LONG", "LONG", "EXIT_PENDING",
         "PARTIALLY_SHORT", "SHORT", "PAUSED", "DISABLED", "FLATTEN_REQUESTED", "KILLED",
-        "BLOCKED", "WARMING_UP", "ERROR"]]
+        "ACTIVATING", "SUBSCRIBING", "WARMING_UP", "READY_WAITING_FOR_LIVE_BAR",
+        "BLOCKED", "ERROR"]]
     name = models.CharField(max_length=128)
     definition = models.ForeignKey(StrategyDefinition, on_delete=models.PROTECT, related_name="instances")
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT, related_name="strategy_instances")
@@ -67,7 +68,7 @@ class StrategyInstance(models.Model):
     execution_mode = models.CharField(
         max_length=16, choices=MODES, default=ExecutionMode.PAPER
     )
-    state = models.CharField(max_length=24, choices=STATES, default="WARMING_UP")
+    state = models.CharField(max_length=32, choices=STATES, default="DISABLED")
     enabled = models.BooleanField(default=False)
     allocated_capital = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     kill_switch = models.BooleanField(default=False)

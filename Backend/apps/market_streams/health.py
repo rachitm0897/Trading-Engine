@@ -91,9 +91,19 @@ def strategy_stream_status(instance):
     if not final_bar_at:missing.append("final bar")
     if requires_indicator and not indicator_at:missing.append("indicator")
     if final_bar_at and not run_at:missing.append("strategy run")
-    status="DEGRADED" if stale or last_error or subscription_state in {"ERROR","DEGRADED"} else ("WARMING_UP" if missing else "HEALTHY")
+    if not instance.enabled and instance.state in {"DISABLED","PAUSED"}:
+        status=instance.state
+    elif instance.state in {"ACTIVATING","SUBSCRIBING","WARMING_UP","READY_WAITING_FOR_LIVE_BAR","BLOCKED"}:
+        status=instance.state
+    else:
+        status="DEGRADED" if stale or last_error or subscription_state in {"ERROR","DEGRADED"} else ("WARMING_UP" if missing else "HEALTHY")
     return {"strategy_id":instance.pk,"strategy":instance.name,"symbol":instance.instrument.symbol,
-        "timeframe":instance.timeframe,"status":status,"subscription_state":subscription_state or "MISSING",
+        "timeframe":instance.timeframe,"enabled":instance.enabled,"lifecycle_state":instance.state,
+        "activation_status":instance.state if instance.state in {
+            "DISABLED","ACTIVATING","SUBSCRIBING","WARMING_UP",
+            "READY_WAITING_FOR_LIVE_BAR","BLOCKED",
+        } else ("ACTIVE" if instance.enabled else "DISABLED"),
+        "status":status,"subscription_state":subscription_state or "MISSING",
         "active_provider":active_provider or "NONE","fallback_state":fallback_state or "FAILED",
         "fallback_reason":fallback_reason,"provider_generation":provider_generation,
         "conid":subscription_conid or getattr(getattr(instance.instrument,"broker_contract",None),"conid",None),

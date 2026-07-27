@@ -30,7 +30,7 @@ from apps.portfolio_construction.models import (
 )
 from apps.reconciliation.models import ReconciliationBreak, ReconciliationRun
 from apps.strategies.deletion import delete_strategy_instance
-from apps.strategies.framework import create_instance, enable_instance, evaluate_instance
+from apps.strategies.framework import create_instance, evaluate_instance
 from apps.strategies.models import (
     StrategyAllocation,
     StrategyAttributedPosition,
@@ -41,6 +41,7 @@ from apps.strategies.models import (
     StrategyVersion,
 )
 from tests.managed_gateway import bind_gateway_mode
+from tests.strategy_activation import activate_strategy
 
 
 pytestmark = pytest.mark.django_db
@@ -111,7 +112,7 @@ def test_deletion_removes_configuration_runtime_and_allocations_but_preserves_fi
     version = instance.versions.get()
     requirement_ids = list(instance.input_bindings.values_list("requirement_id", flat=True))
 
-    enable_instance(instance)
+    activate_strategy(instance)
     completed_run = evaluate_instance(
         instance,
         bar={"bar_id": "delete-complete", "close": "100", "is_final": True},
@@ -399,8 +400,8 @@ def test_deletion_detaches_portfolio_builder_assignment(client, portfolio, instr
 def test_deletion_updates_shared_input_reference_counts(portfolio, instrument):
     first = make_instance(portfolio, instrument, "Shared delete first")
     second = make_instance(portfolio, instrument, "Shared delete second")
-    enable_instance(first)
-    enable_instance(second)
+    activate_strategy(first)
+    activate_strategy(second)
     requirement = first.input_bindings.get().requirement
     requirement.refresh_from_db()
     assert requirement.active_ref_count == 2

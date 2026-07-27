@@ -84,9 +84,10 @@ from apps.strategies.evaluation_jobs import (
     process_strategy_evaluation_jobs,
     recover_stuck_strategy_evaluation_jobs,
 )
-from apps.strategies.framework import create_instance, enable_instance
+from apps.strategies.framework import create_instance
 from apps.strategies.models import StrategyRun, StrategyTarget
 from tests.managed_gateway import bind_managed_gateway
+from tests.strategy_activation import activate_strategy
 
 
 pytestmark = pytest.mark.django_db
@@ -221,7 +222,7 @@ def _domain(settings, suffix):
         execution_mode="PAPER",
         qualify=False,
     )
-    enable_instance(strategy)
+    activate_strategy(strategy)
     return AutomaticDomain(
         account=account,
         portfolio=portfolio,

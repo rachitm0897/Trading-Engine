@@ -375,6 +375,9 @@ def process_snapshot(event, gateway_session=None):
                 if not event_generation and settings.MARKET_DATA_FALLBACK_ENABLED:return
                 from apps.market_data.fallback import handle_ibkr_failure
                 handle_ibkr_failure(subscription,payload.get("error_code"),payload.get("error_message") or "",historical=False)
+                subscription.refresh_from_db()
+                from apps.market_streams.services import sync_subscription_strategy_lifecycle
+                sync_subscription_strategy_lifecycle(subscription)
         return
     if event_type=="market.raw":
         source_key=str(payload.get("source_event_id") or "")
@@ -399,6 +402,8 @@ def process_snapshot(event, gateway_session=None):
             elif not payload.get("provider_generation") or str(subscription.provider_generation)==str(payload.get("provider_generation")):
                 subscription.state="ACTIVE"
                 subscription.save(update_fields=["state","updated_at"])
+                from apps.market_streams.services import sync_subscription_strategy_lifecycle
+                sync_subscription_strategy_lifecycle(subscription)
         return
     if event_type in {"command.place_order.completed","command.modify_order.completed","command.cancel_order.completed"}:
         from apps.execution.dispatch import record_gateway_command_completed
@@ -420,6 +425,9 @@ def process_snapshot(event, gateway_session=None):
                 if not command_generation and settings.MARKET_DATA_FALLBACK_ENABLED:return
                 from apps.market_data.fallback import handle_ibkr_failure
                 handle_ibkr_failure(subscription,message=reason,historical=True)
+                subscription.refresh_from_db()
+                from apps.market_streams.services import sync_subscription_strategy_lifecycle
+                sync_subscription_strategy_lifecycle(subscription)
         return
     if event_type=="command.failed" and payload.get("command_type") in {"PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER"}:
         record_gateway_command_failure(payload,gateway_session);return

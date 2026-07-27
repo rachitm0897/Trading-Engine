@@ -6,6 +6,65 @@ from django.db.migrations.executor import MigrationExecutor
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
+def test_activation_lifecycle_migration_only_disables_inactive_warmups():
+    executor=MigrationExecutor(connection)
+    final_targets=executor.loader.graph.leaf_nodes()
+    old_target=[("strategies","0010_paper_live_execution_modes")]
+    executor.migrate(old_target)
+    old_apps=executor.loader.project_state(old_target).apps
+
+    Account=old_apps.get_model("accounts","BrokerAccount")
+    Portfolio=old_apps.get_model("portfolios","TradingPortfolio")
+    Instrument=old_apps.get_model("instruments","Instrument")
+    Definition=old_apps.get_model("strategies","StrategyDefinition")
+    Instance=old_apps.get_model("strategies","StrategyInstance")
+    account=Account.objects.create(
+        account_id="DU-LIFECYCLE-MIGRATION",net_liquidation=1000,available_cash=1000)
+    portfolio=Portfolio.objects.create(name="Lifecycle migration",account=account)
+    instrument=Instrument.objects.create(symbol="LCMIG",exchange="SMART")
+    definition=Definition.objects.create(
+        key="LIFECYCLE_MIGRATION",
+        name="Lifecycle migration",
+        plugin_path="migration.lifecycle",
+        supported_asset_types=["STK"],
+        supported_directions=["LONG"],
+        supported_timeframes=["1m"],
+    )
+    disabled=Instance.objects.create(
+        name="Disabled warming",
+        definition=definition,
+        portfolio=portfolio,
+        instrument=instrument,
+        timeframe="1m",
+        enabled=False,
+        state="WARMING_UP",
+        block_reason="Preserve diagnostic context",
+    )
+    enabled=Instance.objects.create(
+        name="Enabled warming",
+        definition=definition,
+        portfolio=portfolio,
+        instrument=instrument,
+        timeframe="1m",
+        enabled=True,
+        state="WARMING_UP",
+    )
+
+    executor=MigrationExecutor(connection)
+    executor.migrate([("strategies","0011_activation_lifecycle")])
+    new_apps=executor.loader.project_state(
+        [("strategies","0011_activation_lifecycle")]).apps
+    NewInstance=new_apps.get_model("strategies","StrategyInstance")
+    migrated_disabled=NewInstance.objects.get(pk=disabled.pk)
+    migrated_enabled=NewInstance.objects.get(pk=enabled.pk)
+    assert migrated_disabled.state=="DISABLED"
+    assert migrated_disabled.block_reason=="Preserve diagnostic context"
+    assert migrated_enabled.state=="WARMING_UP"
+
+    executor=MigrationExecutor(connection)
+    executor.migrate(final_targets)
+
+
 def test_dual_strategy_schema_upgrades_to_instance_only_without_losing_references():
     executor = MigrationExecutor(connection)
     final_targets = executor.loader.graph.leaf_nodes()

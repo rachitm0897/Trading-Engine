@@ -34,7 +34,7 @@ def strategy_target(portfolio,instrument,name,weight,input_hash,mode="PAPER"):
         bind_gateway_mode(portfolio, mode=mode.lower())
     instance=StrategyInstance.objects.create(name=name,definition=StrategyDefinition.objects.get(key="FIXED_WEIGHT_REBALANCE"),
         portfolio=portfolio,instrument=instrument,timeframe="1d",parameters={"direction":"LONG"},enabled=True,
-        execution_mode=mode)
+        execution_mode=mode,state="LONG")
     StrategyAllocation.objects.create(portfolio=portfolio,strategy_instance=instance,weight=1)
     version=StrategyVersion.objects.create(strategy_instance=instance,version=instance.version,
         configuration_snapshot={},parameter_hash=f"hash-{instance.pk}")

@@ -410,6 +410,7 @@ def test_strategies_continue_on_finnhub_and_block_only_after_both_providers_fail
     from apps.portfolios.models import TradingPortfolio
     from apps.strategies.framework import create_instance
     from tests.managed_gateway import bind_gateway_mode
+    from tests.strategy_activation import activate_strategy
 
     enable_fallback(settings)
     account = BrokerAccount.objects.create(account_id="DU-FALLBACK")
@@ -420,9 +421,7 @@ def test_strategies_continue_on_finnhub_and_block_only_after_both_providers_fail
     instance, _ = create_instance(name="Fallback strategy", definition_key="FIXED_WEIGHT_REBALANCE",
         portfolio=portfolio, instrument_id=instrument.pk, timeframe="1m", parameters={"direction": "LONG"},
         target_configuration={"target_weight": "0.1"}, qualify=False)
-    instance.enabled = True
-    instance.save(update_fields=["enabled"])
-    item = subscription(instrument, contract.conid, required_history_bars=0)
+    instance,_,item=activate_strategy(instance,ready=False)
     result = failover_subscription(item.pk, ProviderErrorCode.IBKR_DISCONNECTED,
         client=ProviderStub(quote=ProviderQuote(Decimal("100"), timezone.now())))
     instance.refresh_from_db()

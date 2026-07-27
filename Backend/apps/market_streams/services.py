@@ -109,52 +109,141 @@ def persist_indicator(envelope):
     if bar:
         if item.bar_id!=bar.pk:
             item.bar=bar;item.save(update_fields=["bar"])
+        update_warmup_progress(bar)
         if mode=="LIVE" and bar.processing_mode=="LIVE":
             coordinate_bar_readiness(bar)
     return {"indicator_id": item.pk}
 
 
+WARMUP_BLOCK_PREFIX="Warm-up timeout:"
+
+
+def _current_bindings(instance):
+    from apps.strategies.models import StrategyInputBinding
+    return StrategyInputBinding.objects.filter(
+        strategy_instance=instance,
+        strategy_version__version=instance.version,
+        active=True,
+    ).select_related("requirement")
+
+
+def current_warmup_required(instance):
+    return _current_bindings(instance).aggregate(
+        required=Max("requirement__warmup_bars"))["required"] or 0
+
+
+def _warmup_inputs_ready(instance,bindings):
+    indicator_hashes=[
+        binding.requirement.identity_hash
+        for binding in bindings
+        if binding.requirement.input_type=="INDICATOR"
+    ]
+    if not indicator_hashes:return True
+    available=set(IndicatorValue.objects.filter(
+        instrument=instance.instrument,
+        timeframe=instance.timeframe,
+        requirement_identity_hash__in=indicator_hashes,
+        is_final=True,
+        processing_mode__in=["LIVE","WARMUP"],
+    ).values_list("requirement_identity_hash",flat=True))
+    return set(indicator_hashes).issubset(available)
+
+
+def refresh_strategy_warmup_state(instance):
+    from apps.strategies.models import StrategyInstance
+    instance=StrategyInstance.objects.select_related(
+        "instrument","portfolio__gateway_session").get(pk=instance.pk)
+    if not instance.enabled:return instance
+    bindings=list(_current_bindings(instance))
+    required=max((binding.requirement.warmup_bars for binding in bindings),default=0)
+    bar_count=MarketBar.objects.filter(
+        instrument=instance.instrument,interval=instance.timeframe,is_final=True,
+        processing_mode__in=["LIVE","WARMUP"],
+    ).values("bar_id").distinct().count()
+    progress=min(bar_count,required)
+    subscription=instance.instrument.market_subscriptions.filter(
+        gateway_session=instance.portfolio.gateway_session,
+        timeframe=instance.timeframe,
+    ).first()
+    subscription_ready=bool(subscription and subscription.state in {"ACTIVE","DEGRADED"})
+    inputs_ready=_warmup_inputs_ready(instance,bindings)
+    next_state=instance.state
+    next_reason=instance.block_reason
+    recoverable_block=(
+        instance.state=="BLOCKED"
+        and instance.block_reason.startswith(WARMUP_BLOCK_PREFIX)
+    )
+    if subscription_ready and progress>=required and inputs_ready:
+        if instance.state in {"ACTIVATING","SUBSCRIBING","WARMING_UP"} or recoverable_block:
+            next_state="READY_WAITING_FOR_LIVE_BAR"
+            next_reason=""
+    elif subscription_ready and (
+            instance.state in {"ACTIVATING","SUBSCRIBING"} or recoverable_block):
+        next_state="WARMING_UP"
+        next_reason=""
+    changed=(
+        progress!=instance.warmup_progress
+        or next_state!=instance.state
+        or next_reason!=instance.block_reason
+    )
+    if changed:
+        now=timezone.now()
+        if progress!=instance.warmup_progress:
+            instance.warmup_last_progress_at=now
+        instance.warmup_progress=progress
+        instance.state=next_state
+        instance.block_reason=next_reason
+        instance.save(update_fields=[
+            "warmup_progress","warmup_last_progress_at","state","block_reason","updated_at",
+        ])
+        construction_run_id=instance.target_configuration.get("construction_run_id")
+        if construction_run_id:
+            from apps.portfolio_construction.services import record_strategy_activation_result
+            record_strategy_activation_result(construction_run_id,instance.pk)
+    return instance
+
+
+def sync_subscription_strategy_lifecycle(subscription):
+    from apps.strategies.models import StrategyInstance
+    instances=StrategyInstance.objects.filter(
+        enabled=True,
+        portfolio__gateway_session=subscription.gateway_session,
+        instrument=subscription.instrument,
+        timeframe=subscription.timeframe,
+    )
+    updated=0
+    if subscription.state=="ERROR":
+        reason=(subscription.last_error or "Market-data subscription failed")[:255]
+        updated=instances.update(state="BLOCKED",block_reason=reason)
+        for instance in instances:
+            construction_run_id=instance.target_configuration.get("construction_run_id")
+            if construction_run_id:
+                from apps.portfolio_construction.services import record_strategy_activation_result
+                record_strategy_activation_result(construction_run_id,instance.pk)
+        return updated
+    if subscription.state not in {"ACTIVE","DEGRADED"}:
+        return 0
+    for instance in instances:
+        before=(instance.state,instance.block_reason,instance.warmup_progress)
+        refreshed=refresh_strategy_warmup_state(instance)
+        updated+=int(before!=(refreshed.state,refreshed.block_reason,refreshed.warmup_progress))
+    return updated
+
+
 def update_warmup_progress(bar,new_final_bar=False):
     if not bar.is_final:return 0
-    from apps.strategies.models import StrategyInputBinding, StrategyInstance
+    from apps.strategies.models import StrategyInstance
     instances=list(StrategyInstance.objects.filter(
         enabled=True,instrument=bar.instrument,timeframe=bar.interval))
-    required_by_instance=dict(
-        StrategyInputBinding.objects.filter(
-            active=True,
-            strategy_instance_id__in=[instance.pk for instance in instances],
-            strategy_version__version=F("strategy_instance__version"),
-        )
-        .values("strategy_instance_id")
-        .annotate(required=Max("requirement__warmup_bars"))
-        .values_list("strategy_instance_id","required")
-    )
-    requirements={instance.pk:required_by_instance.get(instance.pk,0) or 0 for instance in instances}
-    maximum=max(requirements.values(),default=0)
-    history_count=0
-    if new_final_bar and any(instance.warmup_progress==0 for instance in instances):
-        history_count=len(list(MarketBar.objects.filter(instrument=bar.instrument,interval=bar.interval,is_final=True)
-            .filter(processing_mode__in=["LIVE","WARMUP"])
-            .values_list("bar_id",flat=True).distinct()[:maximum]))
-    changed=[];now=timezone.now()
+    changed=0
     for instance in instances:
-        required=requirements[instance.pk]
-        value=instance.warmup_progress
-        if new_final_bar:
-            value=min(history_count if instance.warmup_progress==0 else instance.warmup_progress+1,required)
-        dirty=False
-        if value!=instance.warmup_progress:
-            instance.warmup_progress=value;instance.warmup_last_progress_at=now;dirty=True
-        if instance.state=="BLOCKED" and instance.block_reason.startswith("Warm-up timeout:"):
-            instance.state="WARMING_UP";instance.block_reason="";dirty=True
-        if dirty:
-            instance.updated_at=now;changed.append(instance)
-    if changed:
-        StrategyInstance.objects.bulk_update(changed,["warmup_progress","warmup_last_progress_at","state","block_reason","updated_at"])
-    return len(changed)
+        before=(instance.warmup_progress,instance.state,instance.block_reason)
+        refreshed=refresh_strategy_warmup_state(instance)
+        changed+=int(before!=(refreshed.warmup_progress,refreshed.state,refreshed.block_reason))
+    return changed
 
 
-ACTIVE_STRATEGY_STATES=["WARMING_UP","FLAT","ENTRY_PENDING","PARTIALLY_LONG","LONG","EXIT_PENDING",
+ACTIVE_STRATEGY_STATES=["READY_WAITING_FOR_LIVE_BAR","FLAT","ENTRY_PENDING","PARTIALLY_LONG","LONG","EXIT_PENDING",
     "PARTIALLY_SHORT","SHORT"]
 
 

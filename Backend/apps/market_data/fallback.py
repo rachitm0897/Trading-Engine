@@ -79,19 +79,38 @@ def _metric_increment(name, *, provider, reason=""):
 
 def _block_strategies(subscription, reason):
     message = str(reason)[:255]
-    return StrategyInstance.objects.filter(
-        enabled=True, instrument_id=subscription.instrument_id, timeframe=subscription.timeframe,
-    ).update(state="BLOCKED", block_reason=message)
+    instances=StrategyInstance.objects.filter(
+        enabled=True,portfolio__gateway_session=subscription.gateway_session,
+        instrument_id=subscription.instrument_id,timeframe=subscription.timeframe,
+    )
+    updated=instances.update(state="BLOCKED",block_reason=message)
+    for instance in instances:
+        construction_run_id=instance.target_configuration.get("construction_run_id")
+        if construction_run_id:
+            from apps.portfolio_construction.services import record_strategy_activation_result
+            record_strategy_activation_result(construction_run_id,instance.pk)
+    return updated
 
 
 def _unblock_strategies(subscription):
-    return StrategyInstance.objects.filter(
-        enabled=True, instrument_id=subscription.instrument_id, timeframe=subscription.timeframe,
+    instances=StrategyInstance.objects.filter(
+        enabled=True,portfolio__gateway_session=subscription.gateway_session,
+        instrument_id=subscription.instrument_id,timeframe=subscription.timeframe,
         state="BLOCKED",
     ).filter(
         Q(block_reason__startswith="Market data unavailable:") | Q(block_reason__startswith="IBKR error ")
         | Q(block_reason__startswith="FINNHUB_") | Q(block_reason__startswith="MARKET_DATA_"),
-    ).update(state="WARMING_UP", block_reason="", warmup_last_progress_at=timezone.now())
+    )
+    from apps.market_streams.services import refresh_strategy_warmup_state
+    updated=0
+    for instance in instances:
+        instance.state="WARMING_UP"
+        instance.block_reason=""
+        instance.warmup_last_progress_at=timezone.now()
+        instance.save(update_fields=["state","block_reason","warmup_last_progress_at","updated_at"])
+        refresh_strategy_warmup_state(instance)
+        updated+=1
+    return updated
 
 
 def _canonical_outbox_key(payload):

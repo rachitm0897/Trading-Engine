@@ -1,5 +1,14 @@
 export type StatusTone = 'positive' | 'warning' | 'critical' | 'neutral' | 'info'
 
+const STATUS_LABELS: Record<string, string> = {
+  DISABLED: 'Disabled',
+  ACTIVATING: 'Activating',
+  SUBSCRIBING: 'Subscribing',
+  WARMING_UP: 'Warming up',
+  READY_WAITING_FOR_LIVE_BAR: 'Ready, waiting for live bar',
+  BLOCKED: 'Blocked',
+}
+
 function inferTone(status: string): StatusTone {
   const value = status.toUpperCase()
   if (/CONNECTED|RECONCILED|HEALTHY|APPROVED|FILLED|COMPLETED|ACTIVE|FRESH|PAPER/.test(value)) return 'positive'
@@ -11,6 +20,7 @@ function inferTone(status: string): StatusTone {
 
 export function StatusBadge({status, tone}: {status?: string | null; tone?: StatusTone}) {
   const label = status || 'Unknown'
-  return <span className={`status-badge status-${tone || inferTone(label)}`}><span aria-hidden="true" />{label.replaceAll('_', ' ')}</span>
+  const display = STATUS_LABELS[label.toUpperCase()] || label.replaceAll('_', ' ')
+  return <span className={`status-badge status-${tone || inferTone(label)}`}><span aria-hidden="true" />{display}</span>
 }
 

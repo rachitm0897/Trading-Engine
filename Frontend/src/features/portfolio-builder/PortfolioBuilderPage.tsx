@@ -47,13 +47,13 @@ const MAXIMUM_RISK: Record<GoalTimeframe, number> = {
 async function pollConstruction(initial: PortfolioConstructionRun, applying = false) {
   let value = initial
   const complete = (run: PortfolioConstructionRun) => applying
-    ? !['QUEUED', 'APPLYING'].includes(run.application_status)
+    ? ['APPLIED', 'PARTIALLY_APPLIED', 'FAILED'].includes(run.application_status)
     : !['QUEUED', 'DISPATCHED', 'CALCULATING'].includes(run.status)
   for (let attempt = 0; attempt < 120 && !complete(value); attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, 500))
     value = await request<PortfolioConstructionRun>(`portfolio-construction/runs/${value.id}/`)
   }
-  if (applying && value.application_status !== 'APPLIED') {
+  if (applying && value.application_status === 'FAILED') {
     throw new Error(value.last_error || 'Portfolio construction apply did not complete')
   }
   if (!applying && value.status !== 'COMPLETED') {
@@ -360,6 +360,17 @@ function PreviewApplyStep({run, mode, pending, error, onBack, onConfirm}: {
       {id: 'quantity', header: 'Quantity', align: 'right' as const, cell: (item) => formatNumber(item.quantity)},
       {id: 'state', header: 'State', cell: (item) => <StatusBadge status={item.suppressed ? item.suppression_reason || 'SUPPRESSED' : 'PLANNED'} />},
     ]} getRowKey={(item) => item.instrument_id} emptyTitle="No net trades required" />
+    {(run.metrics.strategy_instances || []).length > 0 && <DataTable rows={run.metrics.strategy_instances || []} columns={[
+      {id: 'instance', header: 'Strategy', cell: (item) => <Link to={`/strategies/${item.strategy_instance_id}`}>Strategy {item.strategy_instance_id}</Link>},
+      {id: 'creation', header: 'Creation', cell: (item) => <StatusBadge status={item.strategy_creation} />},
+      {id: 'enabled', header: 'Enabled', cell: (item) => <StatusBadge status={item.enabled ? 'ENABLED' : 'DISABLED'} />},
+      {id: 'activation', header: 'Activation', cell: (item) => <StatusBadge status={item.activation_status} />},
+      {id: 'subscription', header: 'Subscription', cell: (item) => <StatusBadge status={item.market_subscription} />},
+      {id: 'provider', header: 'Provider', cell: (item) => <StatusBadge status={item.active_provider || 'NONE'} />},
+      {id: 'warmup', header: 'Warm-up', cell: (item) => `${item.warmup_progress ?? 0} / ${item.warmup_required ?? 0}`},
+      {id: 'reason', header: 'Block reason', cell: (item) => item.block_reason || '—'},
+    ]} getRowKey={(item) => `${item.assignment_id}-${item.strategy_instance_id}`} emptyTitle="No generated strategies" />}
+    {run.application_status === 'PARTIALLY_APPLIED' && <div className="inline-warning"><StatusBadge status={run.application_status} /><div><strong>Construction applied with activation failures</strong><p>{run.last_error || 'Review each generated strategy and subscription status.'}</p></div></div>}
     {run.applied_rebalance ? <div className="inline-success"><StatusBadge status={run.applied_rebalance.status} /><div><strong>Applied through rebalance {run.applied_rebalance.id}</strong><p>The preview created no orders. Execution remains governed by {run.applied_rebalance.mode} controls.</p><div className="inline-links"><a href={`${API_BASE_URL}/portfolio-construction/runs/${run.id}/`} target="_blank" rel="noreferrer">Construction run {run.id}</a><Link to="/portfolio">View portfolio</Link><Link to="/activity">Orders & activity</Link></div></div></div> : <div className="system-actions"><button className="button-secondary" onClick={onBack}>Back to recommendations</button><button className="button-primary" disabled={pending || !mode} onClick={onConfirm}>{pending ? 'Applying…' : `Apply to ${modeLabel}`}</button></div>}
     {error ? <ErrorState title="Construction application was blocked" error={error} compact /> : null}
   </TerminalPanel>

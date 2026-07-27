@@ -828,12 +828,19 @@ def create_or_reuse_strategy_instances(run):
             risk_policy_id=target.get("risk_policy_id"),
             order_policy_id=target.get("order_policy_id"),
             execution_mode=execution_mode,
-            enabled=False,
         ).order_by("pk")
         instance = next(
-            (item for item in candidates if item.parameters == target["parameter_overrides"]),
+            (
+                item for item in candidates
+                if item.parameters==target["parameter_overrides"]
+                and (
+                    not item.enabled
+                    or bool(item.target_configuration.get("construction_run_id"))
+                )
+            ),
             None,
         )
+        created=False
         if not instance:
             definition = StrategyDefinition.objects.get(pk=target["strategy_definition_id"], enabled=True)
             risk_policy = (
@@ -862,21 +869,129 @@ def create_or_reuse_strategy_instances(run):
                 execution_mode=execution_mode,
                 qualify=False,
             )
+            created=True
         elif instance.target_configuration != target_configuration:
             instance = update_instance(instance, {"target_configuration": target_configuration})
-        if instance.execution_mode != execution_mode or instance.enabled:
+        if instance.execution_mode != execution_mode:
             raise ConstructionError(
-                "Construction-created strategy instances must remain disabled "
-                f"in {execution_mode} mode"
+                f"Construction-created strategy instances must use {execution_mode} mode"
             )
         for assignment_id in target["assignment_ids"]:
             linked.append({
                 "assignment_id": assignment_id,
                 "strategy_instance_id": instance.pk,
                 "target_weight": target["target_weight"],
+                "strategy_creation": "CREATED" if created else "REUSED",
+                "activation_status": "QUEUED",
+                "market_subscription": "PENDING",
+                "block_reason": "",
             })
             GoalStrategyAssignment.objects.filter(pk=assignment_id).update(created_strategy_instance=instance)
     return linked
+
+
+def _application_progress(rows):
+    activation_states={str(row.get("activation_status") or "") for row in rows}
+    subscription_states={str(row.get("market_subscription") or "") for row in rows}
+    failures=activation_states & {"BLOCKED","ERROR"} or subscription_states & {"ERROR"}
+    complete=bool(rows) and all(
+        row.get("activation_status") in {
+            "WARMING_UP","READY_WAITING_FOR_LIVE_BAR","FLAT","ENTRY_PENDING",
+            "PARTIALLY_LONG","LONG","EXIT_PENDING","PARTIALLY_SHORT","SHORT",
+        }
+        and row.get("market_subscription") in {"ACTIVE","DEGRADED"}
+        for row in rows
+    )
+    if failures:
+        return "PARTIALLY_APPLIED","FAILED","FAILED"
+    if complete:
+        return "APPLIED","COMPLETED","ACTIVE"
+    return "ACTIVATING","PENDING","PENDING"
+
+
+@transaction.atomic
+def record_strategy_activation_result(construction_run_id,strategy_instance_id):
+    from apps.market_streams.models import MarketDataSubscription
+    try:
+        run_id=int(construction_run_id)
+    except (TypeError,ValueError):
+        return None
+    run=PortfolioConstructionRun.objects.select_for_update().select_related(
+        "plan__portfolio__gateway_session").filter(pk=run_id).first()
+    if run is None:return None
+    rows=[dict(row) for row in run.metrics.get("strategy_instances",[])]
+    instance=StrategyInstance.objects.filter(pk=strategy_instance_id).first()
+    if instance is None:return run
+    subscription=MarketDataSubscription.objects.filter(
+        gateway_session=instance.portfolio.gateway_session,
+        instrument=instance.instrument,
+        timeframe=instance.timeframe,
+    ).first()
+    for row in rows:
+        if int(row["strategy_instance_id"])!=int(strategy_instance_id):continue
+        row["activation_status"]=instance.state
+        row["market_subscription"]=subscription.state if subscription else "MISSING"
+        row["enabled"]=instance.enabled
+        row["block_reason"]=instance.block_reason
+        row["active_provider"]=subscription.active_provider if subscription else "NONE"
+        row["warmup_progress"]=instance.warmup_progress
+        from apps.market_streams.services import current_warmup_required
+        row["warmup_required"]=current_warmup_required(instance)
+    application_status,activation_status,subscription_status=_application_progress(rows)
+    failures=[row["block_reason"] for row in rows if row.get("block_reason")]
+    run.metrics={
+        **run.metrics,
+        "application":{
+            "construction_application":"APPLIED",
+            "rebalance_creation":"CREATED" if run.applied_rebalance_id else "FAILED",
+            "strategy_creation":"COMPLETED",
+            "strategy_activation":activation_status,
+            "market_subscription":subscription_status,
+        },
+        "strategy_instances":rows,
+    }
+    run.application_status=application_status
+    run.last_error="; ".join(dict.fromkeys(failures))[:1000]
+    run.retryable=application_status=="PARTIALLY_APPLIED"
+    run.save(update_fields=["metrics","application_status","last_error","retryable"])
+    return run
+
+
+def queue_builder_strategy_activations(construction_run_id):
+    from apps.core.idempotency import canonical_request_hash
+    from apps.strategies.framework import enable_instance
+    from apps.strategies.models import StrategyAction
+    run=PortfolioConstructionRun.objects.get(pk=construction_run_id)
+    instance_ids=sorted({
+        int(row["strategy_instance_id"])
+        for row in run.metrics.get("strategy_instances",[])
+    })
+    for instance_id in instance_ids:
+        key=f"builder-activation:{run.pk}:{instance_id}"[:128]
+        request_hash=canonical_request_hash("strategy_action",{
+            "strategy_instance_id":instance_id,
+            "action":"enable",
+            "construction_run_id":run.pk,
+        })
+        action,_=StrategyAction.objects.get_or_create(
+            idempotency_key=key,
+            defaults={
+                "strategy_instance_id":instance_id,
+                "action":"enable",
+                "request_hash":request_hash,
+            },
+        )
+        if action.status=="COMPLETED":
+            record_strategy_activation_result(run.pk,instance_id)
+            continue
+        try:
+            instance=StrategyInstance.objects.get(pk=instance_id)
+            enable_instance(
+                instance,action=action,construction_run_id=run.pk)
+            record_strategy_activation_result(run.pk,instance_id)
+        except Exception:
+            record_strategy_activation_result(run.pk,instance_id)
+    return len(instance_ids)
 
 
 @transaction.atomic
@@ -929,8 +1044,18 @@ def apply_construction_run(construction_run, idempotency_key, *, mode=None):
         raise ConstructionError("Idempotency-Key was already used for a different construction application")
     run.applied_rebalance = rebalance
     run.applied_at = timezone.now()
-    run.application_status = "APPLIED"
-    run.metrics = {**run.metrics, "strategy_instances": linked_instances}
+    run.application_status = "ACTIVATING" if linked_instances else "APPLIED"
+    run.metrics = {
+        **run.metrics,
+        "application":{
+            "construction_application":"APPLIED",
+            "rebalance_creation":"CREATED",
+            "strategy_creation":"COMPLETED",
+            "strategy_activation":"QUEUED" if linked_instances else "NOT_REQUIRED",
+            "market_subscription":"PENDING" if linked_instances else "NOT_REQUIRED",
+        },
+        "strategy_instances": linked_instances,
+    }
     run.save(update_fields=["applied_rebalance", "applied_at", "application_status", "metrics"])
     AuditEvent.objects.create(
         event_type="portfolio.construction.applied",
@@ -945,4 +1070,6 @@ def apply_construction_run(construction_run, idempotency_key, *, mode=None):
         },
         idempotency_key=f"audit:construction-apply:{idempotency_key}",
     )
+    if linked_instances:
+        transaction.on_commit(lambda: queue_builder_strategy_activations(run.pk))
     return run, rebalance, True

@@ -269,6 +269,7 @@ RESEARCH_TASK_ROUTES = {
     "apps.research.tasks.generate_recommendation_batch": {"queue": "recommendations"},
 }
 STRATEGY_EVALUATION_TASK_ROUTES = {
+    "apps.strategies.tasks.activate_strategy_instance": {"queue": "strategy_evaluation"},
     "apps.strategies.tasks.execute_strategy_evaluation_jobs": {"queue": "strategy_evaluation"},
     "apps.strategies.tasks.recover_strategy_evaluation_jobs": {"queue": "strategy_evaluation"},
 }

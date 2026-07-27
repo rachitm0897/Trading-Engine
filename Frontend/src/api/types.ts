@@ -308,8 +308,15 @@ export interface StrategyStreamStatus {
   strategy: string
   symbol: string
   timeframe: string
+  enabled: boolean
+  lifecycle_state: string
+  activation_status: string
   status: string
   subscription_state: string
+  active_provider: string
+  fallback_state: string
+  fallback_reason: string
+  provider_generation: string | null
   conid: number | null
   last_raw_event: string | null
   last_canonical_event: string | null
@@ -402,6 +409,7 @@ export interface StrategyInstance {
   execution_mode: ExecutionMode
   state: string
   enabled: boolean
+  activation_status: string
   version: number
   warmup_progress: number
   warmup_required: number
@@ -963,7 +971,7 @@ export interface PortfolioConstructionRun {
   plan_id: number
   portfolio_id: number
   status: string
-  application_status: 'NOT_APPLIED' | 'QUEUED' | 'APPLYING' | 'APPLIED' | 'FAILED'
+  application_status: 'NOT_APPLIED' | 'QUEUED' | 'APPLYING' | 'ACTIVATING' | 'APPLIED' | 'PARTIALLY_APPLIED' | 'FAILED'
   retryable: boolean
   last_error: string
   attempt_count: number
@@ -983,7 +991,26 @@ export interface PortfolioConstructionRun {
       target_weight: DecimalValue
       assignment_ids: number[]
     }[]
-    strategy_instances?: {assignment_id: number; strategy_instance_id: number; target_weight: DecimalValue}[]
+    application?: {
+      construction_application: string
+      rebalance_creation: string
+      strategy_creation: string
+      strategy_activation: string
+      market_subscription: string
+    }
+    strategy_instances?: {
+      assignment_id: number
+      strategy_instance_id: number
+      target_weight: DecimalValue
+      strategy_creation: string
+      activation_status: string
+      market_subscription: string
+      enabled?: boolean
+      active_provider?: string
+      warmup_progress?: number
+      warmup_required?: number
+      block_reason?: string
+    }[]
   }
   warnings: unknown[]
   goals?: GoalConstructionResult[]

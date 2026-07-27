@@ -16,6 +16,15 @@ def _requirements(instrument,timeframe,gateway_session=None):
     return instances,required+int(getattr(settings,"WARMUP_SAFETY_BARS",5)) if instances else 0
 
 
+def refresh_market_subscription_counts(subscription):
+    instances,history=_requirements(
+        subscription.instrument,subscription.timeframe,subscription.gateway_session)
+    subscription.consumer_count=len(instances)
+    subscription.required_history_bars=history
+    subscription.save(update_fields=["consumer_count","required_history_bars","updated_at"])
+    return subscription
+
+
 def reconcile_market_subscription(instrument,timeframe,gateway=None,force=False,connection_generation=None,gateway_session=None):
     contract=getattr(instrument,"broker_contract",None)
     if not contract:raise ValueError("Instrument does not have a qualified IBKR contract")

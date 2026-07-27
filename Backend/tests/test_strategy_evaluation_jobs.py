@@ -25,9 +25,10 @@ from apps.strategies.evaluation_jobs import (
     process_strategy_evaluation_jobs,
     recover_stuck_strategy_evaluation_jobs,
 )
-from apps.strategies.framework import create_instance, enable_instance
+from apps.strategies.framework import create_instance
 from apps.strategies.models import StrategyRun
 from tests.managed_gateway import bind_gateway_mode
+from tests.strategy_activation import activate_strategy
 
 
 pytestmark = pytest.mark.django_db
@@ -81,7 +82,7 @@ def make_instance(portfolio, instrument, *, definition="FIXED_WEIGHT_REBALANCE",
         execution_mode="PAPER",
         qualify=False,
     )
-    enable_instance(instance)
+    activate_strategy(instance)
     return instance
 
 

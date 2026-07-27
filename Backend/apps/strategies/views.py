@@ -108,13 +108,20 @@ def _instance(item, detail=False):
         latest_indicators={indicator_output_name(binding.requirement.name,binding.requirement.role):
             values[binding.requirement.identity_hash].value
             for binding in bindings if binding.requirement.identity_hash in values}
+    activation_status=(
+        item.state if item.state in {
+            "DISABLED","ACTIVATING","SUBSCRIBING","WARMING_UP",
+            "READY_WAITING_FOR_LIVE_BAR","BLOCKED",
+        } else ("ACTIVE" if item.enabled else "DISABLED")
+    )
     row={"id":item.pk,"name":item.name,"definition_key":item.definition.key,"definition_name":item.definition.name,
         "portfolio_id":item.portfolio_id,"portfolio":item.portfolio.name,"instrument_id":item.instrument_id,
         "symbol":item.instrument.symbol,"asset_class":item.instrument.asset_class,"exchange":item.instrument.exchange,
         "currency":item.instrument.currency,"conid":contract.conid if contract else None,
         "primary_exchange":contract.primary_exchange if contract else None,"timeframe":item.timeframe,
         "parameters":item.parameters,"target_configuration":item.target_configuration,"risk_policy_id":item.risk_policy_id,
-        "order_policy_id":item.order_policy_id,"execution_mode":item.execution_mode,"state":item.state,"enabled":item.enabled,
+        "order_policy_id":item.order_policy_id,"execution_mode":item.execution_mode,"state":item.state,
+        "enabled":item.enabled,"activation_status":activation_status,
         "version":item.version,"warmup_progress":item.warmup_progress,"warmup_required":plugin.warmup_bars(item.parameters),
         "warmup_started_at":item.warmup_started_at,"warmup_last_progress_at":item.warmup_last_progress_at,
         "block_reason":item.block_reason,"effective_from":item.effective_from,"effective_to":item.effective_to,
@@ -232,10 +239,12 @@ def action(request, instance_id, action_name):
                 operation.attempt_count+=1;operation.completed_at=None
                 operation.save(update_fields=["status","last_error","retryable","attempt_count","completed_at"])
         if action_name=="enable":
-            item=enable_instance(item)
-            StrategyAction.objects.filter(pk=operation.pk).update(status="COMPLETED",result={"strategy_instance_id":item.pk},
-                completed_at=timezone.now(),last_error="",retryable=False)
-            return response(_instance(_get(item.pk),True))
+            item=enable_instance(item,action=operation)
+            operation.refresh_from_db()
+            row=_instance(_get(item.pk),True)
+            row["action_id"]=operation.pk
+            row["activation_status"]=operation.status
+            return response(row,status=202 if operation.status=="PROCESSING" else 200)
         if action_name=="pause":
             item=pause_instance(item)
             StrategyAction.objects.filter(pk=operation.pk).update(status="COMPLETED",result={"strategy_instance_id":item.pk},
@@ -258,8 +267,10 @@ def action(request, instance_id, action_name):
     except (ValueError,StrategyInstance.DoesNotExist) as exc:
         if "operation" in locals():
             StrategyAction.objects.filter(pk=operation.pk).update(status="FAILED",last_error=str(exc)[:1000],
-                retryable=False,completed_at=timezone.now())
-        return response(status=400,error={"code":"STRATEGY_ACTION_FAILED","message":str(exc),"details":{}})
+                retryable=bool(getattr(exc,"retryable",False)),completed_at=timezone.now())
+        retryable=bool(getattr(exc,"retryable",False))
+        return response(status=503 if retryable else 400,error={
+            "code":"STRATEGY_ACTION_FAILED","message":str(exc),"details":{"retryable":retryable}})
     except Exception as exc:
         if "operation" in locals():
             StrategyAction.objects.filter(pk=operation.pk).update(status="FAILED",last_error=str(exc)[:1000],
