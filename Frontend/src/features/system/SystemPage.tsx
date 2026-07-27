@@ -7,12 +7,14 @@ import {queries} from '../../api/queries'
 import type {AuditEvent, FinnhubProviderStatus, ReconciliationBreak, ReconciliationRun, RiskDecision, StrategyStreamStatus, StreamMetric} from '../../api/types'
 import {ActivityTimeline} from '../../components/ActivityTimeline'
 import {ConfirmActionDialog, DataTable, ErrorState, Freshness, PageHeader, Skeleton, StatusBadge, TerminalMetric, TerminalPanel, formatCompact, formatDateTime, formatNumber} from '../../components/ui'
+import {executionModeReadiness} from '../../executionMode'
 
 interface KillAction {enabled: boolean; title: string; confirm: string}
 
 export function SystemPage() {
   const queryClient = useQueryClient()
   const system = useQuery(queries.system())
+  const sessions = useQuery(queries.brokerSessions())
   const gateway = useQuery(queries.gateway())
   const streaming = useQuery(queries.streaming())
   const reconciliation = useQuery(queries.reconciliation())
@@ -21,13 +23,15 @@ export function SystemPage() {
   const finnhub = useQuery(queries.finnhub())
   const [killAction, setKillAction] = useState<KillAction | null>(null)
 
-  const refresh = async () => {await Promise.all(['system', 'gateway', 'streaming', 'reconciliation', 'risk', 'audit', 'finnhub'].map((key) => queryClient.invalidateQueries({queryKey: [key]})))}
+  const refresh = async () => {await Promise.all(['system', 'broker-sessions', 'gateway', 'streaming', 'reconciliation', 'risk', 'audit', 'finnhub'].map((key) => queryClient.invalidateQueries({queryKey: [key]})))}
   const kill = useMutation({
     mutationFn: ({enabled, reason}: {enabled: boolean; reason: string}) => request<unknown>('risk/', mutationOptions('POST', {scope: 'GLOBAL', enabled, reason}, true)),
     onSuccess: async () => {setKillAction(null); await refresh()},
   })
   const globalSwitch = risk.data?.kill_switches.find((item) => item.scope === 'GLOBAL' && item.enabled)
-  const newest = Math.max(system.dataUpdatedAt, gateway.dataUpdatedAt, streaming.dataUpdatedAt, reconciliation.dataUpdatedAt, risk.dataUpdatedAt, audit.dataUpdatedAt, finnhub.dataUpdatedAt)
+  const newest = Math.max(system.dataUpdatedAt, sessions.dataUpdatedAt, gateway.dataUpdatedAt, streaming.dataUpdatedAt, reconciliation.dataUpdatedAt, risk.dataUpdatedAt, audit.dataUpdatedAt, finnhub.dataUpdatedAt)
+  const paperReadiness = executionModeReadiness(sessions.data || [], 'PAPER', Boolean(system.data?.allow_live_trading))
+  const liveReadiness = executionModeReadiness(sessions.data || [], 'LIVE', Boolean(system.data?.allow_live_trading))
 
   const breakColumns = [
     {id: 'category', header: 'Category', cell: (item: ReconciliationBreak) => <strong>{item.category}</strong>},
@@ -59,8 +63,8 @@ export function SystemPage() {
   ]
 
   return <div className="page-stack">
-    <PageHeader eyebrow="Operations & safety" title="System" description="Gateway, streaming, reconciliation, risk, and audit controls consolidated for operators." actions={<Freshness updatedAt={newest} stale={system.isStale || gateway.isStale} fetching={system.isFetching || gateway.isFetching || streaming.isFetching} onRefresh={() => void refresh()} />} />
-    <section className="metric-grid compact"><TerminalMetric label="Application mode" value={<StatusBadge status={system.data?.mode || 'UNKNOWN'} />} /><TerminalMetric label="IBKR connection" value={<StatusBadge status={gateway.data?.connected ? 'CONNECTED' : 'DISCONNECTED'} />} /><TerminalMetric label="Reconciliation" value={<StatusBadge status={gateway.data?.reconciled ? 'RECONCILED' : 'BLOCKED'} />} /><TerminalMetric label="Material breaks" value={formatNumber(system.data?.material_breaks)} /><TerminalMetric label="Global kill switch" value={<StatusBadge status={globalSwitch ? 'ENGAGED' : 'CLEAR'} />} /></section>
+    <PageHeader eyebrow="Operations & safety" title="System" description="Separate Paper and Live readiness with Gateway, streaming, reconciliation, risk, and audit controls." actions={<Freshness updatedAt={newest} stale={system.isStale || sessions.isStale || gateway.isStale} fetching={system.isFetching || sessions.isFetching || gateway.isFetching || streaming.isFetching} onRefresh={() => void refresh()} />} />
+    <section className="metric-grid compact"><TerminalMetric label="Paper readiness" value={<StatusBadge status={paperReadiness.status} />} helper={paperReadiness.reason} /><TerminalMetric label="Live readiness" value={<StatusBadge status={liveReadiness.status} />} helper={liveReadiness.reason} /><TerminalMetric label="IBKR connection" value={<StatusBadge status={gateway.data?.connected ? 'CONNECTED' : 'DISCONNECTED'} />} /><TerminalMetric label="Reconciliation" value={<StatusBadge status={gateway.data?.reconciled ? 'RECONCILED' : 'BLOCKED'} />} /><TerminalMetric label="Material breaks" value={formatNumber(system.data?.material_breaks)} /><TerminalMetric label="Global kill switch" value={<StatusBadge status={globalSwitch ? 'ENGAGED' : 'CLEAR'} />} /></section>
     <div className="system-sections">
       <TerminalPanel id="market-data-providers" title="Market data providers" description="Secure historical and reference-data credentials. Environment configuration is preferred by default." badge={<StatusBadge status={finnhub.data?.configured ? 'CONFIGURED' : 'NOT CONFIGURED'} />}>
         {finnhub.isLoading ? <Skeleton lines={4} /> : finnhub.isError ? <ErrorState title="Finnhub status is unavailable" error={finnhub.error} onRetry={() => void finnhub.refetch()} compact /> : <FinnhubPanel status={finnhub.data!} onChanged={() => queryClient.invalidateQueries({queryKey: ['finnhub']})} />}

@@ -7,7 +7,7 @@ from ...services.promotion import promote_strategy
 
 
 class Command(BaseCommand):
-    help = "Trusted-operator promotion after exact parity, protocol, approval, and SHADOW evidence"
+    help = "Trusted-operator promotion after exact parity, protocol, approval, and Paper validation evidence"
 
     def add_arguments(self, parser):
         parser.add_argument("research_id")
@@ -33,4 +33,4 @@ class Command(BaseCommand):
             )
         except (ResearchStrategyDefinition.DoesNotExist, ResearchStrategyDefinition.MultipleObjectsReturned, ValueError, json.JSONDecodeError) as exc:
             raise CommandError(str(exc)) from exc
-        self.stdout.write(self.style.SUCCESS(f"Promoted implementation {row.pk}; runtime remains governed by SHADOW/PAPER controls"))
+        self.stdout.write(self.style.SUCCESS(f"Promoted implementation {row.pk}; runtime remains governed by PAPER/LIVE controls"))

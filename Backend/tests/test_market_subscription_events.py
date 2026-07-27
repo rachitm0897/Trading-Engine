@@ -11,6 +11,7 @@ from apps.market_streams.tasks import check_warmup_timeouts
 from apps.accounts.models import BrokerAccount
 from apps.portfolios.models import TradingPortfolio
 from apps.strategies.framework import create_instance,enable_instance
+from tests.managed_gateway import bind_gateway_mode
 
 pytestmark=pytest.mark.django_db
 
@@ -29,6 +30,7 @@ def test_gateway_raw_market_event_enters_transactional_outbox():
 
 def test_async_ibkr_market_error_blocks_strategy_with_exact_reason():
     account=BrokerAccount.objects.create(account_id="DU-PERMISSION");portfolio=TradingPortfolio.objects.create(name="Permission",account=account)
+    bind_gateway_mode(portfolio)
     instrument=Instrument.objects.create(symbol="PERM",exchange="SMART",currency="USD");BrokerContract.objects.create(instrument=instrument,conid=780)
     instance,_=create_instance(name="Permission failure",definition_key="FIXED_WEIGHT_REBALANCE",portfolio=portfolio,
         instrument_id=instrument.pk,timeframe="1m",parameters={"direction":"LONG"},target_configuration={"target_weight":"0.01"},qualify=False)
@@ -46,12 +48,21 @@ def test_async_ibkr_market_error_blocks_strategy_with_exact_reason():
 def test_stalled_warmup_becomes_visibly_blocked(settings):
     settings.WARMUP_TIMEOUT_SECONDS=30
     account=BrokerAccount.objects.create(account_id="DU-WARMUP");portfolio=TradingPortfolio.objects.create(name="Warmup",account=account)
+    bind_gateway_mode(portfolio)
     instrument=Instrument.objects.create(symbol="STALL",exchange="SMART",currency="USD");BrokerContract.objects.create(instrument=instrument,conid=778)
     instance,_=create_instance(name="Stalled",definition_key="FIXED_WEIGHT_REBALANCE",portfolio=portfolio,instrument_id=instrument.pk,
         timeframe="1m",parameters={"direction":"LONG"},target_configuration={"target_weight":"0.01"},qualify=False)
     enable_instance(instance);old=timezone.now()-timedelta(minutes=2)
     instance.warmup_started_at=old;instance.warmup_last_progress_at=old;instance.save(update_fields=["warmup_started_at","warmup_last_progress_at"])
-    MarketDataSubscription.objects.create(instrument=instrument,conid=778,timeframe="1m",consumer_count=1,state="ERROR",last_error="IBKR error 354: Not subscribed")
+    MarketDataSubscription.objects.create(
+        instrument=instrument,
+        gateway_session=portfolio.gateway_session,
+        conid=778,
+        timeframe="1m",
+        consumer_count=1,
+        state="ERROR",
+        last_error="IBKR error 354: Not subscribed",
+    )
     assert check_warmup_timeouts()==1
     instance.refresh_from_db();assert instance.state=="BLOCKED" and "IBKR error 354" in instance.block_reason
 
@@ -73,6 +84,7 @@ def test_stream_health_is_not_green_when_consumer_heartbeat_is_stale(client,sett
 
 def test_strategy_api_exposes_each_persisted_stream_stage(client):
     account=BrokerAccount.objects.create(account_id="DU-HEALTH");portfolio=TradingPortfolio.objects.create(name="Health",account=account)
+    bind_gateway_mode(portfolio)
     instrument=Instrument.objects.create(symbol="PATH",exchange="SMART",currency="USD");BrokerContract.objects.create(instrument=instrument,conid=779)
     instance,_=create_instance(name="Path health",definition_key="FIXED_WEIGHT_REBALANCE",portfolio=portfolio,
         instrument_id=instrument.pk,timeframe="1m",parameters={"direction":"LONG"},target_configuration={"target_weight":"0.01"},qualify=False)

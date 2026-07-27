@@ -9,6 +9,7 @@ import type {
   BrokerSessionAccount,
   DashboardSummary,
   Execution,
+  ExecutionMode,
   GatewayStatus,
   Instrument,
   ManualOrderIntentStatus,
@@ -155,7 +156,7 @@ export const queries = {
     queryFn: () => request<StrategyPolicies>('strategy-policies/'),
     staleTime: 60_000,
   }),
-  strategies: (filters: {portfolioId?: number | null; state?: string; executionMode?: string} = {}) => queryOptions({
+  strategies: (filters: {portfolioId?: number | null; state?: string; executionMode?: ExecutionMode} = {}) => queryOptions({
     queryKey: ['strategy-instances', filters],
     queryFn: () => request<StrategyInstance[]>(withQuery('strategy-instances/', {
       portfolio: filters.portfolioId,

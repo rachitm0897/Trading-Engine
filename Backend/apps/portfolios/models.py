@@ -17,6 +17,12 @@ class TradingPortfolio(models.Model):
     minimum_drift = models.DecimalField(max_digits=8, decimal_places=6, default="0.001")
     kill_switch = models.BooleanField(default=False)
 
+    @property
+    def execution_mode(self):
+        from apps.execution.modes import execution_mode_for_portfolio
+
+        return execution_mode_for_portfolio(self)
+
 class PortfolioPosition(models.Model):
     portfolio = models.ForeignKey(TradingPortfolio, on_delete=models.PROTECT, related_name="positions")
     instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT)

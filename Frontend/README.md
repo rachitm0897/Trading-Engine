@@ -6,7 +6,7 @@ The React/TypeScript operator application is a dark, information-dense trading t
 
 - `/dashboard` — selected account and portfolio summary, real NAV/P&L and exposure charts, holdings, open orders, activity, and attention items.
 - `/strategies` — filterable strategy inventory with safe enable, pause, flatten, and delete controls.
-- `/strategies/new` — schema-driven strategy wizard; defaults to `SHADOW` and does not expose `LIVE`.
+- `/strategies/new` — schema-driven strategy wizard; execution mode is derived from the selected portfolio's assigned Paper or Live Gateway session.
 - `/strategies/:id` — strategy overview, price/indicator chart, execution activity, configuration, versions, and inputs.
 - `/portfolio-builder` — goal construction, instrument qualification, strategy assignment, combined preview, and guarded apply workflow.
 - `/portfolio` — holdings, cash, allocation, concentration, drift, and advanced flow/rebalance/optimization tools.
@@ -34,9 +34,9 @@ Theme and chart colors come from the semantic variables in `src/styles/tokens.cs
 
 ## Safety and data flow
 
-Strategies still emit signals and targets. Executable actions continue through allocation, sizing, pre-trade risk, OMS, Gateway, append-only ledgers, and reconciliation. Existing confirmation, reason, eligibility, paper/shadow, kill-switch, and idempotency controls are unchanged by the presentation layer.
+Strategies still emit signals and targets. Executable Paper and Live actions continue through allocation, sizing, pre-trade risk, OMS, the matching Gateway, append-only ledgers, and reconciliation. Preview is explicitly non-executing and creates no order intents or broker commands. Existing confirmation, reason, eligibility, Live safety-gate, kill-switch, and idempotency controls remain enforced.
 
-The current redesign required no Backend changes. Existing chart endpoints may accept optional `range` and `interval` query parameters; omitting them preserves the established response and query-cache contracts.
+The mode integration consumes the Backend's session-derived Paper/Live contracts and explicit preview run type. Existing chart endpoints may accept optional `range` and `interval` query parameters; omitting them preserves the established response and query-cache contracts.
 
 ## Development
 

@@ -11,9 +11,9 @@ from django.utils import timezone
 from apps.allocation.models import (
     PortfolioTargetCoordination,
     PortfolioTargetSnapshot,
-    RebalancePolicy,
     RebalanceRun,
 )
+from apps.execution.modes import execution_mode_for_portfolio
 from apps.market_streams.models import InstrumentMarketState
 from apps.oms.models import Order, OrderIntent
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
@@ -85,6 +85,8 @@ def _lifecycle(instance):
         return "PAUSED"
     if instance.state == "ERROR":
         return "ERROR"
+    if instance.state == "WARMING_UP":
+        return "WARMING_UP"
     if instance.state == "DISABLED":
         return "DISABLED"
     if not instance.enabled:
@@ -100,7 +102,7 @@ def _lifecycle_policy(instance, lifecycle):
         return str(configuration.get("killed_behavior", "HOLD")).upper()
     if lifecycle == "ERROR":
         return str(configuration.get("error_behavior", "HOLD")).upper()
-    if lifecycle in {"PAUSED", "DISABLED"}:
+    if lifecycle in {"PAUSED", "DISABLED", "WARMING_UP"}:
         return str(configuration.get(f"{lifecycle.lower()}_behavior", "HOLD")).upper()
     return "TARGET"
 
@@ -195,9 +197,10 @@ def _strategy_limit_error(instance, target, capital, price):
 def build_portfolio_target_snapshot(portfolio, *, logical_time=None, prices=None):
     portfolio = (
         TradingPortfolio.objects.select_for_update()
-        .select_related("account")
+        .select_related("account", "gateway_session")
         .get(pk=portfolio.pk)
     )
+    execution_mode = execution_mode_for_portfolio(portfolio)
     account = portfolio.account
     account_nav = _decimal(account.net_liquidation)
     portfolio_nav = account_nav
@@ -266,9 +269,23 @@ def build_portfolio_target_snapshot(portfolio, *, logical_time=None, prices=None
 
     for allocation in allocations:
         instance = allocation.strategy_instance
+        if instance.execution_mode != execution_mode:
+            rejected.append(
+                {
+                    "strategy_instance_id": instance.pk,
+                    "reason": "STRATEGY_GATEWAY_MODE_MISMATCH",
+                    "strategy_mode": instance.execution_mode,
+                    "gateway_mode": execution_mode,
+                }
+            )
+            continue
         lifecycle = _lifecycle(instance)
         behavior = _lifecycle_policy(instance, lifecycle)
         target = latest.get(instance.pk)
+        if lifecycle == "WARMING_UP" and target is not None:
+            # A re-warming strategy may retain its last valid target. A brand-new
+            # warming strategy contributes HOLD/zero and cannot reject the portfolio.
+            behavior = "TARGET"
         version = instance.versions.filter(version=instance.version).first()
         strategy_versions[str(instance.pk)] = version.pk if version else None
         if behavior == "TARGET":
@@ -296,6 +313,17 @@ def build_portfolio_target_snapshot(portfolio, *, logical_time=None, prices=None
                         "strategy_instance_id": instance.pk,
                         "target_id": target.pk,
                         "reason": "INACTIVE_STRATEGY_VERSION",
+                    }
+                )
+                continue
+            if target.execution_mode != execution_mode:
+                rejected.append(
+                    {
+                        "strategy_instance_id": instance.pk,
+                        "target_id": target.pk,
+                        "reason": "TARGET_GATEWAY_MODE_MISMATCH",
+                        "target_mode": target.execution_mode,
+                        "gateway_mode": execution_mode,
                     }
                 )
                 continue
@@ -531,22 +559,6 @@ def build_portfolio_target_snapshot(portfolio, *, logical_time=None, prices=None
         "maximum_order_quantity": str(pre_trade.maximum_order_quantity),
         "maximum_order_notional": str(pre_trade.maximum_order_notional),
     }
-    rebalance_policy = RebalancePolicy.objects.filter(portfolio=portfolio).first()
-    contributing_modes = {
-        allocation.strategy_instance.execution_mode
-        for allocation in allocations
-        if any(
-            item["strategy_instance_id"] == allocation.strategy_instance_id
-            for item in contributions
-        )
-    }
-    execution_mode = (
-        "SHADOW"
-        if "SHADOW" in contributing_modes
-        else str(rebalance_policy.mode if rebalance_policy else "SHADOW").upper()
-    )
-    if execution_mode not in {"SHADOW", "PAPER"}:
-        execution_mode = "SHADOW"
     reconciliation = (
         ReconciliationRun.objects.filter(
             broker_account=account,
@@ -656,7 +668,7 @@ def mark_portfolio_for_target_coordination(portfolio_id, *, logical_event_time=N
 def coordinate_portfolio(portfolio_id):
     portfolio = (
         TradingPortfolio.objects.select_for_update()
-        .select_related("account")
+        .select_related("account", "gateway_session")
         .get(pk=portfolio_id)
     )
     coordination, _ = PortfolioTargetCoordination.objects.select_for_update().get_or_create(
@@ -738,7 +750,12 @@ def process_target_coordination(limit=None):
                 needs_coordination=True,
                 last_error=str(exc)[:1000],
             )
-            raise
+            results.append(
+                {
+                    "portfolio_id": portfolio_id,
+                    "error": str(exc)[:1000],
+                }
+            )
     return results
 
 

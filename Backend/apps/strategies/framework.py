@@ -5,12 +5,17 @@ from django.conf import settings
 from django.db import InterfaceError, OperationalError, transaction
 from django.utils import timezone
 from apps.audit.models import OutboxEvent
+from apps.execution.modes import (
+    normalize_execution_mode,
+    require_live_trading_allowed,
+    require_portfolio_execution_mode,
+)
 from apps.instruments.services import resolve_instrument
 from apps.oms.models import Order
 from .models import (StrategyAllocation, StrategyAttributedPosition, StrategyDefinition, StrategyInputBinding,
     StrategyInputRequirement, StrategyInstance, StrategyRun, StrategySignal, StrategyTarget, StrategyVersion)
 from .plugins import get_plugin
-from .plugins.base import EvaluationContext, StreamInput
+from .plugins.base import EvaluationContext
 
 
 def _json_hash(value):
@@ -25,7 +30,7 @@ def configuration_snapshot(instance):
         "execution_mode":instance.execution_mode,
         "execution_input_configuration":{
             "average_volume_window":int(getattr(settings,"EXECUTION_AVERAGE_VOLUME_WINDOW",20)),
-        } if instance.execution_mode=="PAPER" else {}}
+        }}
 
 
 def current_version(instance):
@@ -33,7 +38,7 @@ def current_version(instance):
 
 
 def create_instance(*, name, definition_key, portfolio, timeframe, parameters, target_configuration,
-                    instrument_id=None, ticker=None, risk_policy=None, order_policy=None, execution_mode="SHADOW",
+                    instrument_id=None, ticker=None, risk_policy=None, order_policy=None, execution_mode=None,
                     exchange="SMART", currency="USD", primary_exchange=None, qualify=True, gateway=None):
     definition = StrategyDefinition.objects.get(key=definition_key.upper(), enabled=True)
     plugin = get_plugin(definition)
@@ -47,9 +52,10 @@ def create_instance(*, name, definition_key, portfolio, timeframe, parameters, t
         currency=currency, primary_exchange=primary_exchange, qualify=qualify, gateway=gateway)
     if instrument.asset_class not in definition.supported_asset_types:
         raise ValueError(f"Unsupported asset type {instrument.asset_class}")
-    mode = execution_mode.upper()
-    if mode not in {"OBSERVE", "SHADOW", "PAPER"}:
-        raise ValueError("Execution mode must be OBSERVE, SHADOW, or PAPER; LIVE is disabled")
+    mode = require_portfolio_execution_mode(
+        portfolio,
+        execution_mode,
+    )
     with transaction.atomic():
         instance = StrategyInstance.objects.create(name=name, definition=definition, portfolio=portfolio, instrument=instrument,
             timeframe=timeframe, parameters=parameters, target_configuration=target_configuration or {}, risk_policy=risk_policy,
@@ -72,8 +78,11 @@ def _create_version(instance):
 @transaction.atomic
 def update_instance(instance, changes):
     material={"definition","instrument","timeframe","parameters","target_configuration","risk_policy","order_policy","execution_mode"}
-    if "execution_mode" in changes and str(changes["execution_mode"]).upper() not in {"OBSERVE","SHADOW","PAPER"}:
-        raise ValueError("LIVE mode is disabled")
+    if "execution_mode" in changes:
+        changes["execution_mode"] = require_portfolio_execution_mode(
+            instance.portfolio,
+            changes["execution_mode"],
+        )
     for key,value in changes.items():
         if key in material | {"name"}:
             setattr(instance,key,value)
@@ -125,14 +134,6 @@ def register_inputs(instance, version=None):
     version=version or current_version(instance);plugin=get_plugin(instance.definition)
     requirements=[]
     declared_inputs=list(plugin.required_stream_inputs(instance.parameters))
-    if instance.execution_mode=="PAPER" and not any(
-        item.input_type=="INDICATOR" and item.name=="average_volume"
-        for item in declared_inputs
-    ):
-        window=int(getattr(settings,"EXECUTION_AVERAGE_VOLUME_WINDOW",20))
-        declared_inputs.append(StreamInput(
-            "INDICATOR","average_volume",{"window":window},warmup_bars=window,
-        ))
     for declared in declared_inputs:
         parameters=dict(declared.parameters or {})
         role=declared.role or parameters.get("role","")
@@ -162,7 +163,14 @@ def register_inputs(instance, version=None):
 
 def enable_instance(instance,gateway=None):
     with transaction.atomic():
-        instance=StrategyInstance.objects.select_for_update().select_related("instrument").get(pk=instance.pk)
+        instance=StrategyInstance.objects.select_for_update().select_related(
+            "instrument", "portfolio__gateway_session"
+        ).get(pk=instance.pk)
+        mode = require_portfolio_execution_mode(
+            instance.portfolio,
+            instance.execution_mode,
+        )
+        require_live_trading_allowed(mode)
         if not hasattr(instance.instrument,"broker_contract"):
             instance.state="BLOCKED";instance.block_reason="Instrument does not have a qualified IBKR contract"
             instance.save(update_fields=["state","block_reason","updated_at"]);raise ValueError(instance.block_reason)
@@ -172,9 +180,18 @@ def enable_instance(instance,gateway=None):
         instance.save(update_fields=["enabled","kill_switch","state","block_reason","effective_from","effective_to","warmup_started_at","warmup_last_progress_at","warmup_progress","updated_at"])
         StrategyVersion.objects.filter(pk=current_version(instance).pk).update(activated_at=now)
         register_inputs(instance)
-    if settings.KAFKA_ENABLED or gateway is not None:
-        from apps.market_streams.subscriptions import reconcile_market_subscription
-        reconcile_market_subscription(instance.instrument,instance.timeframe,gateway,gateway_session=instance.portfolio.gateway_session)
+        if settings.KAFKA_ENABLED or gateway is not None:
+            from apps.market_streams.subscriptions import reconcile_market_subscription
+            subscription = reconcile_market_subscription(
+                instance.instrument,
+                instance.timeframe,
+                gateway,
+                gateway_session=instance.portfolio.gateway_session,
+            )
+            if subscription.state == "ERROR":
+                raise ValueError(
+                    subscription.last_error or "Market-data subscription setup failed"
+                )
     return instance
 
 
@@ -238,9 +255,11 @@ def evaluate_instance(instance, *, bar, indicators, previous_indicators=None, ev
             StrategySignal.objects.create(run=run,strategy_instance=instance,strategy_version=version,signal_type=decision.signal_type,
                 signal_time=when,reason=decision.reason,details={"direction":decision.direction,"confidence":str(decision.confidence) if decision.confidence else None})
             target_data=plugin.build_target(decision,context);latest_weight=_latest_target_weight(instance)
-            if instance.execution_mode != "OBSERVE" and target_data and (latest_weight is None or latest_weight != Decimal(target_data["target_weight"])):
+            normalize_execution_mode(instance.execution_mode)
+            if target_data and (latest_weight is None or latest_weight != Decimal(target_data["target_weight"])):
                 StrategyTarget.objects.create(run=run,strategy_instance=instance,strategy_version=version,portfolio=instance.portfolio,
-                    instrument=instance.instrument,signal_time=when,source_event_id=event_id,**target_data,rationale=target_data["reason"])
+                    instrument=instance.instrument,signal_time=when,source_event_id=event_id,
+                    execution_mode=instance.execution_mode,**target_data,rationale=target_data["reason"])
             instance.state=decision.next_state;instance.state_data=decision.state_data
             instance.save(update_fields=["state","state_data","updated_at"])
             run.status="COMPLETED";run.completed_at=timezone.now();run.save(update_fields=["status","completed_at"])
@@ -275,11 +294,11 @@ def flatten_instance(instance, *, event_id=None, event_time=None):
     when=event_time or timezone.now()
     StrategySignal.objects.create(run=run,strategy_instance=instance,strategy_version=version,signal_type="SET_TARGET",
         signal_time=when,reason="Operator requested strategy-attributed flat target")
-    if instance.execution_mode != "OBSERVE":
-        StrategyTarget.objects.create(run=run,strategy_instance=instance,strategy_version=version,portfolio=instance.portfolio,
-            instrument=instance.instrument,target_type="FLAT",target_weight=0,direction="FLAT",signal_type="SET_TARGET",
-            signal_time=when,source_event_id=event_id,reason="Operator requested strategy-attributed flat target",
-            rationale="Operator requested strategy-attributed flat target")
+    StrategyTarget.objects.create(run=run,strategy_instance=instance,strategy_version=version,portfolio=instance.portfolio,
+        instrument=instance.instrument,target_type="FLAT",target_weight=0,direction="FLAT",signal_type="SET_TARGET",
+        signal_time=when,source_event_id=event_id,execution_mode=instance.execution_mode,
+        reason="Operator requested strategy-attributed flat target",
+        rationale="Operator requested strategy-attributed flat target")
     instance.state="FLATTEN_REQUESTED";instance.save(update_fields=["state","updated_at"])
     run.status="COMPLETED";run.completed_at=timezone.now();run.save(update_fields=["status","completed_at"])
     OutboxEvent.objects.create(topic="strategy.targets.v1",event_type="strategy.flattened",aggregate_type="strategy_instance",

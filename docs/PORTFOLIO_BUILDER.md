@@ -16,7 +16,7 @@ NOW remains 100% cash. For other profiles, the backend selects 5–20 names acco
 
 ## Safety boundary
 
-Recommendation generation only updates construction metadata and immutable recommendation/audit records. It creates no order, rebalance, strategy instance, or enablement. Preview creates no order. Apply invokes the existing combined rebalancer exactly once; sizing, price provenance, cash/fee buffers, risk, sell-before-buy ordering, OMS, Gateway, ledgers, kill switch, and reconciliation remain mandatory. Any created/reused strategy instance is disabled in SHADOW, and LIVE configuration is rejected at startup.
+Recommendation generation only updates construction metadata and immutable recommendation/audit records. It creates no order, rebalance, strategy instance, or enablement. Preview creates no order. Apply rechecks plan and Gateway readiness, then invokes the combined rebalancer exactly once; sizing, price provenance, cash/fee buffers, risk, sell-before-buy ordering, OMS, Gateway, ledgers, kill switch, and reconciliation remain mandatory. Any created/reused strategy instance stays disabled in the portfolio Gateway session's Paper or Live mode. Live apply also requires `ALLOW_LIVE_TRADING=true`.
 
 The advanced manual target optimizer remains available on the Portfolio page. Backend manual construction endpoints remain for compatibility/internal tools but are intentionally absent from the standard Builder UI.
 

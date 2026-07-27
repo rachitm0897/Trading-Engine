@@ -8,7 +8,7 @@ Recorded on 2026-07-15 before behavioural implementation changes.
 - No `AGENTS.md` files were present.
 - The pre-existing Git working tree contained only two untracked user files: `prompt.txt` and `trading_engine_implementation_plan(1).md`.
 - The deployment topology is one Django backend container, one gateway container, one frontend container, and private PostgreSQL, Redis, Kafka, and Flink infrastructure. No additional application service is required by the plan.
-- Local execution defaults to SHADOW. Private child-image validation defaults to paper mode; `ALLOW_LIVE_TRADING` defaults to false.
+- Execution mode is derived from the assigned Gateway session. Private child-image validation defaults to Paper mode; `ALLOW_LIVE_TRADING` defaults to false.
 
 ## Baseline checks and tests
 

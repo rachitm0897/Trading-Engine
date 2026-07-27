@@ -4,12 +4,14 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
+from apps.execution.modes import normalize_gateway_mode
+
 
 def normalize_broker_mode(value):
-    mode = str(value or "").strip().lower()
-    if mode not in {"paper", "live"}:
-        raise ValidationError("IBKR mode must be exactly paper or live")
-    return mode
+    try:
+        return normalize_gateway_mode(value)
+    except ValueError as exc:
+        raise ValidationError("IBKR mode must be exactly paper or live") from exc
 
 
 class BrokerGatewaySession(models.Model):

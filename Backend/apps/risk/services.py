@@ -6,6 +6,12 @@ from django.db.models import Q, Sum
 from django.utils import timezone
 
 from apps.audit.models import OutboxEvent
+from apps.execution.modes import (
+    LiveTradingDisabled,
+    execution_mode_for_gateway_mode,
+    require_live_trading_allowed,
+    require_portfolio_execution_mode,
+)
 from apps.reconciliation.models import ReconciliationBreak
 
 from .models import CapitalReservation, KillSwitch, PreTradeRiskPolicy, RiskCheckResult
@@ -111,7 +117,7 @@ def evaluate_intent(intent, gateway_state=None):
 
     gateway_state = gateway_state or {}
     intent = OrderIntent.objects.select_for_update(of=("self",)).select_related(
-        "portfolio__account", "instrument", "strategy_instance"
+        "portfolio__account", "portfolio__gateway_session", "instrument", "strategy_instance"
     ).get(pk=intent.pk)
     account = BrokerAccount.objects.select_for_update().get(pk=intent.portfolio.account_id)
     intent.portfolio.account = account
@@ -165,12 +171,22 @@ def evaluate_intent(intent, gateway_state=None):
     if not gateway_state.get("connected", False):
         add("gateway", "HELD", "Gateway is disconnected", 0)
         return "HELD", Decimal(0), checks
-    broker_mode=str(gateway_state.get("mode", "")).lower()
-    if broker_mode not in {"paper","live"}:
-        add("gateway_mode", "REJECTED", "Gateway must report paper or live mode", 0)
+    try:
+        intent_mode = require_portfolio_execution_mode(
+            intent.portfolio,
+            intent.mode,
+        )
+        health_mode = execution_mode_for_gateway_mode(gateway_state.get("mode"))
+        if health_mode != intent_mode:
+            raise ValueError(
+                "Intent, Gateway session, and Gateway health modes must match"
+            )
+        require_live_trading_allowed(intent_mode)
+    except LiveTradingDisabled as exc:
+        add("live_trading", "REJECTED", str(exc), 0)
         return "REJECTED", Decimal(0), checks
-    if broker_mode=="live" and not settings.ALLOW_LIVE_TRADING:
-        add("live_trading", "REJECTED", "Live order routing is disabled by deployment policy", 0)
+    except ValueError as exc:
+        add("gateway_mode", "REJECTED", str(exc), 0)
         return "REJECTED", Decimal(0), checks
     account_breaks = ReconciliationBreak.objects.filter(
         run__broker_account=account, material=True, resolved=False

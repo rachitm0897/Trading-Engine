@@ -14,6 +14,7 @@ from apps.oms.services import ALLOWED, apply_execution
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
 from apps.market_streams.models import MarketDataSubscription
 from apps.core.idempotency import canonical_request_hash
+from apps.execution.modes import execution_mode_for_portfolio
 from .client import GatewayClient
 from .models import BrokerPositionSnapshot, BrokerSessionAccount, BrokerSyncCursor
 
@@ -238,7 +239,8 @@ def _external_order(row, instrument, portfolio, gateway_session=None):
         "instrument":instrument,"side":intent_payload["side"],"quantity":intent_payload["quantity"],
         "order_type":intent_payload["order_type"],"limit_price":intent_payload["limit_price"],
         "stop_price":intent_payload["stop_price"],"time_in_force":intent_payload["time_in_force"],
-        "source":"BROKER_IMPORT","origin":OrderIntent.Origin.BROKER_IMPORT})
+        "source":"BROKER_IMPORT","origin":OrderIntent.Origin.BROKER_IMPORT,
+        "mode":execution_mode_for_portfolio(portfolio)})
     order,created=Order.objects.get_or_create(intent=intent,defaults={"internal_id":internal,"quantity":intent.quantity,"status":"ACKNOWLEDGED","broker_order_id":str(row.get("broker_order_id") or ""),"broker_permanent_id":str(row.get("permanent_id") or "")})
     if created: OrderStatusHistory.objects.create(order=order,from_status="",to_status="ACKNOWLEDGED",source="broker_import",reason="Discovered at IBKR",event_key=f"broker-import:{session_key}:{portfolio.account.account_id}:{identity}:ack"[:128])
     return order

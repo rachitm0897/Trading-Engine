@@ -42,9 +42,16 @@ def test_dual_strategy_schema_upgrades_to_instance_only_without_losing_reference
         allocated_capital=321,
         kill_switch=True,
     )
+    definition, _ = Definition.objects.get_or_create(
+        key="FIXED_WEIGHT_REBALANCE",
+        defaults={
+            "name": "Fixed Weight Rebalance",
+            "plugin_path": "apps.strategies.plugins.fixed_weight.FixedWeightRebalance",
+        },
+    )
     instance = Instance.objects.create(
         name="Migrated strategy",
-        definition=Definition.objects.get(key="FIXED_WEIGHT_REBALANCE"),
+        definition=definition,
         portfolio=portfolio,
         instrument=instrument,
         timeframe="1d",
@@ -272,3 +279,216 @@ def test_portfolio_builder_migration_splits_stocks_and_equal_strategy_shares_the
 
     executor = MigrationExecutor(connection)
     executor.migrate(final_targets)
+
+
+def test_paper_live_migrations_quarantine_legacy_runtime_work():
+    executor = MigrationExecutor(connection)
+    final_targets = executor.loader.graph.leaf_nodes()
+    old_targets = [
+        ("portfolios", "0004_tradingportfolio_gateway_session"),
+        ("strategies", "0009_strategy_lifecycle_states"),
+        ("allocation", "0011_portfolio_target_coordination"),
+        ("oms", "0009_orderintent_origin"),
+        ("execution", "0002_brokercommand"),
+        (
+            "portfolio_optimization",
+            "0004_alter_portfoliooptimizationrun_application_status",
+        ),
+    ]
+    executor.migrate(old_targets)
+    old_apps = executor.loader.project_state(old_targets).apps
+
+    Account = old_apps.get_model("accounts", "BrokerAccount")
+    Session = old_apps.get_model("broker_gateway", "BrokerGatewaySession")
+    Portfolio = old_apps.get_model("portfolios", "TradingPortfolio")
+    Instrument = old_apps.get_model("instruments", "Instrument")
+    Definition = old_apps.get_model("strategies", "StrategyDefinition")
+    Strategy = old_apps.get_model("strategies", "StrategyInstance")
+    Policy = old_apps.get_model("allocation", "RebalancePolicy")
+    Rebalance = old_apps.get_model("allocation", "RebalanceRun")
+    Intent = old_apps.get_model("oms", "OrderIntent")
+    Order = old_apps.get_model("oms", "Order")
+    Command = old_apps.get_model("execution", "BrokerCommand")
+    OptimizationPolicy = old_apps.get_model(
+        "portfolio_optimization",
+        "PortfolioOptimizationPolicy",
+    )
+
+    account = Account.objects.create(account_id="DU-PAPER-LIVE-MIGRATION")
+    session = Session.objects.create(
+        display_name="Legacy live session",
+        username_hint="legacy",
+        mode="live",
+        child_container_name="legacy-live-session",
+        encrypted_gateway_token="test",
+        encrypted_novnc_password="test",
+    )
+    portfolio = Portfolio.objects.create(
+        name="Legacy execution portfolio",
+        account=account,
+        gateway_session=session,
+    )
+    instrument = Instrument.objects.create(symbol="LEGACYMODE")
+    definition, _ = Definition.objects.get_or_create(
+        key="FIXED_WEIGHT_REBALANCE",
+        defaults={
+            "name": "Fixed Weight Rebalance",
+            "plugin_path": "apps.strategies.plugins.fixed_weight.FixedWeightRebalance",
+        },
+    )
+    strategy = Strategy.objects.create(
+        name="Legacy shadow strategy",
+        definition=definition,
+        portfolio=portfolio,
+        instrument=instrument,
+        timeframe="1d",
+        execution_mode="SHADOW",
+        enabled=True,
+        state="LONG",
+    )
+    policy = Policy.objects.create(portfolio=portfolio, mode="SHADOW")
+    rebalance = Rebalance.objects.create(
+        portfolio=portfolio,
+        policy=policy,
+        trigger="MANUAL",
+        idempotency_key="legacy-shadow-rebalance",
+        mode="SHADOW",
+        status="PLANNED",
+        phase="SHADOW_COMPLETE",
+    )
+    intent = Intent.objects.create(
+        rebalance=rebalance,
+        portfolio=portfolio,
+        instrument=instrument,
+        side="BUY",
+        quantity=1,
+        idempotency_key="legacy-shadow-intent",
+        mode="SHADOW",
+        operation_status="PENDING",
+        eligible=True,
+    )
+    order = Order.objects.create(
+        intent=intent,
+        internal_id="legacy-shadow-order",
+        status="QUEUED",
+        quantity=1,
+    )
+    command = Command.objects.create(
+        order=order,
+        internal_order_id=order.internal_id,
+        gateway_session=session,
+        command_type="PLACE",
+        idempotency_key="legacy-shadow-command",
+        request_payload={"internal_id": order.internal_id},
+        request_hash="legacy-shadow-command",
+        status="PENDING",
+    )
+    optimization_policy = OptimizationPolicy.objects.create(
+        portfolio=portfolio,
+        execution_mode="SHADOW",
+    )
+
+    executor = MigrationExecutor(connection)
+    executor.migrate(final_targets)
+    new_apps = executor.loader.project_state(final_targets).apps
+
+    migrated_strategy = new_apps.get_model(
+        "strategies", "StrategyInstance"
+    ).objects.get(pk=strategy.pk)
+    migrated_rebalance = new_apps.get_model(
+        "allocation", "RebalanceRun"
+    ).objects.get(pk=rebalance.pk)
+    migrated_intent = new_apps.get_model(
+        "oms", "OrderIntent"
+    ).objects.get(pk=intent.pk)
+    migrated_command = new_apps.get_model(
+        "execution", "BrokerCommand"
+    ).objects.get(pk=command.pk)
+    migrated_optimization_policy = new_apps.get_model(
+        "portfolio_optimization",
+        "PortfolioOptimizationPolicy",
+    ).objects.get(pk=optimization_policy.pk)
+
+    assert migrated_strategy.execution_mode == "PAPER"
+    assert migrated_strategy.enabled is False
+    assert migrated_strategy.state == "PAUSED"
+    assert migrated_rebalance.mode == "LIVE"
+    assert migrated_rebalance.run_type == "PREVIEW"
+    assert migrated_rebalance.phase == "PREVIEW_COMPLETE"
+    assert migrated_intent.mode == "LIVE"
+    assert migrated_intent.operation_status == "FAILED"
+    assert migrated_intent.eligible is False
+    assert migrated_intent.retryable is False
+    assert migrated_command.mode == "LIVE"
+    assert migrated_command.status == "FAILED"
+    assert migrated_optimization_policy.execution_mode == "LIVE"
+
+
+def test_research_paper_validation_migration_preserves_legacy_evidence():
+    executor = MigrationExecutor(connection)
+    final_targets = executor.loader.graph.leaf_nodes()
+    old_targets = [("research", "0004_nullable_recommendation_goal_audit")]
+    executor.migrate(old_targets)
+    old_apps = executor.loader.project_state(old_targets).apps
+
+    Dataset = old_apps.get_model("research", "ResearchDatasetVersion")
+    ResearchStrategy = old_apps.get_model("research", "ResearchStrategyDefinition")
+    Implementation = old_apps.get_model(
+        "research", "ResearchStrategyImplementation"
+    )
+    Readiness = old_apps.get_model("research", "ResearchStrategyReadiness")
+
+    dataset = Dataset.objects.create(
+        bundle_name="legacy-validation",
+        version="1",
+        snapshot_date="2026-01-01",
+        source_path="migration-test",
+        manifest_hash="legacy-validation",
+    )
+    strategy = ResearchStrategy.objects.create(
+        research_id="LEGACY_VALIDATION",
+        dataset_version=dataset,
+        name="Legacy validation strategy",
+        family="migration",
+        scope="single_asset",
+        role="EXECUTION",
+        production_status="VALIDATED",
+        configuration_hash="legacy-validation",
+    )
+    implementation = Implementation.objects.create(
+        research_strategy=strategy,
+        implementation_path="migration.test.strategy",
+        implementation_version="1",
+        implementation_hash="legacy-validation",
+        role="EXECUTION",
+        supported_frequency="1d",
+        supported_direction="LONG",
+        status="SHADOW_VALIDATED",
+        approval_record={"shadow_validated": True, "actor": "migration-test"},
+    )
+    readiness = Readiness.objects.create(
+        research_strategy=strategy,
+        as_of_date="2026-01-01",
+        blocking_reasons=["SHADOW_VALIDATION_REQUIRED", "OTHER_BLOCKER"],
+    )
+
+    executor = MigrationExecutor(connection)
+    executor.migrate(final_targets)
+    new_apps = executor.loader.project_state(final_targets).apps
+
+    migrated_implementation = new_apps.get_model(
+        "research", "ResearchStrategyImplementation"
+    ).objects.get(pk=implementation.pk)
+    migrated_readiness = new_apps.get_model(
+        "research", "ResearchStrategyReadiness"
+    ).objects.get(pk=readiness.pk)
+
+    assert migrated_implementation.status == "PAPER_VALIDATED"
+    assert migrated_implementation.approval_record == {
+        "paper_validated": True,
+        "actor": "migration-test",
+    }
+    assert migrated_readiness.blocking_reasons == [
+        "PAPER_VALIDATION_REQUIRED",
+        "OTHER_BLOCKER",
+    ]

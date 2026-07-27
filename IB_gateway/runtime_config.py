@@ -9,9 +9,10 @@ import shlex
 import sys
 from collections.abc import Mapping
 
+from gateway_service.modes import normalize_trading_mode
+
 
 VALID_BROKER_ADAPTERS = {"ib_async", "mock"}
-VALID_IBKR_MODES = {"paper", "live"}
 PLACEHOLDER_VALUES = {
     "<password>",
     "<secret>",
@@ -99,9 +100,12 @@ def validate_environment(environment: Mapping[str, str] | None = None) -> dict[s
             invalid.append(name)
 
     raw_mode = environment.get("IBC_TRADING_MODE", "paper" if adapter == "mock" else "")
-    mode = str(raw_mode or "").strip().lower()
-    if mode and mode not in VALID_IBKR_MODES:
-        invalid.append("IBC_TRADING_MODE")
+    mode = ""
+    if str(raw_mode or "").strip():
+        try:
+            mode = normalize_trading_mode(raw_mode)
+        except ValueError:
+            invalid.append("IBC_TRADING_MODE")
 
     normalized: dict[str, str] = {}
     integer_fields = {

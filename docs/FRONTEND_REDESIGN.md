@@ -7,7 +7,7 @@ The left navigation now has five stable routes: Dashboard, Strategies, Portfolio
 1. Open **Strategies** and choose **Create strategy**.
 2. Enter any ticker and exchange; contract qualification is shown as not checked, pending, or qualified with its conId.
 3. Choose a definition and timeframe supplied by the Backend. Parameter fields are generated from its `parameter_schema`.
-4. Configure target weight, capital share, priority, execution mode, and optional policies. `SHADOW` is the default, advanced policies are collapsed, and `LIVE` is absent.
+4. Configure target weight, capital share, priority, and optional policies. Execution mode is displayed from the assigned Paper/Live Gateway session; advanced policies are collapsed.
 5. Review the readable configuration and create immutable version 1.
 6. The detail view traces persisted bars and indicators alongside signal, target, order, and fill markers. Overview shows warm-up, target, attributed quantity, and active order; Activity shows the execution timeline.
 7. Portfolio exposes holdings and allocation first, with flows, rebalance preview, sizing, and policy internals in advanced sections.

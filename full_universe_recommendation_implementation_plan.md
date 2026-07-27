@@ -16,7 +16,7 @@ Replace the current 5-stock × 5-strategy MVP with a complete recommendation sys
 - all 97 strategy definitions;
 - the complete GICS hierarchy;
 - Finnhub and IBKR market/reference data;
-- the existing risk, Portfolio Builder, preview, rebalance and SHADOW/PAPER safety systems.
+- the existing risk, Portfolio Builder, preview, rebalance and Paper/Live safety systems.
 
 The user-facing flow must be:
 
@@ -26,7 +26,7 @@ Create or edit goals
 → click Generate recommendations
 → view recommended stocks, strategies and weights
 → preview the combined portfolio
-→ explicitly apply through SHADOW/PAPER
+→ explicitly apply through the assigned Paper/Live Gateway session
 ```
 
 The user must not:
@@ -63,7 +63,7 @@ The repository already contains:
 - immutable recommendation acceptance;
 - fixed recommendation weights in construction preview;
 - one combined rebalance;
-- SHADOW/PAPER-only execution controls;
+- session-derived Paper/Live execution controls;
 - frontend recommendation cards in Portfolio Builder.
 
 ### 2.2 Current limitations
@@ -226,7 +226,6 @@ Keep:
 
 ```text
 ALLOW_LIVE_TRADING=false
-NEW_EXECUTION_MODE=SHADOW
 ```
 
 Settings must be parsed through one typed configuration object with validation.
@@ -1046,7 +1045,7 @@ Show:
 - expected metrics;
 - rebalance changes.
 
-Apply continues through the existing SHADOW/PAPER safety path.
+Apply continues through the existing Paper/Live safety path.
 
 ---
 
@@ -1402,7 +1401,7 @@ Verify:
 - generation creates no strategy instances;
 - Preview creates no order;
 - Apply remains explicit;
-- strategy instances remain disabled SHADOW;
+- strategy instances remain disabled in the portfolio Gateway session's mode;
 - LIVE trading remains impossible;
 - kill switch and reconciliation remain unchanged.
 
@@ -1442,7 +1441,7 @@ The implementation is complete only when:
 17. the user previews the combined portfolio;
 18. preview preserves recommended weights;
 19. the user explicitly applies;
-20. one SHADOW/PAPER rebalance is created;
+20. one Preview or mode-matched Execution rebalance is created;
 21. strategy instances remain disabled;
 22. no LIVE order path is introduced.
 
@@ -1492,7 +1491,6 @@ Run a Docker smoke test with:
 ```text
 RESEARCH_ENABLED=true
 RECOMMENDATION_SYSTEM_ENABLED=true
-NEW_EXECUTION_MODE=SHADOW
 ALLOW_LIVE_TRADING=false
 ```
 

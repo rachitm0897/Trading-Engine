@@ -1,9 +1,9 @@
-import json, uuid
+import json
 from decimal import Decimal, InvalidOperation
-from django.conf import settings
 from django.db import transaction
 from apps.core.views import method_guard, response, _serialize
 from apps.core.validation import decimal_field, require_fields
+from apps.execution.modes import RunType, execution_mode_for_portfolio
 from apps.portfolios.models import TradingPortfolio
 from apps.allocation.models import RebalancePolicy, RebalanceRun
 from .services import plan_rebalance
@@ -18,7 +18,8 @@ def policies(request):
 
 
 def _row(run, detail=False):
-    row={"id":run.pk,"portfolio_id":run.portfolio_id,"trigger":run.trigger,"mode":run.mode,"status":run.status,
+    row={"id":run.pk,"portfolio_id":run.portfolio_id,"trigger":run.trigger,"mode":run.mode,
+        "run_type":run.run_type,"status":run.status,
         "phase":run.phase,"nav":run.nav,"total_drift":run.total_drift,"planned_turnover":run.planned_turnover,
         "target_source":run.target_source,"optimization_run_id":run.optimization_run_id,
         "construction_run_id":run.construction_run_id,
@@ -40,8 +41,9 @@ def execute(request, preview=False):
         unknown=set(payload)-{"portfolio_id","trigger","prices","nav"}
         if unknown:raise ValueError(f"Unsupported rebalance fields: {', '.join(sorted(unknown))}")
         require_fields(payload,"portfolio_id")
-        portfolio=TradingPortfolio.objects.select_related("account").get(pk=payload["portfolio_id"])
-        mode="SHADOW" if preview or settings.NEW_EXECUTION_MODE=="SHADOW" else "PAPER"
+        portfolio=TradingPortfolio.objects.select_related("account","gateway_session").get(pk=payload["portfolio_id"])
+        mode=execution_mode_for_portfolio(portfolio)
+        run_type=RunType.PREVIEW if preview else RunType.EXECUTION
         if payload.get("prices") is not None and not isinstance(payload["prices"],dict):raise ValueError("prices must be an object")
         prices={}
         for key,value in payload.get("prices",{}).items():
@@ -50,12 +52,13 @@ def execute(request, preview=False):
         nav=decimal_field(payload,"nav",positive=True,allow_zero=False)
         run=plan_rebalance(portfolio,payload.get("trigger","MANUAL"),key,prices=prices or None,
             nav=nav,mode=mode,strict_market_state=not bool(prices),defer=True,
+            run_type=run_type,
             retry_failed=request.headers.get("Idempotency-Retry","").strip().lower() in {"1","true","yes"})
         if run.status=="FAILED":
             return response(status=409,error={"code":"REBALANCE_RETRY_REQUIRED","message":run.last_error or "Failed rebalance requires an explicit retry","details":{"retryable":run.retryable}})
         from .tasks import execute_rebalance_run
         transaction.on_commit(lambda:execute_rebalance_run.delay(portfolio.pk,payload.get("trigger","MANUAL"),key,
-            prices or None,nav,mode,not bool(prices),None))
+            prices or None,nav,mode,not bool(prices),None,run_type))
         return response(_row(run,True),status=202)
     except (KeyError,ValueError,InvalidOperation,TradingPortfolio.DoesNotExist) as exc:
         return response(status=400,error={"code":"INVALID_REBALANCE","message":str(exc),"details":{}})

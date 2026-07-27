@@ -103,7 +103,10 @@ export function buildManualOrderPayload(draft: ManualOrderDraft): ManualOrderPay
   return payload
 }
 
-export function manualOrderBlockingReasons({session, account, portfolio}: ManualOrderSelection) {
+export function manualOrderBlockingReasons(
+  {session, account, portfolio}: ManualOrderSelection,
+  allowLiveTrading: boolean,
+) {
   const reasons: string[] = []
   if (!portfolio) reasons.push('Select an eligible portfolio.')
   if (!session) reasons.push('Select a broker session.')
@@ -123,8 +126,8 @@ export function manualOrderBlockingReasons({session, account, portfolio}: Manual
   if (!account.is_reconciled || session.last_gateway_state.reconciled === false) {
     reasons.push(`Account ${account.account_id} has unresolved reconciliation requirements.`)
   }
-  if (session.mode.toLowerCase() !== 'paper') {
-    reasons.push('LIVE manual order routing is disabled by the current execution policy.')
+  if (session.mode === 'live' && !allowLiveTrading) {
+    reasons.push('Live manual order routing is blocked by ALLOW_LIVE_TRADING.')
   }
   if (account.kill_switch) reasons.push(`The kill switch is enabled for account ${account.account_id}.`)
   if (portfolio.kill_switch) reasons.push(`The kill switch is enabled for portfolio ${portfolio.name}.`)

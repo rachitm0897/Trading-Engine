@@ -18,7 +18,7 @@ const strategy = {
   portfolio_id: 10, portfolio: 'Primary paper', instrument_id: 5, symbol: 'NVDA', asset_class: 'STK', exchange: 'SMART', currency: 'USD',
   conid: 4815747, primary_exchange: 'NASDAQ', timeframe: '15m', parameters: definition.default_parameters,
   target_configuration: {target_weight: 0.1, capital_share: 1, priority: 100}, risk_policy_id: null, order_policy_id: null,
-  execution_mode: 'SHADOW', state: 'LONG', enabled: true, version: 2, warmup_progress: 22, warmup_required: 22,
+  execution_mode: 'PAPER', state: 'LONG', enabled: true, version: 2, warmup_progress: 22, warmup_required: 22,
   block_reason: '', effective_from: '2026-07-13T00:00:00Z', effective_to: null, last_final_bar: '2026-07-13T01:00:00Z',
   latest_indicators: {channel: 123}, latest_signal: 'ENTER_LONG', current_target: 0.1, attributed_quantity: 4,
   active_order: 'order-active', last_fill: 'fill-1', cooldown: null, created_at: '2026-07-12T00:00:00Z', updated_at: '2026-07-13T01:00:00Z',
@@ -54,7 +54,7 @@ const constructionPreview = {
   id: 501, plan_id: 301, portfolio_id: 10, status: 'COMPLETED', application_status: 'NOT_APPLIED', retryable: false,
   last_error: '', attempt_count: 1, nav: 100000, final_target_weights: {cash: .7, stocks: {'5': .175, '6': .125}},
   metrics: {expected_return: .08, expected_volatility: .12, sharpe_ratio: .66, strategy_targets: [{identity: 'aggregate-nvda', strategy_definition_id: 44, strategy_name: definition.name, instrument_id: 5, symbol: 'NVDA', execution_timeframe: '15m', target_weight: .175, assignment_ids: [801, 802]}, {identity: 'aggregate-msft', strategy_definition_id: 44, strategy_name: definition.name, instrument_id: 6, symbol: 'MSFT', execution_timeframe: '15m', target_weight: .125, assignment_ids: [803]}]}, warnings: [], applied_rebalance: null, applied_at: null,
-  created_at: '', started_at: '', completed_at: '', rebalance: {id: 601, mode: 'SHADOW', status: 'PLANNED', phase: 'SHADOW_COMPLETE', planned_turnover: .3},
+  created_at: '', started_at: '', completed_at: '', rebalance: {id: 601, mode: 'PAPER', run_type: 'PREVIEW', status: 'PLANNED', phase: 'PREVIEW_COMPLETE', planned_turnover: .3},
   goals: [
     {goal_id: 401, name: 'Near-term reserve', allocation_weight: .5, goal_nav: 50000, timeframe_bucket: 'HURRY', risk_level: 2, optimizer_method: 'MINIMUM_VARIANCE', cash_weight: .8, maximum_stock_weight: .1, intentionally_cash_only: false, apply_blocked: false, warnings: [], stocks: [{instrument_id: 5, goal_instrument_id: 701, symbol: 'NVDA', goal_id: 401, goal_name: 'Near-term reserve', goal_allocation_weight: .5, local_weight: .1, portfolio_contribution: .05, strategy_share_total: 1, strategy_share_valid: true, strategies: [{assignment_id: 801, strategy_definition_id: 44, strategy_name: definition.name, strategy_share: 1, portfolio_weight: .05}]}]},
     {goal_id: 402, name: 'Long-term growth', allocation_weight: .5, goal_nav: 50000, timeframe_bucket: 'GROW', risk_level: 5, optimizer_method: 'MAXIMUM_SHARPE', cash_weight: .5, maximum_stock_weight: .25, intentionally_cash_only: false, apply_blocked: false, warnings: [], stocks: [{instrument_id: 5, goal_instrument_id: 702, symbol: 'NVDA', goal_id: 402, goal_name: 'Long-term growth', goal_allocation_weight: .5, local_weight: .25, portfolio_contribution: .125, strategy_share_total: 1, strategy_share_valid: true, strategies: [{assignment_id: 802, strategy_definition_id: 44, strategy_name: definition.name, strategy_share: 1, portfolio_weight: .125}]}, {instrument_id: 6, goal_instrument_id: 703, symbol: 'MSFT', goal_id: 402, goal_name: 'Long-term growth', goal_allocation_weight: .5, local_weight: .25, portfolio_contribution: .125, strategy_share_total: 1, strategy_share_valid: true, strategies: [{assignment_id: 803, strategy_definition_id: 44, strategy_name: definition.name, strategy_share: 1, portfolio_weight: .125}]}]},
@@ -98,12 +98,12 @@ const recommendationBatch = {
 }
 
 const data: Record<string, unknown> = {
-  system: {mode: 'PAPER', execution_mode: 'SHADOW', is_admin: true, global_kill_switch: false, material_breaks: 0, time: '2026-07-13T01:00:00Z'},
+  system: {mode: 'MULTI_SESSION', execution_modes: ['PAPER', 'LIVE'], execution_mode_source: 'PORTFOLIO_GATEWAY_SESSION', allow_live_trading: true, is_admin: true, global_kill_switch: false, material_breaks: 0, time: '2026-07-13T01:00:00Z'},
   gateway: {connected: true, reconciled: true, mode: 'paper', last_callback: '2026-07-13T01:00:00Z', worker: 'paper-worker'},
   'broker-sessions': [
     {id: 'session-1', display_name: 'Primary paper gateway', username_hint: 'du••ry', mode: 'paper',
       status: 'CONNECTED', connected: true, commands_enabled: true, last_error: '', accounts: [],
-      container_status: 'running', account_count: 2, last_gateway_state: {connected: true, reconciled: true},
+      container_status: 'running', account_count: 2, last_gateway_state: {connected: true, reconciled: true, mode: 'paper'},
       provisioned_at: null, connected_at: '2026-07-13T00:01:00Z', last_checked_at: '2026-07-13T01:00:00Z',
       deleted_at: null, needs_novnc: false, novnc_url: null,
       created_at: '2026-07-13T00:00:00Z', updated_at: '2026-07-13T01:00:00Z'},
@@ -159,7 +159,7 @@ const data: Record<string, unknown> = {
   'allocations/runs': [], 'rebalancing/policies': [], 'rebalancing/runs': [],
   'data-providers/finnhub': {provider: 'FINNHUB', configured: true, enabled: true, effective_source: 'ENVIRONMENT', environment_configured: true, database_configured: false, database_override_requested: false, database_override_allowed: false, database_override_active: false, masked_api_key: '••••CRET', last_success_at: '2026-07-13T01:00:00Z', last_tested_at: null, last_test_success_at: null, last_error: '', rate_limit_state: {remaining: '59', limit: '60'}, updated_at: null},
   'portfolio-universe': [{id: 1, portfolio_id: 10, name: 'Default universe', include_strategy_instruments: false, minimum_history_observations: 60, maximum_instruments: 50, selected_count: 2, enabled: true, instruments: [{instrument_id: 5, symbol: 'NVDA', enabled: true}, {instrument_id: 6, symbol: 'MSFT', enabled: true}], updated_at: '2026-07-13T01:00:00Z'}],
-  'portfolio-optimization/policies': [{id: 1, portfolio_id: 10, name: 'Default Markowitz policy', method: 'MINIMUM_VARIANCE', lookback_days: 252, return_estimation: 'HISTORICAL_MEAN', covariance_estimation: 'SAMPLE', risk_free_rate: 0, target_cash_weight: .05, minimum_weight: 0, maximum_weight: .8, maximum_turnover: .5, transaction_cost_penalty: .01, long_only: true, enabled: true, execution_mode: 'SHADOW', version: 1, updated_at: '2026-07-13T01:00:00Z'}],
+  'portfolio-optimization/policies': [{id: 1, portfolio_id: 10, name: 'Default Markowitz policy', method: 'MINIMUM_VARIANCE', lookback_days: 252, return_estimation: 'HISTORICAL_MEAN', covariance_estimation: 'SAMPLE', risk_free_rate: 0, target_cash_weight: .05, minimum_weight: 0, maximum_weight: .8, maximum_turnover: .5, transaction_cost_penalty: .01, long_only: true, enabled: true, execution_mode: 'PAPER', version: 1, updated_at: '2026-07-13T01:00:00Z'}],
   'portfolio-optimization/runs': [],
   'portfolio-construction/plans': [constructionPlan],
   'portfolio-construction/runs': [],
@@ -177,7 +177,7 @@ const optimizationPreview = {
   objective_value: .02, expected_return: .12, expected_volatility: .18, sharpe_ratio: .66, turnover: .24, cash_weight: .05, solver_status: 'Optimization terminated successfully', warnings: [], error_details: {}, flow_reference: '', created_at: '2026-07-13T01:00:00Z', completed_at: '2026-07-13T01:00:01Z',
   targets: [{id: 1, instrument_id: 5, symbol: 'NVDA', current_weight: .1, optimized_weight: .45, weight_change: .35, target_value: 45000, expected_return_contribution: .05, risk_contribution: .08, constraint_status: '', rank: 0}, {id: 2, instrument_id: 6, symbol: 'MSFT', current_weight: 0, optimized_weight: .5, weight_change: .5, target_value: 50000, expected_return_contribution: .07, risk_contribution: .1, constraint_status: '', rank: 1}],
   planned_trades: [{instrument_id: 5, symbol: 'NVDA', side: 'BUY', quantity: 10, reference_price: 125, estimated_cost: 1, suppressed: false, suppression_reason: ''}, {instrument_id: 6, symbol: 'MSFT', side: 'BUY', quantity: 15, reference_price: 400, estimated_cost: 2, suppressed: false, suppression_reason: ''}],
-  rebalance: {id: 81, mode: 'SHADOW', status: 'PLANNED', phase: 'SHADOW_COMPLETE', planned_turnover: .24},
+  rebalance: {id: 81, mode: 'PAPER', run_type: 'PREVIEW', status: 'PLANNED', phase: 'PREVIEW_COMPLETE', planned_turnover: .24},
 }
 
 let failDashboard = false
@@ -199,6 +199,9 @@ beforeEach(() => {
   failStrategyDelete = false
   failConstructionPreview = false
   builderReadinessReady = true
+  const brokerSession = (data['broker-sessions'] as Array<Record<string, unknown>>)[0]
+  brokerSession.mode = 'paper'
+  brokerSession.last_gateway_state = {connected: true, reconciled: true, mode: 'paper'}
   const firstBuilderAssignment = (data['portfolio-construction/instruments/701/assignments'] as Array<Record<string, unknown>>)[0]
   firstBuilderAssignment.strategy_share = .5
   firstBuilderAssignment.parameter_overrides = {...definition.default_parameters, direction: 'LONG'}
@@ -223,7 +226,7 @@ beforeEach(() => {
       }
       if (path === 'orders') return {ok: true, status: 201, json: async () => ({ok: true, data: {internal_id: 'created-order', status: 'QUEUED', decision: 'APPROVED'}, error: null, meta: {}})} as Response
       if (path === 'portfolio-optimization/preview') return {ok: true, status: 201, json: async () => ({ok: true, data: optimizationPreview, error: null, meta: {}})} as Response
-      if (path === 'portfolio-optimization/run') return {ok: true, status: 201, json: async () => ({ok: true, data: {...optimizationPreview, application_status: 'APPLIED', applied_at: '2026-07-13T01:02:00Z', applied_rebalance: {id: 82, mode: 'SHADOW', status: 'PLANNED', phase: 'SHADOW_COMPLETE', planned_turnover: .24}}, error: null, meta: {}})} as Response
+      if (path === 'portfolio-optimization/run') return {ok: true, status: 201, json: async () => ({ok: true, data: {...optimizationPreview, application_status: 'APPLIED', applied_at: '2026-07-13T01:02:00Z', applied_rebalance: {id: 82, mode: 'PAPER', run_type: 'EXECUTION', status: 'PLANNED', phase: 'SELLS', planned_turnover: .24}}, error: null, meta: {}})} as Response
       if (path === 'portfolio-construction/plans/301/recommendations') return {ok: true, status: 202, json: async () => ({
         ok: true,
         data: {...recommendationBatch, status: 'QUEUED', goals: recommendationBatch.goals.map((goal) => ({...goal, status: 'QUEUED'}))},
@@ -236,7 +239,7 @@ beforeEach(() => {
           : constructionPreview
         return {ok: true, status: 202, json: async () => ({ok: true, data: preview, error: null, meta: {}})} as Response
       }
-      if (path === 'portfolio-construction/runs/501/apply') return {ok: true, status: 202, json: async () => ({ok: true, data: {...constructionPreview, application_status: 'APPLIED', applied_at: '2026-07-13T01:03:00Z', applied_rebalance: {id: 602, mode: 'SHADOW', status: 'PLANNED', phase: 'SHADOW_COMPLETE', planned_turnover: .3}, metrics: {...constructionPreview.metrics, strategy_instances: [{assignment_id: 801, strategy_instance_id: 801, target_weight: .175}]}}, error: null, meta: {}})} as Response
+      if (path === 'portfolio-construction/runs/501/apply') return {ok: true, status: 202, json: async () => ({ok: true, data: {...constructionPreview, application_status: 'APPLIED', applied_at: '2026-07-13T01:03:00Z', applied_rebalance: {id: 602, mode: 'PAPER', run_type: 'EXECUTION', status: 'PLANNED', phase: 'SELLS', planned_turnover: .3}, metrics: {...constructionPreview.metrics, strategy_instances: [{assignment_id: 801, strategy_instance_id: 801, target_weight: .175}]}}, error: null, meta: {}})} as Response
       if (path === 'allocations/flows') return {ok: true, status: 201, json: async () => ({ok: true, data: {id: 92, status: 'COMPLETED', allocation_mode: 'PORTFOLIO_OPTIMIZATION'}, error: null, meta: {}})} as Response
       if (path === 'data-providers/finnhub/configure') return {ok: true, status: 200, json: async () => ({ok: true, data: {...data['data-providers/finnhub'] as object, database_configured: true, masked_api_key: '••••CRET'}, error: null, meta: {}})} as Response
       if (path === 'data-providers/finnhub/test') return {ok: true, status: 200, json: async () => ({ok: true, data: {...data['data-providers/finnhub'] as object, connected: true, source: 'TRANSIENT'}, error: null, meta: {}})} as Response
@@ -271,7 +274,17 @@ test('renders bookmarkable primary routes and paper status', async () => {
   expect(screen.getAllByText('PAPER').length).toBeGreaterThan(0)
 })
 
-test('supports deep links, arbitrary tickers, dynamic schema fields, and shadow-only creation', async () => {
+test('System reports Paper and Live readiness separately', async () => {
+  window.history.replaceState({}, '', '/system')
+  render(<App />)
+  expect(await screen.findByRole('heading', {name: 'System'})).toBeInTheDocument()
+  expect(screen.getByText('Paper readiness')).toBeInTheDocument()
+  expect(screen.getByText('Live readiness')).toBeInTheDocument()
+  expect(await screen.findByText('1 command-ready Paper Gateway session')).toBeInTheDocument()
+  expect(await screen.findByText('No Live Gateway session is configured')).toBeInTheDocument()
+})
+
+test('derives strategy execution mode from the selected portfolio Gateway session', async () => {
   const user = userEvent.setup()
   window.history.replaceState({}, '', '/strategies/new')
   render(<App />)
@@ -288,10 +301,18 @@ test('supports deep links, arbitrary tickers, dynamic schema fields, and shadow-
   expect(screen.getByLabelText('lookback')).toHaveValue(21)
   expect(screen.getByLabelText('confirmation')).toHaveValue('CLOSE')
   await user.click(screen.getByRole('button', {name: 'Continue'}))
-  const mode = screen.getByLabelText('Execution mode')
-  expect(mode).toHaveValue('SHADOW')
-  expect(screen.queryByRole('option', {name: 'LIVE'})).not.toBeInTheDocument()
+  const mode = await screen.findByLabelText('Execution mode')
+  expect(mode).toHaveTextContent('PAPER')
+  expect(mode).toHaveTextContent('Derived from Primary paper gateway')
+  expect(within(mode).queryByRole('combobox')).not.toBeInTheDocument()
   expect(screen.getByRole('button', {name: /Advanced policy settings/})).toHaveAttribute('aria-expanded', 'false')
+  await user.click(screen.getByRole('button', {name: 'Continue'}))
+  expect(screen.getByText('Execution boundary preserved')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', {name: 'Validate & create'}))
+  await waitFor(() => {
+    const call = vi.mocked(fetch).mock.calls.find(([input, init]) => apiPath(String(input)) === 'strategy-instances' && init?.method === 'POST')
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({portfolio_id: 10, execution_mode: 'PAPER'})
+  })
 })
 
 test('selected account updates the available portfolio context', async () => {
@@ -407,16 +428,29 @@ test('portfolio builder generates one-click recommendations, previews merged goa
   expect(screen.getByText('Buy and Hold')).toBeInTheDocument()
   expect(screen.getByText('Quality Composite')).toBeInTheDocument()
   expect(screen.queryByLabelText(/IBKR stock search/)).not.toBeInTheDocument()
-  await user.click(screen.getByRole('button', {name: 'Preview portfolio'}))
+  await user.click(screen.getByRole('button', {name: 'Preview rebalance'}))
   expect(await screen.findByRole('heading', {name: '3. Preview & Apply'})).toBeInTheDocument()
+  expect(screen.getByText('Preview creates no orders. Review the combined target before explicitly applying it.')).toBeInTheDocument()
   expect(screen.getByText('Shared by 2 goals')).toBeInTheDocument()
   expect(screen.getAllByText('17.5%').length).toBeGreaterThan(0)
-  await user.click(screen.getByRole('button', {name: 'Confirm SHADOW apply'}))
-  const dialog = screen.getByRole('dialog', {name: 'Apply the combined portfolio target?'})
-  await user.click(within(dialog).getByRole('button', {name: 'Apply one combined target'}))
+  await user.click(screen.getByRole('button', {name: 'Apply to Paper'}))
+  const dialog = screen.getByRole('dialog', {name: 'Apply to Paper?'})
+  await user.click(within(dialog).getByRole('button', {name: 'Apply to Paper'}))
   expect(await screen.findByText(/Applied through rebalance 602/)).toBeInTheDocument()
   const applyCalls = vi.mocked(fetch).mock.calls.filter(([input, init]) => String(input).includes('/portfolio-construction/runs/501/apply/') && init?.method === 'POST')
   expect(applyCalls).toHaveLength(1)
+})
+
+test('portfolio builder labels a Gateway-derived Live apply explicitly', async () => {
+  const brokerSession = (data['broker-sessions'] as Array<Record<string, unknown>>)[0]
+  brokerSession.mode = 'live'
+  brokerSession.last_gateway_state = {connected: true, reconciled: true, mode: 'live'}
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/portfolio-builder')
+  render(<App />)
+  await user.click(await screen.findByRole('button', {name: 'Save goals & generate recommendations'}))
+  await user.click(await screen.findByRole('button', {name: 'Preview rebalance'}))
+  expect(await screen.findByRole('button', {name: 'Apply to Live'})).toBeInTheDocument()
 })
 
 
@@ -442,11 +476,11 @@ test('portfolio builder reports a failed preview instead of rendering an empty r
   window.history.replaceState({}, '', '/portfolio-builder')
   render(<App />)
   await user.click(await screen.findByRole('button', {name: 'Save goals & generate recommendations'}))
-  await user.click(await screen.findByRole('button', {name: 'Preview portfolio'}))
+  await user.click(await screen.findByRole('button', {name: 'Preview rebalance'}))
   expect(await screen.findByText('Recommendation workflow failed')).toBeInTheDocument()
   expect(screen.getByText('Finnhub API key is not configured')).toBeInTheDocument()
   expect(screen.queryByRole('heading', {name: '3. Preview & Apply'})).not.toBeInTheDocument()
-  expect(screen.getByRole('button', {name: 'Preview portfolio'})).toBeInTheDocument()
+  expect(screen.getByRole('button', {name: 'Preview rebalance'})).toBeInTheDocument()
 })
 
 test('portfolio builder removes manual construction and keeps research metadata out of recommendation cards', async () => {
@@ -467,7 +501,7 @@ test('portfolio builder removes manual construction and keeps research metadata 
   expect(goalPatches).toHaveLength(2)
 })
 
-test('advanced target optimizer previews metrics and planned SHADOW trades', async () => {
+test('advanced target optimizer previews without orders and offers a Paper apply route', async () => {
   const user = userEvent.setup()
   window.history.replaceState({}, '', '/portfolio')
   render(<App />)
@@ -482,8 +516,23 @@ test('advanced target optimizer previews metrics and planned SHADOW trades', asy
   await user.click(previewButton)
   expect(await screen.findByText('Current versus optimized allocation')).toBeInTheDocument()
   expect(screen.getByText('Planned trades')).toBeInTheDocument()
-  expect(screen.getAllByText('SHADOW').length).toBeGreaterThan(0)
-  expect(screen.getByRole('button', {name: 'Apply through SHADOW rebalance'})).toBeInTheDocument()
+  expect(screen.getAllByText('PREVIEW').length).toBeGreaterThan(0)
+  expect(screen.getAllByText(/Preview creates no orders/).length).toBeGreaterThan(0)
+  expect(screen.getByRole('button', {name: 'Apply to Paper'})).toBeInTheDocument()
+})
+
+test('advanced optimizer labels a Gateway-derived Live apply explicitly', async () => {
+  const brokerSession = (data['broker-sessions'] as Array<Record<string, unknown>>)[0]
+  brokerSession.mode = 'live'
+  brokerSession.last_gateway_state = {connected: true, reconciled: true, mode: 'live'}
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/portfolio')
+  render(<App />)
+  await user.click(await screen.findByRole('button', {name: /Advanced target optimizer/}))
+  const previewButton = await screen.findByRole('button', {name: 'Preview optimization'})
+  await waitFor(() => expect(previewButton).toBeEnabled())
+  await user.click(previewButton)
+  expect(await screen.findByRole('button', {name: 'Apply to Live'})).toBeInTheDocument()
 })
 
 test('applied optimization disables Apply and shows the applied rebalance', async () => {
@@ -495,7 +544,7 @@ test('applied optimization disables Apply and shows the applied rebalance', asyn
   const previewButton = await screen.findByRole('button', {name: 'Preview optimization'})
   await waitFor(() => expect(previewButton).toBeEnabled())
   await user.click(previewButton)
-  await user.click(await screen.findByRole('button', {name: 'Apply through SHADOW rebalance'}))
+  await user.click(await screen.findByRole('button', {name: 'Apply to Paper'}))
   const appliedButton = await screen.findByRole('button', {name: 'Optimization already applied'})
   expect(appliedButton).toBeDisabled()
   expect(screen.getByText(/Applied rebalance 82/)).toBeInTheDocument()

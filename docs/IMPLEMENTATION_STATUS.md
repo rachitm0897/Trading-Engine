@@ -42,13 +42,13 @@ Kafka/Flink/allocation extension verification on 2026-07-11:
 - An existing pre-migration PostgreSQL volume upgraded without dropping data.
 - The current Compose smoke expects seven long-running services and no public Kafka/Flink ports.
 
-New execution defaults to `SHADOW`. `NEW_EXECUTION_MODE=PAPER` permits planners to emit only `OrderIntent`; it never bypasses sizing, risk, OMS, Gateway, ledgers or reconciliation. Live mode is unsupported for the new workflows.
+Runtime execution supports exactly `PAPER` and `LIVE`, derived from each portfolio's assigned Gateway session. `PREVIEW` is a separate run type that cannot create `OrderIntent` or broker commands. Both execution modes use sizing, risk, OMS, Gateway, ledgers, and reconciliation; `ALLOW_LIVE_TRADING` is the Live safety gate.
 
 Configurable strategy extension verification on 2026-07-13:
 
-- Backend: 49 tests passed. New coverage includes immutable version creation, default shadow mode, management APIs/live rejection, asynchronous IBKR conId qualification persistence, the TSLA RSI(14)/5-minute/30-to-65/5% paper target-to-intent example, target persistence across `HOLD` runs, RSI ticker portability (TSLA/AAPL), RSI/SMA strategy portability, shared indicators, final-input readiness, corrected-bar/replay idempotency, plugin exception isolation, multi-strategy paper netting, signed version attribution through partial and final fills, and attributed-position recovery. Existing restart/recovery, Kafka replay, risk, OMS, ledger, and reconciliation tests remain green.
-- Frontend: 5 tests passed and the TypeScript/Vite production build passed. The strategy builder renders plugin schemas, canonical ticker input, timeframe/target/risk/order controls, shadow/observe/paper modes, warm-up requirements, monitoring filters, and enable/pause/flatten controls. Live is not presented.
+- Backend coverage includes immutable version creation, Paper/Live session-derived modes, asynchronous IBKR conId qualification persistence, the TSLA RSI(14)/5-minute/30-to-65/5% Paper target-to-intent example, target persistence across `HOLD` runs, strategy portability, shared indicators, final-input readiness, corrected-bar/replay idempotency, plugin exception isolation, multi-strategy Paper netting, signed version attribution through fills, and attributed-position recovery.
+- The strategy builder renders plugin schemas, canonical ticker input, timeframe/target/risk/order controls, Paper/Live modes, warm-up requirements, monitoring filters, and enable/pause/flatten controls.
 - Streaming calculation tests pass with registry-parameterized indicator computation. Flink jobs contain no ticker filter and bar timeframes are parsed from active `strategy.inputs.v1` requirements rather than a fixed TSLA/5-minute branch.
 - Five built-in definitions are data-backed: RSI mean reversion, SMA crossover, Donchian breakout, volatility-target momentum, and fixed-weight rebalance. Plugins only return signals/targets and have no broker dependency.
 
-Operator paper certification still requires an authenticated IBKR paper session, qualified contracts, market-data permissions, and sufficient warm-up bars. No migration or API enables live trading.
+Paper and Live execution require an authenticated matching IBKR session, qualified contracts, market-data permissions, sufficient warm-up bars, and clean reconciliation. Live additionally requires `ALLOW_LIVE_TRADING=true`.

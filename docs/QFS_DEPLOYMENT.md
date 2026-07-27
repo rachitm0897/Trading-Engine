@@ -32,7 +32,7 @@ The Backend never pulls an image. It has no Docker SDK, Docker CLI, Docker socke
 | Backend QFS app | `PORT`, `APP_BASE_PATH`, `PUBLIC_BASE_URL`, `FORWARDED_ALLOW_IPS`, `DJANGO_SECRET_KEY`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS`, external infrastructure URLs, `IBKR_GATEWAY_IMAGE`, `BROKER_SESSION_ENCRYPTION_KEY`, optional `QCH_SUBCONTAINER_NETWORK`, trading/provider/research policy overrides |
 | QCH-injected Backend values | `QCH_APP_ID`, `QCH_API_HOST`, `QCH_SERVICE_TOKEN` |
 | Per-session child environment | `DJANGO_SECRET_KEY`, `GATEWAY_SERVICE_TOKEN`, `NOVNC_PASSWORD`, `IB_USERNAME`, `IB_PASSWORD`, `IBC_TRADING_MODE`, `BROKER_ADAPTER`, `PORT` |
-| Optional local development | PostgreSQL credentials, host ports, local Django/encryption secrets, CORS/CSRF origins, SHADOW execution mode, optional Finnhub key |
+| Optional local development | PostgreSQL credentials, host ports, local Django/encryption secrets, CORS/CSRF origins, Paper/Live Gateway session configuration, optional Finnhub key |
 
 Do not configure IBKR usernames/passwords on either QFS application. They are submitted per session, encrypted temporarily by the Backend, sent once to QCH, and deleted after confirmed creation/adoption or final expiry/failure.
 

@@ -23,7 +23,7 @@ Use [template.py](../Backend/apps/strategies/plugins/template.py) as the startin
 2. Add built-ins to `plugins/registry.py`. For an external plugin, insert a `StrategyDefinition` whose `plugin_path` is the fully qualified class path.
 3. Store the plugin schema and supported metadata in the definition migration.
 4. Create an instance through `POST /api/v1/strategy-instances/`. This validates the schema, resolves its canonical instrument/IBKR contract, creates immutable version 1, and publishes shared input requirements.
-5. Enable only after qualification and warm-up. New instances remain `SHADOW` by default; `PAPER` is explicit and `LIVE` is rejected.
+5. Enable only after qualification and warm-up. The instance mode is derived from the portfolio's assigned Paper or Live Gateway session, and Live activation requires `ALLOW_LIVE_TRADING=true`.
 
 ## Indicator identity and reuse
 

@@ -4,6 +4,7 @@ from django.test import override_settings
 from django.test import Client
 from apps.accounts.models import BrokerAccount
 from apps.allocation.models import RebalanceRun
+from apps.broker_gateway.models import BrokerGatewaySession
 from apps.instruments.models import Instrument
 from apps.portfolios.models import TradingPortfolio
 
@@ -13,7 +14,15 @@ pytestmark=pytest.mark.django_db
 @pytest.fixture
 def portfolio():
     account=BrokerAccount.objects.create(account_id="DU-API",net_liquidation=10000,available_cash=5000)
-    return TradingPortfolio.objects.create(name="API",account=account)
+    session=BrokerGatewaySession.objects.create(
+        display_name="API Paper",
+        username_hint="api",
+        mode="paper",
+        child_container_name="api-paper-gateway",
+        encrypted_gateway_token="test",
+        encrypted_novnc_password="test",
+    )
+    return TradingPortfolio.objects.create(name="API",account=account,gateway_session=session)
 
 
 @override_settings(KAFKA_ENABLED=False,FLINK_REST_URL="http://127.0.0.1:1")
@@ -55,10 +64,11 @@ def test_rebalance_preview_and_sizing_preview_never_create_orders(client,portfol
     instrument=Instrument.objects.create(symbol="API")
     rebalance=client.post("/api/v1/rebalancing/preview/",json.dumps({"portfolio_id":portfolio.pk,"prices":{str(instrument.pk):"10"}}),
         content_type="application/json",HTTP_IDEMPOTENCY_KEY="preview-api")
-    assert rebalance.status_code==202 and rebalance.json()["data"]["mode"]=="SHADOW"
+    assert rebalance.status_code==202 and rebalance.json()["data"]["mode"]=="PAPER"
+    assert rebalance.json()["data"]["run_type"]=="PREVIEW"
     assert rebalance.json()["data"]["status"]=="QUEUED"
     from apps.rebalancing.tasks import execute_rebalance_run
-    execute_rebalance_run.run(portfolio.pk,"MANUAL","preview-api",{instrument.pk:"10"},None,"SHADOW",False,None)
+    execute_rebalance_run.run(portfolio.pk,"MANUAL","preview-api",{instrument.pk:"10"},None,"PAPER",False,None,"PREVIEW")
     sizing=client.post("/api/v1/position-sizing/preview/",json.dumps({"portfolio_id":portfolio.pk,"instrument_id":instrument.pk,
         "target_quantity":"10","entry_price":"10","stop_price":"9","adv":"10000"}),content_type="application/json",HTTP_IDEMPOTENCY_KEY="size-api")
     assert sizing.status_code==201 and "binding_constraint" in sizing.json()["data"]
@@ -75,7 +85,7 @@ def test_async_rebalance_failure_is_visible_and_requires_explicit_retry(client,p
     def fail(*args,**kwargs):raise RuntimeError("planner unavailable")
     monkeypatch.setattr(tasks,"plan_rebalance",fail)
     with pytest.raises(RuntimeError,match="planner unavailable"):
-        tasks.execute_rebalance_run.run(portfolio.pk,"MANUAL","async-rebalance-failure",None,None,"SHADOW",True,None)
+        tasks.execute_rebalance_run.run(portfolio.pk,"MANUAL","async-rebalance-failure",None,None,"PAPER",True,None,"PREVIEW")
     stored=RebalanceRun.objects.get(pk=queued.json()["data"]["id"])
     assert stored.status=="FAILED" and stored.retryable and "planner unavailable" in stored.last_error
     no_retry=client.post("/api/v1/rebalancing/preview/",payload,content_type="application/json",

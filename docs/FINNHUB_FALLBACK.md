@@ -1,6 +1,6 @@
 # Finnhub market-data fallback
 
-Finnhub is a Backend-only market-data fallback. It has no account, position, order, execution, commission, contract-qualification, or trading authority. IBKR remains the sole broker and all execution remains paper-only.
+Finnhub is a Backend-only market-data fallback. It has no account, position, order, execution, commission, contract-qualification, or trading authority. IBKR remains the sole broker; execution mode comes from the portfolio's assigned Paper or Live Gateway session.
 
 The fallback path is:
 
@@ -41,7 +41,7 @@ The mapping POST requires an `Idempotency-Key` and `provider_symbol`. It verifie
 
 On IBKR failure, Backend fetches required Finnhub history when historical fallback is enabled, records reference-price provenance, activates WebSocket fallback, and continues through Kafka/Flink. If Finnhub is also unusable, dependent strategies are blocked. While fallback is active, Backend probes IBKR with a separate generation. It promotes IBKR only after fresh live events reach `PRIMARY_RECOVERY_CONFIRMATION_EVENTS` at a clean 5-second boundary; delayed Finnhub events are then rejected.
 
-No setting in this feature enables live trading. `ALLOW_LIVE_TRADING=true` remains a startup error and `NEW_EXECUTION_MODE` remains restricted to `SHADOW` or `PAPER`.
+This feature does not select execution mode. Mode is derived from the portfolio's assigned Gateway session, and `ALLOW_LIVE_TRADING=false` continues to block Live execution.
 
 Run the mocked takeover/recovery smoke test inside the built Backend image without brokerage credentials or a Finnhub key:
 

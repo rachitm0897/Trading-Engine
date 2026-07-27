@@ -14,7 +14,14 @@ from apps.allocation.models import (
     RebalanceRun,
 )
 from apps.instruments.models import BrokerContract, Instrument
-from apps.market_streams.models import InstrumentMarketState
+from apps.broker_gateway.client import GatewayClient
+from apps.execution.dispatch import (
+    claim_next_broker_command,
+    dispatch_broker_command,
+    process_order_intents,
+)
+from apps.execution.models import BrokerCommand
+from apps.market_streams.models import IndicatorValue, InstrumentMarketState
 from apps.oms.models import Order, OrderIntent
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
 from apps.rebalancing.coordinator import (
@@ -33,6 +40,7 @@ from apps.strategies.models import (
     StrategyTarget,
     StrategyVersion,
 )
+from tests.managed_gateway import bind_gateway_mode
 
 
 pytestmark = pytest.mark.django_db
@@ -46,6 +54,7 @@ def make_portfolio(name="Coordinated", *, mode="PAPER"):
         is_reconciled=True,
     )
     portfolio = TradingPortfolio.objects.create(name=name, account=account)
+    bind_gateway_mode(portfolio, mode=mode.lower())
     RebalancePolicy.objects.create(
         portfolio=portfolio,
         mode=mode,
@@ -127,6 +136,7 @@ def make_strategy(
         instrument=instrument,
         target_weight=weight,
         signal_time=signal_time or timezone.now(),
+        execution_mode=mode,
     )
     return instance, version, run, target
 
@@ -147,11 +157,12 @@ def add_target(instance, version, weight, when, suffix):
         instrument=instance.instrument,
         target_weight=weight,
         signal_time=when,
+        execution_mode=instance.execution_mode,
     )
 
 
 def test_five_strategy_targets_for_one_bar_create_one_reproducible_snapshot():
-    portfolio = make_portfolio("five", mode="SHADOW")
+    portfolio = make_portfolio("five", mode="PAPER")
     instrument = make_instrument("FIVE")
     event_time = timezone.now()
     for index in range(5):
@@ -161,7 +172,7 @@ def test_five_strategy_targets_for_one_bar_create_one_reproducible_snapshot():
             f"strategy-{index}",
             weight="0.02",
             signal_time=event_time,
-            mode="SHADOW",
+            mode="PAPER",
         )
 
     snapshot = build_portfolio_target_snapshot(portfolio, logical_time=event_time)
@@ -182,6 +193,73 @@ def test_five_strategy_targets_for_one_bar_create_one_reproducible_snapshot():
     snapshot.status = "REJECTED"
     with pytest.raises(ValidationError, match="immutable"):
         snapshot.save()
+
+
+@override_settings(ALLOW_LIVE_TRADING=True)
+def test_live_strategy_target_uses_complete_mode_matched_broker_pipeline(
+    settings, monkeypatch
+):
+    portfolio = make_portfolio("live-pipeline", mode="LIVE")
+    instrument = make_instrument("LIVEPIPE")
+    make_strategy(
+        portfolio,
+        instrument,
+        "live-pipeline-strategy",
+        weight="0.10",
+        mode="LIVE",
+    )
+    IndicatorValue.objects.create(
+        instrument=instrument,
+        indicator="average_volume",
+        indicator_name="average_volume",
+        requirement_identity_hash="live-pipeline-adv",
+        value=100000,
+        parameters={"window": settings.EXECUTION_AVERAGE_VOLUME_WINDOW},
+        timeframe="1d",
+        source_bar_id="live-pipeline-adv",
+        is_final=True,
+        processing_mode="LIVE",
+        event_time=timezone.now(),
+        source_key="live-pipeline-adv",
+    )
+    snapshot = build_portfolio_target_snapshot(portfolio)
+    rebalance = plan_rebalance(
+        portfolio,
+        "STRATEGY_TARGETS",
+        "live-complete-pipeline",
+        target_snapshot=snapshot,
+    )
+    intent = OrderIntent.objects.get(rebalance=rebalance)
+    monkeypatch.setattr(
+        GatewayClient,
+        "health",
+        lambda self: {"connected": True, "reconciled": True, "mode": "live"},
+    )
+
+    result = process_order_intents()
+    intent.refresh_from_db()
+    assert result == {
+        "claimed": 1,
+        "commands_created": 1,
+    }, intent.operation_error
+    command = BrokerCommand.objects.get(order__intent=intent)
+
+    class LiveGateway:
+        calls = 0
+
+        def health(self):
+            return {"connected": True, "reconciled": True, "mode": "live"}
+
+        def place_order(self, payload, key):
+            self.calls += 1
+            return {"command_id": 81, "status": "PENDING"}
+
+    gateway = LiveGateway()
+    assert intent.mode == command.mode == snapshot.execution_mode == "LIVE"
+    assert command.gateway_session.mode == "live"
+    assert claim_next_broker_command() == command.pk
+    assert dispatch_broker_command(command.pk, gateway) == "ACKNOWLEDGED"
+    assert gateway.calls == 1
 
 
 @override_settings(PORTFOLIO_TARGET_COORDINATION_DEBOUNCE_SECONDS=0)
@@ -252,8 +330,75 @@ def test_old_strategy_version_target_is_rejected():
     assert snapshot.strategy_versions[str(instance.pk)] != old_version.pk
 
 
+def test_warming_strategy_without_a_target_does_not_block_portfolio_coordination():
+    portfolio = make_portfolio("warming")
+    instrument = make_instrument("WARM")
+    instance = StrategyInstance.objects.create(
+        name="warming-without-target",
+        definition=StrategyDefinition.objects.get(key="FIXED_WEIGHT_REBALANCE"),
+        portfolio=portfolio,
+        instrument=instrument,
+        timeframe="5m",
+        parameters={"direction": "LONG"},
+        target_configuration={"target_weight": "0.10"},
+        execution_mode="PAPER",
+        state="WARMING_UP",
+        enabled=True,
+    )
+    StrategyVersion.objects.create(
+        strategy_instance=instance,
+        version=instance.version,
+        configuration_snapshot={},
+        parameter_hash="warming-without-target",
+    )
+    StrategyAllocation.objects.create(
+        strategy_instance=instance,
+        portfolio=portfolio,
+        weight=1,
+    )
+
+    snapshot = build_portfolio_target_snapshot(portfolio)
+
+    assert snapshot.status == "READY"
+    assert snapshot.rejected_targets == []
+    assert Decimal(snapshot.net_targets[str(instrument.pk)]) == 0
+    assert snapshot.target_contributions[0]["lifecycle_policy"] == "HOLD"
+
+
+@override_settings(PORTFOLIO_TARGET_COORDINATION_DEBOUNCE_SECONDS=0)
+def test_one_coordination_failure_does_not_starve_later_portfolios(monkeypatch):
+    failing = make_portfolio("coordination-fails")
+    succeeding = make_portfolio("coordination-succeeds")
+    mark_portfolio_for_target_coordination(failing.pk)
+    mark_portfolio_for_target_coordination(succeeding.pk)
+    real_coordinate = coordinate_portfolio
+
+    def fail_one(portfolio_id):
+        if portfolio_id == failing.pk:
+            raise RuntimeError("isolated portfolio failure")
+        return real_coordinate(portfolio_id)
+
+    monkeypatch.setattr(
+        "apps.rebalancing.coordinator.coordinate_portfolio",
+        fail_one,
+    )
+
+    results = process_target_coordination()
+
+    assert results[0]["portfolio_id"] == failing.pk
+    assert "isolated portfolio failure" in results[0]["error"]
+    assert results[1]["portfolio_id"] == succeeding.pk
+    assert results[1]["result_id"]
+    assert PortfolioTargetCoordination.objects.get(
+        portfolio=failing
+    ).status == "ERROR"
+    assert PortfolioTargetCoordination.objects.get(
+        portfolio=succeeding
+    ).status != "CLAIMED"
+
+
 def test_event_time_selection_wins_over_row_creation_time():
-    portfolio = make_portfolio("event-time", mode="SHADOW")
+    portfolio = make_portfolio("event-time", mode="PAPER")
     instrument = make_instrument("EVENT")
     now = timezone.now()
     instance, version, _, newest_event = make_strategy(
@@ -262,7 +407,7 @@ def test_event_time_selection_wins_over_row_creation_time():
         "event-aware",
         weight="0.20",
         signal_time=now,
-        mode="SHADOW",
+        mode="PAPER",
     )
     older_event = add_target(
         instance,
@@ -389,7 +534,7 @@ def test_target_update_during_active_rebalance_runs_after_safe_boundary():
 
 
 def test_paused_strategy_retains_existing_attributed_position():
-    portfolio = make_portfolio("paused", mode="SHADOW")
+    portfolio = make_portfolio("paused", mode="PAPER")
     instrument = make_instrument("PAUSED")
     instance, _, _, _ = make_strategy(
         portfolio,
@@ -397,7 +542,7 @@ def test_paused_strategy_retains_existing_attributed_position():
         "paused-strategy",
         state="PAUSED",
         enabled=False,
-        mode="SHADOW",
+        mode="PAPER",
     )
     StrategyAttributedPosition.objects.create(
         strategy_instance=instance,

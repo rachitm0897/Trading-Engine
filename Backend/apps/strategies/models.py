@@ -2,6 +2,8 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
+from apps.execution.modes import ExecutionMode
+
 
 class StrategyDefinition(models.Model):
     key = models.CharField(max_length=64, unique=True)
@@ -48,7 +50,7 @@ class StrategyRiskPolicy(models.Model):
 
 
 class StrategyInstance(models.Model):
-    MODES = [(x, x) for x in ["OBSERVE", "SHADOW", "PAPER"]]
+    MODES = ExecutionMode.choices
     STATES = [(x, x) for x in ["FLAT", "ENTRY_PENDING", "PARTIALLY_LONG", "LONG", "EXIT_PENDING",
         "PARTIALLY_SHORT", "SHORT", "PAUSED", "DISABLED", "FLATTEN_REQUESTED", "KILLED",
         "BLOCKED", "WARMING_UP", "ERROR"]]
@@ -62,7 +64,9 @@ class StrategyInstance(models.Model):
     target_configuration = models.JSONField(default=dict)
     risk_policy = models.ForeignKey(StrategyRiskPolicy, on_delete=models.PROTECT, null=True, blank=True)
     order_policy = models.ForeignKey(OrderPolicy, on_delete=models.PROTECT, null=True, blank=True)
-    execution_mode = models.CharField(max_length=16, choices=MODES, default="SHADOW")
+    execution_mode = models.CharField(
+        max_length=16, choices=MODES, default=ExecutionMode.PAPER
+    )
     state = models.CharField(max_length=24, choices=STATES, default="WARMING_UP")
     enabled = models.BooleanField(default=False)
     allocated_capital = models.DecimalField(max_digits=24, decimal_places=8, default=0)
@@ -82,12 +86,19 @@ class StrategyInstance(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["portfolio", "name"], name="unique_strategy_instance_name")]
+        constraints = [
+            models.UniqueConstraint(fields=["portfolio", "name"], name="unique_strategy_instance_name"),
+            models.CheckConstraint(
+                condition=models.Q(execution_mode__in=ExecutionMode.values),
+                name="strategy_instance_valid_execution_mode",
+            ),
+        ]
         indexes = [models.Index(fields=["enabled","state","instrument","timeframe"],name="strategy_active_input_idx")]
 
     def clean(self):
-        if self.execution_mode == "LIVE":
-            raise ValidationError("Live mode is unavailable for configurable strategies")
+        from apps.execution.modes import normalize_execution_mode
+
+        self.execution_mode = normalize_execution_mode(self.execution_mode)
 
 
 class StrategyVersion(models.Model):
@@ -182,13 +193,22 @@ class StrategyTarget(models.Model):
     signal_type = models.CharField(max_length=32, default="SET_TARGET")
     signal_time = models.DateTimeField(null=True, blank=True)
     source_event_id = models.CharField(max_length=160, blank=True)
+    execution_mode = models.CharField(
+        max_length=16, choices=ExecutionMode.choices, default=ExecutionMode.PAPER
+    )
     reason = models.CharField(max_length=255, blank=True)
     rationale = models.CharField(max_length=255, blank=True)
     confidence = models.DecimalField(max_digits=8, decimal_places=6, null=True, blank=True)
     status = models.CharField(max_length=24, default="ACTIVE")
     created_at = models.DateTimeField(default=timezone.now)
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["run", "instrument"], name="unique_run_target")]
+        constraints = [
+            models.UniqueConstraint(fields=["run", "instrument"], name="unique_run_target"),
+            models.CheckConstraint(
+                condition=models.Q(execution_mode__in=ExecutionMode.values),
+                name="strategy_target_valid_execution_mode",
+            ),
+        ]
         indexes = [models.Index(fields=["strategy_instance","status","-created_at"],name="strategy_target_latest_idx")]
 
 

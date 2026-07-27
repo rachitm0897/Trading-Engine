@@ -40,6 +40,7 @@ from apps.strategies.models import (
     StrategyTarget,
     StrategyVersion,
 )
+from tests.managed_gateway import bind_gateway_mode
 
 
 pytestmark = pytest.mark.django_db
@@ -53,11 +54,13 @@ def portfolio():
         available_cash=50000,
         buying_power=200000,
     )
-    return TradingPortfolio.objects.create(
+    portfolio = TradingPortfolio.objects.create(
         name="Deletion portfolio",
         account=account,
         minimum_notional=1,
     )
+    bind_gateway_mode(portfolio)
+    return portfolio
 
 
 @pytest.fixture
@@ -85,7 +88,7 @@ def make_instance(portfolio, instrument, name="Delete me"):
         timeframe="5m",
         parameters={"direction": "LONG"},
         target_configuration={"target_weight": "0.10"},
-        execution_mode="SHADOW",
+        execution_mode="PAPER",
         qualify=False,
     )
     return instance

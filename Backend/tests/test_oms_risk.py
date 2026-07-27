@@ -13,6 +13,7 @@ from apps.portfolios.models import TradingPortfolio, CashLedgerEntry, PortfolioP
 from apps.risk.models import CapitalReservation, KillSwitch, PreTradeRiskPolicy
 from apps.risk.services import evaluate_intent
 from apps.strategies.models import StrategyDefinition, StrategyInstance
+from tests.managed_gateway import bind_gateway_mode
 
 pytestmark = pytest.mark.django_db
 
@@ -20,6 +21,7 @@ pytestmark = pytest.mark.django_db
 def intent():
     account = BrokerAccount.objects.create(account_id="DU123", available_cash=1000, is_reconciled=True)
     portfolio = TradingPortfolio.objects.create(name="Paper", account=account)
+    bind_gateway_mode(portfolio)
     instrument = Instrument.objects.create(symbol="AAPL")
     return OrderIntent.objects.create(portfolio=portfolio, instrument=instrument, side="BUY", quantity=10, idempotency_key="intent-1")
 

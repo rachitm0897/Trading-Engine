@@ -8,10 +8,10 @@ The lifecycle is:
 
 ```text
 DRAFT → VALIDATED → BACKTESTED → SCORED → APPROVED_FOR_RECOMMENDATION
-      → SHADOW_VALIDATED → BUILDER_READY
+      → PAPER_VALIDATED → BUILDER_READY
 ```
 
-Promotion requires tested Python semantics, validated point-in-time data/features, the active protocol, positive high-cost performance, capacity, stability, multiple-testing evidence, protected holdout, exact enabled runtime mapping, deterministic golden vectors, and an actor/evidence record. SHADOW evidence is never fabricated by bootstrap.
+Promotion requires tested Python semantics, validated point-in-time data/features, the active protocol, positive high-cost performance, capacity, stability, multiple-testing evidence, protected holdout, exact enabled runtime mapping, deterministic golden vectors, Paper validation, and an actor/evidence record. Paper validation evidence is never fabricated by bootstrap.
 
 Example for the baseline mapping:
 
@@ -21,7 +21,7 @@ python manage.py promote_research_strategy BH_001 `
   FIXED_WEIGHT_REBALANCE `
   --implementation-version full-universe-v1 `
   --actor operator-name `
-  --evidence-json '{"golden_vector_passed":true,"high_cost_passed":true,"multiple_testing_passed":true,"shadow_validated":true}'
+  --evidence-json '{"golden_vector_passed":true,"high_cost_passed":true,"multiple_testing_passed":true,"paper_validated":true}'
 ```
 
-Promotion cannot bypass SHADOW/PAPER-only startup guards, create LIVE instances, or turn selectors/pairs into inexact runtime plugins. Applied Builder instances remain disabled until the existing operator review workflow enables an eligible PAPER instance.
+Promotion cannot bypass Paper/Live runtime gates or turn selectors/pairs into inexact runtime plugins. Applied Builder instances remain disabled until the existing operator review workflow enables an instance whose mode matches its portfolio Gateway session; Live additionally requires the Live safety gate.

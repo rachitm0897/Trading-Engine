@@ -9,6 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.accounts.models import BrokerAccount
+from apps.execution.modes import normalize_gateway_mode
 from apps.portfolios.models import TradingPortfolio
 
 from .client import GatewayClient, GatewayError
@@ -202,6 +203,29 @@ def inspect_gateway_session(session, *, qch_client=None, container=None, synchro
     try:
         client = GatewayClient(session)
         state = client.health() or {}
+        try:
+            reported_mode = normalize_gateway_mode(state.get("mode"))
+        except ValueError:
+            reported_mode = "<invalid>"
+        if reported_mode != session.mode:
+            with transaction.atomic():
+                locked = BrokerGatewaySession.objects.select_for_update().get(pk=session.pk)
+                locked.mark_checked(
+                    status=locked.Status.ERROR,
+                    gateway_state=state,
+                    qch_state=_container_state(container),
+                    error=(
+                        "Gateway health mode does not match its BrokerGatewaySession "
+                        f"({reported_mode} != {session.mode})"
+                    ),
+                )
+                locked.commands_enabled = False
+                locked.lifecycle_version += 1
+                locked.save(update_fields=[
+                    "status", "commands_enabled", "last_gateway_state", "last_qch_state",
+                    "last_error", "last_checked_at", "lifecycle_version", "updated_at",
+                ])
+                return locked
         connected = bool(state.get("connected"))
         status = session.Status.CONNECTED if connected else (
             session.Status.WAITING_FOR_2FA if session.mode == session.Mode.LIVE else session.Status.WAITING_FOR_LOGIN

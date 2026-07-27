@@ -1,6 +1,8 @@
 export type Scalar = string | number | boolean | null
 export type JsonRecord = Record<string, unknown>
 export type DecimalValue = string | number | null
+export type ExecutionMode = 'PAPER' | 'LIVE'
+export type ExecutionRunType = 'PREVIEW' | 'EXECUTION'
 
 export interface ApiProblem {
   code: string
@@ -16,8 +18,10 @@ export interface ApiEnvelope<T> {
 }
 
 export interface SystemStatus {
-  mode: string
-  execution_mode?: string
+  mode: 'MULTI_SESSION'
+  execution_modes: ExecutionMode[]
+  execution_mode_source: 'PORTFOLIO_GATEWAY_SESSION'
+  allow_live_trading: boolean
   is_admin?: boolean
   broker_deployment: {
     available: boolean
@@ -33,7 +37,7 @@ export interface SystemStatus {
 export interface GatewayStatus {
   connected: boolean
   reconciled: boolean
-  mode: string
+  mode: BrokerSessionMode
   last_callback?: string | null
   worker?: string
 }
@@ -395,7 +399,7 @@ export interface StrategyInstance {
   target_configuration: JsonRecord
   risk_policy_id: number | null
   order_policy_id: number | null
-  execution_mode: 'OBSERVE' | 'SHADOW' | 'PAPER'
+  execution_mode: ExecutionMode
   state: string
   enabled: boolean
   version: number
@@ -610,7 +614,7 @@ export interface RebalancePolicy {
   sell_before_buy: boolean
   price_staleness_limit: number
   partial_fill_threshold: DecimalValue
-  mode: string
+  mode: ExecutionMode
   enabled: boolean
   updated_at: string
 }
@@ -635,7 +639,8 @@ export interface RebalanceRun {
   id: number
   portfolio_id: number
   trigger: string
-  mode: string
+  mode: ExecutionMode
+  run_type: ExecutionRunType
   status: string
   phase: string
   nav: DecimalValue
@@ -713,7 +718,7 @@ export interface PortfolioOptimizationPolicy {
   transaction_cost_penalty: DecimalValue
   long_only: boolean
   enabled: boolean
-  execution_mode: 'SHADOW' | 'PAPER'
+  execution_mode: ExecutionMode
   version: number
   updated_at: string
 }
@@ -769,8 +774,8 @@ export interface PortfolioOptimizationRun {
   completed_at: string | null
   targets?: OptimizedPortfolioTarget[]
   planned_trades?: PlannedOptimizationTrade[]
-  rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
-  applied_rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
+  rebalance?: {id: number; mode: ExecutionMode; run_type: ExecutionRunType; status: string; phase: string; planned_turnover: DecimalValue} | null
+  applied_rebalance?: {id: number; mode: ExecutionMode; run_type: ExecutionRunType; status: string; phase: string; planned_turnover: DecimalValue} | null
 }
 
 export type GoalTimeframe = 'NOW' | 'HURRY' | 'FAST' | 'BUILD' | 'GROW' | 'COMPOUND'
@@ -984,8 +989,8 @@ export interface PortfolioConstructionRun {
   goals?: GoalConstructionResult[]
   targets?: PortfolioConstructionTarget[]
   planned_trades?: PlannedConstructionTrade[]
-  rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
-  applied_rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
+  rebalance?: {id: number; mode: ExecutionMode; run_type: ExecutionRunType; status: string; phase: string; planned_turnover: DecimalValue} | null
+  applied_rebalance?: {id: number; mode: ExecutionMode; run_type: ExecutionRunType; status: string; phase: string; planned_turnover: DecimalValue} | null
   applied_at: string | null
   created_at: string
   started_at: string | null

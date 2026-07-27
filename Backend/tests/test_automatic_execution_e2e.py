@@ -177,6 +177,20 @@ def _domain(settings, suffix):
         primary_exchange="NASDAQ",
         currency="USD",
     )
+    IndicatorValue.objects.create(
+        instrument=instrument,
+        indicator="average_volume",
+        indicator_name="average_volume",
+        requirement_identity_hash=f"execution-adv-{suffix}",
+        value=100000,
+        parameters={"window": 3},
+        timeframe="1d",
+        source_bar_id=f"execution-adv-{suffix}",
+        is_final=True,
+        processing_mode="LIVE",
+        event_time=timezone.now(),
+        source_key=f"execution-adv-{suffix}",
+    )
     BrokerContract.objects.create(
         instrument=instrument,
         conid=8_000_000 + instrument.pk,
@@ -499,7 +513,7 @@ def test_synthetic_live_market_sequence_creates_one_idempotent_paper_order(
     )
 
     assert MarketBar.objects.count() == 4
-    assert IndicatorValue.objects.count() == 12
+    assert IndicatorValue.objects.count() == 9
     assert StrategyEvaluationJob.objects.count() == 1
     assert StrategyRun.objects.count() == StrategyTarget.objects.count() == 1
     assert PortfolioTargetSnapshot.objects.filter(status="READY").count() == 1
@@ -573,16 +587,15 @@ def test_delayed_indicator_and_consumer_replay_create_one_ready_job(
     assert first["bar_id"] == job.bar_id
     assert job.status == "WAITING_FOR_INPUT"
 
-    consume_market_event("automatic-e2e-market", live["indicators"][0])
+    first_indicator = live["indicators"][0]
+    consume_market_event("automatic-e2e-market", first_indicator)
     job.refresh_from_db()
     assert job.status == "WAITING_FOR_INPUT"
     assert consume_market_event(
-        "automatic-e2e-market", live["indicators"][0]
+        "automatic-e2e-market", first_indicator
     ) == {"duplicate": True}
-    consume_market_event("automatic-e2e-market", live["indicators"][1])
-    job.refresh_from_db()
-    assert job.status == "WAITING_FOR_INPUT"
-    consume_market_event("automatic-e2e-market", live["indicators"][2])
+    for indicator in live["indicators"][1:]:
+        consume_market_event("automatic-e2e-market", indicator)
     job.refresh_from_db()
     assert job.status == "PENDING"
     assert StrategyEvaluationJob.objects.count() == 1

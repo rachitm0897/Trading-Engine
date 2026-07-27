@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 from apps.accounts.models import BrokerAccount
 from apps.allocation.models import OrderIntentAttribution, RebalancePolicy
 from apps.instruments.models import BrokerContract, Instrument
+from apps.broker_gateway.client import GatewayError
 from apps.broker_gateway.sync import process_snapshot
 from apps.oms.models import Order, OrderIntent
 from apps.oms.services import apply_execution
@@ -15,6 +16,7 @@ from apps.market_streams.services import coordinate_bar_readiness, persist_bar
 from apps.strategies.evaluation_jobs import process_strategy_evaluation_jobs
 from apps.strategies.framework import create_instance, enable_instance, evaluate_instance, pause_instance, update_instance
 from apps.strategies.models import StrategyAttributedPosition, StrategyDefinition, StrategyTarget, StrategyVersion
+from tests.managed_gateway import bind_gateway_mode
 
 pytestmark=pytest.mark.django_db
 
@@ -22,7 +24,9 @@ pytestmark=pytest.mark.django_db
 @pytest.fixture
 def portfolio():
     account=BrokerAccount.objects.create(account_id="DU-STRATEGIES",net_liquidation=100000,available_cash=100000,buying_power=200000)
-    return TradingPortfolio.objects.create(name="Strategy paper",account=account,minimum_notional=1)
+    portfolio=TradingPortfolio.objects.create(name="Strategy paper",account=account,minimum_notional=1)
+    bind_gateway_mode(portfolio)
+    return portfolio
 
 
 def instrument(symbol,conid):
@@ -31,18 +35,18 @@ def instrument(symbol,conid):
     return item
 
 
-def make(portfolio,item,key,name,parameters,target="0.05",mode="SHADOW"):
+def make(portfolio,item,key,name,parameters,target="0.05",mode="PAPER"):
     instance,_=create_instance(name=name,definition_key=key,portfolio=portfolio,instrument_id=item.pk,timeframe="5m",
         parameters=parameters,target_configuration={"target_weight":target},execution_mode=mode,qualify=False)
     return instance
 
 
-def test_definitions_default_shadow_and_immutable_version(portfolio):
+def test_definitions_default_paper_and_immutable_version(portfolio):
     tsla=instrument("TSLA",76792991)
     instance=make(portfolio,tsla,"RSI_MEAN_REVERSION","TSLA_RSI_5M",{"window":14,"entry_threshold":30,
         "exit_threshold":65,"entry_rule":"CROSS_ABOVE","exit_rule":"CROSS_ABOVE","direction":"LONG"})
     assert StrategyDefinition.objects.count()==5
-    assert instance.execution_mode=="SHADOW" and not instance.enabled and instance.version==1
+    assert instance.execution_mode=="PAPER" and not instance.enabled and instance.version==1
     version=instance.versions.get();version.configuration_snapshot={}
     with pytest.raises(ValidationError):version.save()
     old_hash=instance.versions.get().parameter_hash
@@ -179,7 +183,7 @@ def test_persisted_final_inputs_trigger_once_and_corrected_bar_gets_new_namespac
     assert process_strategy_evaluation_jobs()["completed"]==1 and item.runs.count()==2
 
 
-def test_strategy_management_api_create_patch_and_live_rejection(client,portfolio):
+def test_strategy_management_api_create_patch_and_gateway_mode_enforcement(client,portfolio):
     item=instrument("MSFT",7)
     definitions=client.get("/api/v1/strategy-definitions/").json()
     assert definitions["ok"] and len(definitions["data"])==5
@@ -187,7 +191,7 @@ def test_strategy_management_api_create_patch_and_live_rejection(client,portfoli
         "portfolio_id":portfolio.pk,"timeframe":"1d","parameters":{"direction":"LONG"},
         "target_configuration":{"target_weight":"0.10"},"qualify":False}
     created=client.post("/api/v1/strategy-instances/",payload,data_type="json",content_type="application/json")
-    assert created.status_code==201 and created.json()["data"]["execution_mode"]=="SHADOW"
+    assert created.status_code==201 and created.json()["data"]["execution_mode"]=="PAPER"
     instance_id=created.json()["data"]["id"]
     patched=client.patch(f"/api/v1/strategy-instances/{instance_id}/",{"target_configuration":{"target_weight":"0.08"}},content_type="application/json")
     assert patched.status_code==200 and patched.json()["data"]["version"]==2
@@ -215,6 +219,34 @@ def test_shared_strategies_reuse_and_reference_count_market_subscription(portfol
     subscription=MarketDataSubscription.objects.get();assert subscription.consumer_count==2 and len(gateway.subscribes)==1
     pause_instance(first,gateway);assert MarketDataSubscription.objects.get().consumer_count==1 and not gateway.cancels
     pause_instance(second,gateway);assert MarketDataSubscription.objects.get().consumer_count==0 and len(gateway.cancels)==1
+
+
+def test_strategy_activation_rolls_back_when_subscription_setup_fails(portfolio):
+    class FailingGateway:
+        def health(self):
+            return {"connected": True, "connection_generation": "failed-setup"}
+
+        def subscribe_market_data(self, payload, key):
+            raise GatewayError("subscription rejected")
+
+    item=instrument("ACTFAIL",322)
+    instance=make(
+        portfolio,
+        item,
+        "FIXED_WEIGHT_REBALANCE",
+        "ACTIVATION_FAILURE",
+        {"direction":"LONG"},
+    )
+
+    with pytest.raises(ValueError, match="subscription rejected"):
+        enable_instance(instance, FailingGateway())
+
+    instance.refresh_from_db()
+    assert instance.enabled is False
+    assert instance.versions.get().activated_at is None
+    assert instance.input_bindings.exists()
+    assert not instance.input_bindings.filter(active=True).exists()
+    assert not MarketDataSubscription.objects.exists()
 
 
 def test_real_final_bar_advances_strategy_warmup(portfolio):

@@ -1,6 +1,8 @@
 from django.core.exceptions import ValidationError
 from django.db import models
 
+from apps.execution.modes import ExecutionMode, RunType
+
 class PortfolioFlow(models.Model):
     TYPES = [(x, x) for x in ["DEPOSIT", "WITHDRAWAL", "INTERNAL_TRANSFER_IN", "INTERNAL_TRANSFER_OUT"]]
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT, related_name="flows")
@@ -70,14 +72,24 @@ class RebalancePolicy(models.Model):
     sell_before_buy = models.BooleanField(default=True)
     price_staleness_limit = models.PositiveIntegerField(default=300)
     partial_fill_threshold = models.DecimalField(max_digits=8, decimal_places=6, default="0.95")
-    mode = models.CharField(max_length=16, default="SHADOW")
+    mode = models.CharField(
+        max_length=16, choices=ExecutionMode.choices, default=ExecutionMode.PAPER
+    )
     enabled = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(mode__in=ExecutionMode.values),
+                name="rebalance_policy_valid_execution_mode",
+            ),
+        ]
 
 
 class PortfolioTargetSnapshot(models.Model):
     STATUSES = [(value, value) for value in ["READY", "REJECTED"]]
-    MODES = [(value, value) for value in ["SHADOW", "PAPER"]]
+    MODES = ExecutionMode.choices
 
     portfolio = models.ForeignKey(
         "portfolios.TradingPortfolio",
@@ -113,6 +125,12 @@ class PortfolioTargetSnapshot(models.Model):
                 name="target_snapshot_port_time_idx",
             ),
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(execution_mode__in=ExecutionMode.values),
+                name="target_snapshot_valid_execution_mode",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         if self.pk and PortfolioTargetSnapshot.objects.filter(pk=self.pk).exists():
@@ -141,7 +159,12 @@ class RebalanceRun(models.Model):
     attempt_count = models.PositiveIntegerField(default=1)
     status = models.CharField(max_length=24, default="CALCULATING")
     phase = models.CharField(max_length=24, default="PLANNING")
-    mode = models.CharField(max_length=16, default="SHADOW")
+    mode = models.CharField(
+        max_length=16, choices=ExecutionMode.choices, default=ExecutionMode.PAPER
+    )
+    run_type = models.CharField(
+        max_length=16, choices=RunType.choices, default=RunType.EXECUTION
+    )
     nav = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     snapshot = models.JSONField(default=dict)
     total_drift = models.DecimalField(max_digits=18, decimal_places=10, default=0)
@@ -157,6 +180,14 @@ class RebalanceRun(models.Model):
             models.Index(fields=["status","mode","phase"],name="rebalance_recovery_idx"),
         ]
         constraints = [
+            models.CheckConstraint(
+                condition=models.Q(mode__in=ExecutionMode.values),
+                name="rebalance_run_valid_execution_mode",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(run_type__in=RunType.values),
+                name="rebalance_run_valid_run_type",
+            ),
             models.UniqueConstraint(
                 fields=["portfolio"],
                 condition=models.Q(

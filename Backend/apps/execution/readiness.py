@@ -298,9 +298,12 @@ def _flink_readiness(
     return signal, blockers
 
 
-def _paper_scope(now):
+def _execution_scope(now):
     strategies = list(
-        StrategyInstance.objects.filter(enabled=True, execution_mode="PAPER")
+        StrategyInstance.objects.filter(
+            enabled=True,
+            execution_mode__in=["PAPER", "LIVE"],
+        )
         .select_related("portfolio__account", "portfolio__gateway_session", "instrument")
         .order_by("pk")
     )
@@ -442,6 +445,7 @@ def _gateway_and_reconciliation(scope, now):
             and state.get("connected") is True
             and age is not None
             and age <= gateway_stale_seconds
+            and str(state.get("mode") or "").lower() == session.mode
         )
         reconciled = bool(connected and state.get("reconciled") is True)
         row = {
@@ -466,7 +470,7 @@ def _gateway_and_reconciliation(scope, now):
         blockers.append(
             {
                 "code": "GATEWAY_NOT_CONNECTED",
-                "message": "A PAPER portfolio has no healthy connected Gateway",
+                "message": "An execution portfolio has no healthy mode-matched Gateway",
                 "details": {
                     "missing_session_portfolio_ids": sorted(
                         set(missing_session_portfolios)
@@ -521,7 +525,7 @@ def _gateway_and_reconciliation(scope, now):
         blockers.append(
             {
                 "code": "BROKER_RECONCILIATION_NOT_READY",
-                "message": "A PAPER portfolio account is not reconciled",
+                "message": "An execution portfolio account is not reconciled",
                 "details": {"account_ids": unreconciled_accounts},
             }
         )
@@ -643,12 +647,12 @@ def collect_execution_readiness(*, http_get=None, now=None):
             }
         )
 
-    scope = _paper_scope(now)
+    scope = _execution_scope(now)
     if scope["stale_strategies"]:
         blockers.append(
             {
                 "code": "MARKET_DATA_STALE",
-                "message": "Market data is stale or incomplete for a PAPER strategy",
+                "message": "Market data is stale or incomplete for an execution strategy",
                 "details": {"strategies": scope["stale_strategies"]},
             }
         )
@@ -737,7 +741,7 @@ def collect_execution_readiness(*, http_get=None, now=None):
     }
 
     pending_intents = OrderIntent.objects.filter(
-        mode="PAPER",
+        mode__in=["PAPER", "LIVE"],
         eligible=True,
         operation_status__in=PENDING_INTENT_STATUSES,
     )
@@ -756,7 +760,7 @@ def collect_execution_readiness(*, http_get=None, now=None):
         blockers.append(
             {
                 "code": "PENDING_INTENT_STALE",
-                "message": "A pending PAPER intent exceeds its maximum age",
+                "message": "A pending execution intent exceeds its maximum age",
                 "details": {"oldest_age_seconds": intent_age},
             }
         )
@@ -769,7 +773,7 @@ def collect_execution_readiness(*, http_get=None, now=None):
     )
     command_max_age = int(getattr(settings, "BROKER_COMMAND_MAX_AGE_SECONDS", 60))
     uncertain = BrokerCommand.objects.filter(status=BrokerCommand.Status.UNCERTAIN)
-    scoped_uncertain = uncertain.filter(order__intent__mode="PAPER")
+    scoped_uncertain = uncertain.filter(order__intent__mode__in=["PAPER", "LIVE"])
     command_signal = {
         "status": "DEGRADED"
         if command_age is not None and command_age > command_max_age
@@ -800,7 +804,7 @@ def collect_execution_readiness(*, http_get=None, now=None):
         blockers.append(
             {
                 "code": "UNRESOLVED_UNCERTAIN_ORDER",
-                "message": "An uncertain broker order blocks a PAPER portfolio",
+                "message": "An uncertain broker order blocks an execution portfolio",
                 "details": {
                     "portfolio_ids": command_signal["uncertain_portfolio_ids"],
                     "count": command_signal["scoped_uncertain_count"],
@@ -818,7 +822,8 @@ def collect_execution_readiness(*, http_get=None, now=None):
         "ready": ready,
         "automatic_execution_ready": ready,
         "status": "READY" if ready else "NOT_READY",
-        "execution_mode": settings.NEW_EXECUTION_MODE,
+        "execution_modes": ["PAPER", "LIVE"],
+        "execution_mode_source": "PORTFOLIO_GATEWAY_SESSION",
         "observed_at": now,
         "blockers": blockers,
         "signals": {
@@ -826,7 +831,7 @@ def collect_execution_readiness(*, http_get=None, now=None):
             "flink": flink_signal,
             "kafka_consumer": consumer_signal,
             "workers": worker_signals,
-            "paper_scope": {
+            "execution_scope": {
                 "strategy_count": scope["strategy_count"],
                 "portfolio_ids": scope["portfolio_ids"],
                 "instrument_ids": scope["instrument_ids"],

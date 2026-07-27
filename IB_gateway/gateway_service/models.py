@@ -1,14 +1,32 @@
 from django.db import models
 import uuid
 
+from .modes import normalize_trading_mode
+
 class GatewaySession(models.Model):
     state = models.CharField(max_length=32, default="DISCONNECTED")
-    mode = models.CharField(max_length=8, default="paper")
+    mode = models.CharField(
+        max_length=8,
+        choices=[("paper", "Paper"), ("live", "Live")],
+        default="paper",
+    )
     reconciled = models.BooleanField(default=False)
     connection_owner = models.CharField(max_length=128, blank=True)
     connection_generation = models.UUIDField(default=uuid.uuid4)
     last_callback_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(mode__in=["paper", "live"]),
+                name="gateway_session_valid_mode",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.mode = normalize_trading_mode(self.mode)
+        return super().save(*args, **kwargs)
 
 class GatewayCommand(models.Model):
     STATUSES = [(value, value) for value in ["PENDING", "PROCESSING", "COMPLETED", "FAILED", "UNKNOWN"]]

@@ -26,7 +26,7 @@ POST requires an `Idempotency-Key` and an empty object/body. It locks and snapsh
 
 The readiness preflight names concrete blockers: bundle validation, active dataset/protocol/universe, the complete 97-strategy registry, runtime mappings, construction profiles, 500 canonical instruments, research coverage, current features, required cache profiles, and a connected command-ready Gateway for non-NOW goals. A non-NOW result with no positive stock/strategy sleeve fails the batch; only NOW may be intentionally cash-only.
 
-Generation creates no order, rebalance, strategy instance, enablement, preview, or LIVE path. Preview remains mandatory and creates no order. Apply remains an explicit separate action through the existing SHADOW/PAPER rebalancing, risk, sizing, OMS, Gateway, ledger, and reconciliation controls. Created or updated strategy instances remain disabled in SHADOW.
+Generation creates no order, rebalance, strategy instance, enablement, preview, or execution path. Preview remains mandatory and creates no order. Apply remains an explicit separate action through Paper/Live rebalancing, sizing, risk, OMS, Gateway, ledger, and reconciliation controls. Created or updated strategy instances remain disabled in the portfolio Gateway session's derived mode.
 
 Warm all valid timeframe/risk caches with:
 

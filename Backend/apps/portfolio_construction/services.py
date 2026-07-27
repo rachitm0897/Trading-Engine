@@ -6,6 +6,11 @@ from django.utils import timezone
 
 from apps.audit.models import AuditEvent, OperationAttempt, OutboxEvent
 from apps.core.idempotency import canonical_request_hash, require_matching_request
+from apps.execution.modes import (
+    RunType,
+    execution_mode_for_portfolio,
+    require_portfolio_execution_ready,
+)
 from apps.instruments.models import Instrument
 from apps.market_data.models import InstrumentPriceHistory
 from apps.portfolio_optimization.services import (
@@ -768,7 +773,14 @@ def latest_prices(construction_run):
     return result
 
 
-def plan_construction_rebalance(construction_run, idempotency_key, *, mode="SHADOW", strict_market_state=False):
+def plan_construction_rebalance(
+    construction_run,
+    idempotency_key,
+    *,
+    mode=None,
+    run_type=RunType.PREVIEW,
+    strict_market_state=False,
+):
     if construction_run.status != "COMPLETED":
         raise ConstructionError("Only a completed construction run can create rebalance targets")
     from apps.rebalancing.services import plan_rebalance
@@ -780,6 +792,7 @@ def plan_construction_rebalance(construction_run, idempotency_key, *, mode="SHAD
         prices=latest_prices(construction_run),
         nav=construction_run.nav,
         mode=mode,
+        run_type=run_type,
         strict_market_state=strict_market_state,
         construction_run=construction_run,
     )
@@ -797,10 +810,13 @@ def create_or_reuse_strategy_instances(run):
     from apps.strategies.models import OrderPolicy, StrategyRiskPolicy
 
     linked = []
+    execution_mode = execution_mode_for_portfolio(
+        run.plan.portfolio,
+    )
     for target in run.metrics.get("strategy_targets", []):
         target_configuration = {
             "target_weight": target["target_weight"],
-            "capital_share": target["target_weight"],
+            "capital_share": "1",
             "priority": 100,
             "construction_run_id": str(run.pk),
         }
@@ -811,7 +827,7 @@ def create_or_reuse_strategy_instances(run):
             timeframe=target["execution_timeframe"],
             risk_policy_id=target.get("risk_policy_id"),
             order_policy_id=target.get("order_policy_id"),
-            execution_mode="SHADOW",
+            execution_mode=execution_mode,
             enabled=False,
         ).order_by("pk")
         instance = next(
@@ -843,13 +859,16 @@ def create_or_reuse_strategy_instances(run):
                 target_configuration=target_configuration,
                 risk_policy=risk_policy,
                 order_policy=order_policy,
-                execution_mode="SHADOW",
+                execution_mode=execution_mode,
                 qualify=False,
             )
         elif instance.target_configuration != target_configuration:
             instance = update_instance(instance, {"target_configuration": target_configuration})
-        if instance.execution_mode != "SHADOW" or instance.enabled:
-            raise ConstructionError("Construction-created strategy instances must remain disabled in SHADOW mode")
+        if instance.execution_mode != execution_mode or instance.enabled:
+            raise ConstructionError(
+                "Construction-created strategy instances must remain disabled "
+                f"in {execution_mode} mode"
+            )
         for assignment_id in target["assignment_ids"]:
             linked.append({
                 "assignment_id": assignment_id,
@@ -861,7 +880,7 @@ def create_or_reuse_strategy_instances(run):
 
 
 @transaction.atomic
-def apply_construction_run(construction_run, idempotency_key, *, mode="SHADOW"):
+def apply_construction_run(construction_run, idempotency_key, *, mode=None):
     run_id = construction_run.pk if isinstance(construction_run, PortfolioConstructionRun) else construction_run
     run = (
         PortfolioConstructionRun.objects.select_for_update(of=("self",))
@@ -870,6 +889,8 @@ def apply_construction_run(construction_run, idempotency_key, *, mode="SHADOW"):
     )
     if run.status != "COMPLETED":
         raise ConstructionError("Only a completed construction run can be applied")
+    require_plan_ready(run.plan)
+    mode = require_portfolio_execution_ready(run.plan.portfolio)
     recommendation_ids = [
         item.get("accepted_recommendation_run_id")
         for item in run.goal_snapshot
@@ -901,7 +922,8 @@ def apply_construction_run(construction_run, idempotency_key, *, mode="SHADOW"):
         run,
         f"{idempotency_key}:rebalance",
         mode=mode,
-        strict_market_state=mode == "PAPER",
+        run_type=RunType.EXECUTION,
+        strict_market_state=True,
     )
     if rebalance.construction_run_id != run.pk:
         raise ConstructionError("Idempotency-Key was already used for a different construction application")

@@ -27,7 +27,7 @@ PIPELINE = [
     "OMS Order",
     "durable BrokerCommand",
     "Gateway",
-    "IBKR paper account",
+    "matching IBKR account",
     "broker events",
     "fills and reconciliation",
 ]
@@ -97,7 +97,7 @@ def check_document() -> None:
     for path in REQUIRED_LEGACY_PATHS:
         if path not in document:
             fail(f"legacy candidate is not documented: {path}")
-    for mode in ("`OBSERVE`", "`SHADOW`", "`PAPER`"):
+    for mode in ("`PAPER`", "`LIVE`", "`PREVIEW`", "`EXECUTION`"):
         if mode not in document:
             fail(f"execution mode is not documented: {mode}")
 

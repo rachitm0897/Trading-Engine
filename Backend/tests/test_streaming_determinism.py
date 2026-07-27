@@ -10,6 +10,7 @@ from apps.portfolios.models import TradingPortfolio
 from apps.strategies.evaluation_jobs import process_strategy_evaluation_jobs
 from apps.strategies.framework import create_instance, enable_instance
 from apps.strategies.input_identity import requirement_identity_hash
+from tests.managed_gateway import bind_gateway_mode
 
 
 pytestmark = pytest.mark.django_db
@@ -23,11 +24,13 @@ def portfolio():
         available_cash=100000,
         buying_power=200000,
     )
-    return TradingPortfolio.objects.create(
+    portfolio = TradingPortfolio.objects.create(
         name="Streaming determinism",
         account=account,
         minimum_notional=1,
     )
+    bind_gateway_mode(portfolio)
+    return portfolio
 
 
 @pytest.fixture

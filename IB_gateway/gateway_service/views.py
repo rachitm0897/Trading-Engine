@@ -7,6 +7,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .diagnostics import collect_gateway_diagnostics, readiness_state
 from .models import GatewayCommand, GatewayEvent, GatewayOrderReference, GatewaySession
+from .modes import normalize_trading_mode
 from .services import CommandRetryNotAllowed, IdempotencyConflict, enqueue
 
 def response(data=None, status=200, error=None, meta=None): return JsonResponse({"ok":error is None,"data":data if error is None else None,"error":error,"meta":meta or {}},status=status,safe=False)
@@ -69,7 +70,14 @@ def health(request):
     invalid=_method(request,"GET")
     if invalid:return invalid
     session=GatewaySession.objects.filter(pk=1).first()
-    return response({"connected":bool(session and session.state=="CONNECTED"),"reconciled":bool(session and session.reconciled),"mode":settings.IBC_TRADING_MODE,"last_callback":session.last_callback_at if session else None,"worker":session.connection_owner if session else "","connection_generation":str(session.connection_generation) if session else ""})
+    configured=normalize_trading_mode(settings.IBC_TRADING_MODE)
+    mode_matches=bool(session and normalize_trading_mode(session.mode)==configured)
+    return response({"connected":bool(session and session.state=="CONNECTED" and mode_matches),
+        "reconciled":bool(session and session.reconciled and mode_matches),"mode":configured,
+        "mode_matches_session":mode_matches,
+        "last_callback":session.last_callback_at if session else None,
+        "worker":session.connection_owner if session else "",
+        "connection_generation":str(session.connection_generation) if session else ""})
 @protected
 def diagnostics(request):
     invalid=_method(request,"GET")

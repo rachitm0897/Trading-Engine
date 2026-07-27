@@ -169,13 +169,15 @@ def instances(request, instance_id=None):
                 attempt_key=request.headers.get("Idempotency-Key"),actor=_request_actor(request))
             return response(result)
         if request.method == "POST":
-            portfolio=TradingPortfolio.objects.get(pk=payload["portfolio_id"])
+            portfolio=TradingPortfolio.objects.select_related("gateway_session").get(
+                pk=payload["portfolio_id"]
+            )
             risk=StrategyRiskPolicy.objects.get(pk=payload["risk_policy_id"]) if payload.get("risk_policy_id") else None
             order=OrderPolicy.objects.get(pk=payload["order_policy_id"]) if payload.get("order_policy_id") else None
             item,qualification=create_instance(name=payload["name"],definition_key=payload["definition_key"],portfolio=portfolio,
                 timeframe=payload["timeframe"],parameters=payload.get("parameters",{}),target_configuration=payload.get("target_configuration",{}),
                 instrument_id=payload.get("instrument_id"),ticker=payload.get("ticker"),risk_policy=risk,order_policy=order,
-                execution_mode=payload.get("execution_mode","SHADOW"),exchange=payload.get("exchange","SMART"),
+                execution_mode=payload.get("execution_mode"),exchange=payload.get("exchange","SMART"),
                 currency=payload.get("currency","USD"),primary_exchange=payload.get("primary_exchange"),qualify=payload.get("qualify",True))
             row=_instance(_get(item.pk),True);row["qualification_command"]=qualification
             return response(row,status=201)

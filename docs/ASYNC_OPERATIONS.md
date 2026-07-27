@@ -14,6 +14,6 @@ The API keeps expensive solvers, history downloads, and long-running workflows o
 
 Every mutating operation that requires idempotency rejects a missing `Idempotency-Key`. Reusing a key with a different canonical request returns a conflict. Retrying a persisted retryable failure requires the original key and `Idempotency-Retry: true`; uncertain broker submissions are reconciled rather than blindly resubmitted.
 
-All execution remains paper or shadow only. The worker paths do not enable live trading.
+Execution uses the portfolio's assigned Paper or Live Gateway session. Live worker paths remain gated by `ALLOW_LIVE_TRADING`.
 
-Construction preview snapshots the plan version, enabled goals, stock universes, strategy assignments, and resolved fixed rules before it is queued. Editing the draft afterward does not mutate an existing run. Reusing the preview key after editing the plan is an idempotency conflict. Construction application is one-time; matching strategy identities aggregate across goals, strategy instances remain disabled in `SHADOW` mode, and only one combined stock target is passed to each rebalance run.
+Construction preview snapshots the plan version, enabled goals, stock universes, strategy assignments, and resolved fixed rules before it is queued. Editing the draft afterward does not mutate an existing run. Reusing the preview key after editing the plan is an idempotency conflict. Construction application is one-time; matching strategy identities aggregate across goals, strategy instances remain disabled in the assigned Gateway session's mode, and only one combined stock target is passed to each execution rebalance.

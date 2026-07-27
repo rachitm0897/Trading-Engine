@@ -6,6 +6,7 @@ import {mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
 import type {StrategyInstance} from '../../api/types'
 import {ConfirmActionDialog, DataTable, DeleteStrategyDialog, ErrorState, Freshness, PageHeader, Skeleton, StatusBadge, TerminalPanel, formatDateTime, formatNumber} from '../../components/ui'
+import {EXECUTION_MODES} from '../../executionMode'
 import {useSelection} from '../../stores/useSelection'
 import {canEnable, canFlatten, canPause, refreshAfterStrategyDeletion} from './strategyActions'
 
@@ -69,7 +70,7 @@ export function StrategiesPage() {
       <div className="filter-bar">
         <label className="search-field"><Search /><span className="sr-only">Search strategies</span><input aria-label="Search strategies" placeholder="Search ticker, name, or definition" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
         <label><Filter /><span className="sr-only">Filter strategy state</span><select aria-label="Filter strategy state" value={state} onChange={(event) => setState(event.target.value)}><option value="">All states</option>{states.map((value) => <option key={value}>{value}</option>)}</select></label>
-        <label><span className="sr-only">Filter execution mode</span><select aria-label="Filter execution mode" value={mode} onChange={(event) => setMode(event.target.value)}><option value="">All modes</option><option>SHADOW</option><option>OBSERVE</option><option>PAPER</option></select></label>
+        <label><span className="sr-only">Filter execution mode</span><select aria-label="Filter execution mode" value={mode} onChange={(event) => setMode(event.target.value)}><option value="">All modes</option>{EXECUTION_MODES.map((value) => <option key={value}>{value}</option>)}</select></label>
         <label><span className="sr-only">Filter timeframe</span><select aria-label="Filter timeframe" value={timeframe} onChange={(event) => setTimeframe(event.target.value)}><option value="">All timeframes</option>{timeframes.map((value) => <option key={value}>{value}</option>)}</select></label>
         <label><span className="sr-only">Filter symbol</span><select aria-label="Filter symbol" value={symbol} onChange={(event) => setSymbol(event.target.value)}><option value="">All symbols</option>{symbols.map((value) => <option key={value}>{value}</option>)}</select></label>
         <span className="filter-count">{rows.length} of {(strategies.data || []).length}</span>

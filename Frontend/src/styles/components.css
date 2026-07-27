@@ -189,6 +189,10 @@
 .form-grid.three-columns { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .form-grid.four-columns { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .form-grid label { display: flex; flex-direction: column; gap: .38rem; text-transform: capitalize; }
+.mode-derived-field { display: flex; flex-direction: column; justify-content: center; gap: .42rem; min-height: 82px; padding: .65rem .72rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-subtle); }
+.mode-derived-field > span { color: var(--text-muted); font-size: .68rem; font-weight: 650; text-transform: uppercase; }
+.mode-derived-field > strong { display: flex; align-items: center; }
+.mode-derived-field > small { color: var(--text-muted); font-size: .66rem; }
 .field-help, .field-error { color: var(--text-muted); font-size: .66rem; text-transform: none; }
 .field-error { color: var(--critical); }
 .form-grid select[multiple] { min-height: 132px; padding: .4rem; }

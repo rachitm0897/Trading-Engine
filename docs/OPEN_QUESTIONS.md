@@ -9,7 +9,7 @@ Implemented safe defaults:
 - missing optional role data removes that role's contribution and moves recommendations through explicit fallback tiers;
 - final IBKR qualification is lazy with ranked substitution, while background batches progressively qualify the full universe;
 - the normal frontend exposes neither Research administration nor manual recommendation acceptance;
-- generation and preview have no execution side effects; apply is explicit and remains SHADOW/PAPER only;
+- generation and preview have no execution side effects; apply is explicit and uses the assigned Paper/Live Gateway session;
 - short and pair/basket runtime execution are disabled until borrow/cost data and atomic multi-instrument targets exist;
 - PostgreSQL stores state and summaries; large research artifacts use the configured filesystem/Parquet store;
 - operator observability is through admin, audit, structured logs, and `/metrics`.
@@ -21,9 +21,9 @@ Before production certification, operators must decide:
 - an S3-compatible immutable artifact backend, retention, encryption, backup, and recovery objectives;
 - research queue capacity, nightly/weekly/monthly throughput targets, and alert ownership;
 - account-specific margin, commission, tax-lot, concentration, turnover, liquidity, and loss limits;
-- the paper evidence and second-approval policy required to move a strategy from SHADOW validation to PAPER enablement;
+- the Paper evidence and second-approval policy required to move a strategy from Paper validation to runtime enablement;
 - production Kafka/Flink replication, checkpoints, retention, symbol-map ownership, and upgrade procedures;
 - whether a future multi-instrument plugin needs atomic portfolio targets and a dedicated net-order policy resolver;
 - authenticated operator roles before exposing dataset activation, scheduling, overrides, or promotion as mutation APIs.
 
-Until the relevant licensed data exists, affected historical experiments fail safely or remain unpromoted; the engine does not manufacture availability timestamps, scores, contracts, or SHADOW evidence.
+Until the relevant licensed data exists, affected historical experiments fail safely or remain unpromoted; the engine does not manufacture availability timestamps, scores, contracts, or Paper validation evidence.

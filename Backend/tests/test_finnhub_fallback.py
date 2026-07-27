@@ -409,10 +409,12 @@ def test_strategies_continue_on_finnhub_and_block_only_after_both_providers_fail
     from apps.accounts.models import BrokerAccount
     from apps.portfolios.models import TradingPortfolio
     from apps.strategies.framework import create_instance
+    from tests.managed_gateway import bind_gateway_mode
 
     enable_fallback(settings)
     account = BrokerAccount.objects.create(account_id="DU-FALLBACK")
     portfolio = TradingPortfolio.objects.create(account=account, name="Fallback")
+    bind_gateway_mode(portfolio)
     instrument, contract = canonical()
     verified_mapping(instrument)
     instance, _ = create_instance(name="Fallback strategy", definition_key="FIXED_WEIGHT_REBALANCE",

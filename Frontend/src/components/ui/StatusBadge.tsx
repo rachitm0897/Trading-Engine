@@ -4,8 +4,8 @@ function inferTone(status: string): StatusTone {
   const value = status.toUpperCase()
   if (/CONNECTED|RECONCILED|HEALTHY|APPROVED|FILLED|COMPLETED|ACTIVE|FRESH|PAPER/.test(value)) return 'positive'
   if (/ERROR|REJECT|BLOCK|KILL|DISCONNECT|FAILED|CRITICAL|STALE/.test(value)) return 'critical'
-  if (/PENDING|PARTIAL|WARM|UNKNOWN|DEGRADED|HELD|PAUSED|CANCEL/.test(value)) return 'warning'
-  if (/SHADOW|OBSERVE|INFO/.test(value)) return 'info'
+  if (/PENDING|PARTIAL|WARM|UNKNOWN|DEGRADED|HELD|PAUSED|CANCEL|LIVE/.test(value)) return 'warning'
+  if (/PREVIEW|INFO/.test(value)) return 'info'
   return 'neutral'
 }
 

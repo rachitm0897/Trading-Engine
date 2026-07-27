@@ -178,7 +178,7 @@ def test_acceptance_creates_no_instance_or_rebalance_and_fixed_weight_survives_p
         implementation_version="test", implementation_hash="a" * 64, role="EXECUTION",
         exact_semantic_match=True, supported_frequency="1d", supported_direction="LONG",
         status="APPROVED", executable_strategy_definition=definition,
-        default_parameters={"direction": "LONG"}, approval_record={"shadow_validated": True},
+        default_parameters={"direction": "LONG"}, approval_record={"paper_validated": True},
     )
     account = BrokerAccount.objects.create(account_id="DU-RESEARCH", net_liquidation=10000, available_cash=10000)
     portfolio = TradingPortfolio.objects.create(name="Research acceptance", account=account)

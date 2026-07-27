@@ -66,8 +66,8 @@ events nor broker market data enter Kafka.
 
 ### Evidence
 
-- The diagnostic AMD fixed-weight strategy (instance 30) was created in SHADOW
-  mode, enabled successfully, and had one active BAR/OHLCV input binding with an
+- The diagnostic AMD fixed-weight strategy (instance 30) was created in the
+  legacy non-executing diagnostic mode, enabled successfully, and had one active BAR/OHLCV input binding with an
   active reference count of 1.
 - After 12 seconds it was still `WARMING_UP`, with progress `0/1` and no final bar.
 - Kafka end offsets were 0 for every partition of `strategy.inputs.v1`,
@@ -262,11 +262,11 @@ path rather than HTTP/process liveness alone.
 ## Safety constraints retained for implementation
 
 - The Gateway remains the only TWS socket owner.
-- Diagnostic strategy 30 uses SHADOW mode and cannot place an order.
+- Diagnostic strategy 30 was non-executing and could not place an order.
 - The connected broker session is paper mode.
 - No change may bypass idempotency, sizing, risk, OMS, ledger, reconciliation, or
   paper-first gates.
-- Configurable strategies reject LIVE mode, and the backend rejects a live-trading environment request at startup.
+- Live execution remains blocked unless `ALLOW_LIVE_TRADING=true`; runtime mode must match the portfolio Gateway session.
 
 ## Post-fix runtime verification
 
@@ -281,7 +281,7 @@ stack rebuild, and separate child-image validation.
 - The qualified contract published to the compacted `instrument.registry.v1`
   topic. The registry end offset advanced from 4 to 5 before the strategy was
   enabled, and Flink resolved subsequent raw events by conId.
-- Enabling SHADOW strategy instance 31 created a durable, reference-counted
+- Enabling diagnostic strategy instance 31 created a durable, reference-counted
   subscription. Real IBKR historical data traversed Gateway, Kafka, Flink, and
   Backend persistence: 20 final SHOP 5-minute bars and 20 RSI values were stored.
 - Warm-up advanced from real final bars and indicators to `15/15`. The latest RSI
@@ -314,8 +314,8 @@ stack rebuild, and separate child-image validation.
 - Final HTTP smoke returned 200 for Backend health, instruments, strategy detail,
   orders, and streaming health; Frontend root and health; and separate child health.
 - The historical broker child exposed only HTTP target port 8080, not raw TWS
-  paper port 4002. The default execution mode is
-  `SHADOW`.
+  paper port 4002. Current execution mode is derived from each portfolio's
+  assigned Gateway session.
 
 ### Final automated results
 
@@ -338,7 +338,7 @@ were zero SHOP strategy runs and zero orders.
 
 After enabling the required paper-account market-data entitlement (or confirmed
 API delayed-data access), repeat the test during an applicable market session and
-verify a live final bar, indicator, strategy run, and SHADOW target in order. A
+verify a live final bar, indicator, strategy run, and Paper target in order. A
 real paper order should also be deliberately cancelled or rejected to confirm a
 new IBKR callback populates reason code, message, structured diagnostics, and the
 Frontend order timeline. Existing historical cancelled orders predate this change

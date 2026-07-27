@@ -5,7 +5,7 @@
 This document is the ownership contract for automatic strategy execution.
 Durable strategy evaluation, portfolio target coordination, intent execution,
 broker-command dispatch, fill accounting, and execution readiness are
-implemented and covered by the automatic PAPER integration test.
+implemented for both portfolio session modes and covered by automatic execution integration tests.
 
 The only supported automatic order path is:
 
@@ -28,7 +28,7 @@ Market provider
 -> OMS Order
 -> durable BrokerCommand
 -> Gateway
--> IBKR paper account
+-> matching IBKR account
 -> broker events
 -> fills and reconciliation
 ```
@@ -83,16 +83,16 @@ but that does not transfer ownership.
 | Backend market persistence | Backend Market Persistence Consumer (`consume_market_streams`) | Final bar, full-identity indicator, and market-quality envelopes with `LIVE`, `WARMUP`, `REPLAY`, or `BACKFILL` mode | Immutable PostgreSQL market facts; only ordered LIVE facts may update input completeness and create or release a durable evaluation job | PostgreSQL: `ConsumedEvent`, `MarketBar`, `IndicatorValue`, `InstrumentMarketState`, `StrategyEvaluationJob` | Consumes `market.bars.v1`, `market.indicators.v1`, `market.quality.v1` |
 | `StrategyEvaluationJob` | Backend Strategy Evaluation Scheduler (`coordinate_bar_readiness` and `ensure_strategy_evaluation_job`) | Persisted final bar/version, current strategy version, and exact expected/available input identities | One durable, claimable job per strategy instance, strategy version, bar ID, and bar version | PostgreSQL: `StrategyEvaluationJob` with unique causal key, status, lease timestamps, bounded attempts, next-attempt time, and classified error | None. Database creation is the workflow handoff |
 | Strategy evaluation worker | Backend Strategy Evaluation Worker (`apps.strategies.evaluation_jobs`) | Job claimed with `select_for_update(skip_locked=True)`, immutable strategy version/configuration, persisted bar and indicators | Deterministic strategy decision, signal, optional target, and completed/retry/failed job state | PostgreSQL: `StrategyRun`, `StrategySignal`, `StrategyTarget`, strategy state, `StrategyEvaluationJob`; `OutboxEvent` after commit | Celery queue `strategy_evaluation` wakes the worker; Kafka is not the work queue. May project `strategy.targets.v1` after commit |
-| `StrategyTarget` | Backend Strategy Evaluation Worker, using the plugin target contract | Plugin decision in `SHADOW` or `PAPER` mode | Versioned strategy/instrument target with causal run and event IDs | PostgreSQL: `StrategyTarget` | Optional post-commit projection to `strategy.targets.v1` |
+| `StrategyTarget` | Backend Strategy Evaluation Worker, using the plugin target contract | Plugin decision in the portfolio Gateway session's `PAPER` or `LIVE` mode | Versioned strategy/instrument target with causal run and event IDs | PostgreSQL: `StrategyTarget` | Optional post-commit projection to `strategy.targets.v1` |
 | `PortfolioTargetSnapshot` | Backend Target Coordinator (`apps.rebalancing.coordinator`) | Event-time-latest eligible `StrategyTarget` per allocated instance, active strategy versions, lifecycle policy, attributed positions, account/portfolio NAV, cash, positions, active broker orders, reserved intents, prices, reconciliation generation, and causal cut-off | Immutable net portfolio target, constituent attribution, target ages/rejections, projected exposure, and explicit portfolio order/risk policy | PostgreSQL: `PortfolioTargetSnapshot`, `PortfolioTargetCoordination` | Celery queue `target_coordination` wakes a database-backed worker; Kafka delivery is not required |
 | `RebalanceRun` | Backend Rebalance Planner | One immutable `PortfolioTargetSnapshot`, persisted positions/prices, `RebalancePolicy`, NAV and available cash | Auditable target positions, drift/cost suppressions, phase and mode | PostgreSQL: `RebalanceRun`, `TargetPortfolioPosition`; `OutboxEvent` | Produces informational `portfolio.rebalance.planned.v1` after commit |
-| `OrderIntent` | Backend Rebalance Planner | Unsuppressed PAPER trades from one `RebalanceRun` | Eligible, netted, idempotent intent with strategy-version attribution | PostgreSQL: `OrderIntent`, `OrderIntentAttribution`, `PositionSizingDecision` when configured | None. PostgreSQL is the only intent work queue |
-| Intent execution worker | Backend Intent Execution Service (`apps.execution.dispatch`) | Eligible PAPER `OrderIntent` claimed from PostgreSQL | Terminal hold/rejection, or one risk-approved OMS order and one durable PLACE command | PostgreSQL: intent attempt/status, `OperationAttempt`, risk and OMS records, `BrokerCommand` | Celery queue `intent_execution`; never consumes Kafka as authority |
+| `OrderIntent` | Backend Rebalance Planner | Unsuppressed `PAPER` or `LIVE` trades from an `EXECUTION` `RebalanceRun` | Eligible, netted, idempotent intent with strategy-version attribution | PostgreSQL: `OrderIntent`, `OrderIntentAttribution`, `PositionSizingDecision` when configured | None. PostgreSQL is the only intent work queue |
+| Intent execution worker | Backend Intent Execution Service (`apps.execution.dispatch`) | Eligible mode-matched `OrderIntent` claimed from PostgreSQL | Terminal hold/rejection, or one risk-approved OMS order and one durable PLACE command | PostgreSQL: intent attempt/status, `OperationAttempt`, risk and OMS records, `BrokerCommand` | Celery queue `intent_execution`; never consumes Kafka as authority |
 | Risk checks | Backend Pre-Trade Risk Service (`evaluate_intent`) | Locked intent, persisted account/portfolio/strategy policy, sizing decision, kill switches, market freshness, Gateway health, reconciliation state | `APPROVED`, `RESIZED`, `HELD`, or `REJECTED` with approved quantity | PostgreSQL: `RiskCheckResult`, `CapitalReservation`, intent status, `OutboxEvent` | Produces informational `risk.decisions.v1` |
 | OMS `Order` | Backend OMS | Approved quantity and exactly one `OrderIntent` | Internal order identity and append-only status transitions | PostgreSQL: `Order`, `OrderStatusHistory`, `OutboxEvent` | Produces informational `orders.events.v1` |
 | Durable `BrokerCommand` | Backend Broker Command Dispatcher (`apps.execution.dispatch`) | Risk-approved OMS PLACE, or approved MODIFY/CANCEL request, with stable internal order ID and command idempotency key | Safely claimed dispatch, explicit acknowledgement/retry/failure, or `UNCERTAIN` pending Gateway-and-broker reconciliation | PostgreSQL: `BrokerCommand`; Gateway SQLite after acknowledged handoff: `GatewayCommand`, later `GatewayCommandAttempt` and `GatewayOrderReference` | Celery queue `broker_commands`; Kafka is not the command queue |
 | Gateway | Gateway Broker Worker (`broker_worker`) | Claimed `GatewayCommand` | One broker API call or an explicitly `UNKNOWN` outcome; durable callback events | Gateway SQLite: command attempt/result and `GatewayEvent`; no portfolio or risk records | None |
-| IBKR paper account | IBKR paper brokerage | Qualified contract and approved broker order | Broker acknowledgement, status, execution and account snapshots | External broker system | None |
+| Matching IBKR account | The portfolio's Paper or Live IBKR Gateway session | Qualified contract, approved broker order, and an exact intent/command/session/health mode match | Broker acknowledgement, status, execution and account snapshots | External broker system | None |
 | Broker events | Gateway Broker Event Capture | `ib_async` callbacks and periodic snapshots | Ordered, idempotent Gateway events consumed through a per-session Backend cursor | Gateway SQLite: `GatewayEvent`; PostgreSQL: `BrokerSyncCursor`, broker IDs/status history, `BrokerPositionSnapshot` | Backend may project order/execution events only after PostgreSQL commit |
 | Fills and reconciliation | Backend Broker Accounting Boundary (`broker_gateway.sync`, OMS fill accounting, and Reconciliation Service) | Ordered Gateway broker events/snapshots and persisted OMS state | Idempotent fills, ledgers, positions, reservation settlement, reconciliation result and breaks | PostgreSQL: `Fill`, `CashLedgerEntry`, `PositionLedgerEntry`, `PortfolioPosition`, `StrategyAttributedPosition`, `ReconciliationRun`, `ReconciliationBreak`, `OutboxEvent` | Produces informational `executions.events.v1` and `reconciliation.events.v1` |
 
@@ -129,7 +129,7 @@ Kafka is deliberately absent as an authoritative trigger between
 6. Target aggregation snapshots a causal set once. The rebalancer consumes
    that immutable snapshot; it must never query a moving set of "latest"
    targets while planning.
-7. PAPER planning persists `OrderIntent`. No planner, plugin, API view, Kafka
+7. `PAPER` and `LIVE` execution planning persist `OrderIntent`. No planner, plugin, API view, Kafka
    consumer, or Flink job may submit it directly.
 8. The intent execution worker claims the intent, runs all risk checks, creates
    at most one OMS `Order`, and atomically creates one PostgreSQL
@@ -150,7 +150,7 @@ Kafka is deliberately absent as an authoritative trigger between
 12. Broker callbacks are first durable `GatewayEvent` records. Backend advances
    a per-session `BrokerSyncCursor` only after each event is projected.
    Execution callbacks, not status callbacks, create fills and ledgers.
-13. Reconciliation compares the IBKR paper account with PostgreSQL and blocks
+13. Reconciliation compares the portfolio's matching IBKR account with PostgreSQL and blocks
     new risk approval while material breaks remain open.
 
 ## Retry and idempotency matrix
@@ -175,18 +175,19 @@ Kafka is deliberately absent as an authoritative trigger between
 
 | Mode | Evaluation and records | Furthest permitted automatic stage | Broker effect |
 | --- | --- | --- | --- |
-| `OBSERVE` | Persist evaluation job/run and signal; do not create a `StrategyTarget` | Strategy evaluation worker | None |
-| `SHADOW` | Create `StrategyTarget`, `PortfolioTargetSnapshot`, `RebalanceRun`, and target-position plan | `RebalanceRun` plan | No `OrderIntent`, OMS order, BrokerCommand, or broker call |
 | `PAPER` | Execute the complete documented path with normal sizing, risk, OMS, command durability, fills, ledgers, and reconciliation | IBKR paper account and reconciliation | Paper orders only |
+| `LIVE` | Execute the same complete path, only when `ALLOW_LIVE_TRADING=true` | IBKR live account and reconciliation | Live orders |
 
-`LIVE` is not a supported automatic execution mode. Mode gates may stop a
-pipeline early, but they may not bypass a stage.
+`PREVIEW` is a run type, not an execution mode. It creates an auditable target
+and trade plan but cannot create an `OrderIntent`, OMS order, broker command, or
+broker call. Mode gates may stop an execution pipeline early, but they may not
+bypass a stage.
 
 ## Current implementation and cutover
 
-The complete documented PAPER path now has a durable database handoff at every
-financial boundary. The manual order API uses the same intent service, while
-automatic PAPER intents are claimed by its Celery worker.
+The complete documented Paper and Live paths have a durable database handoff at
+every financial boundary. The manual order API uses the same intent service,
+while automatic intents are claimed by its Celery worker.
 
 Planned delivery phases:
 
@@ -230,7 +231,7 @@ entries:
 - `_external_order` in `broker_gateway.sync` imports an order already found at
   IBKR for accounting and reconciliation; it never submits one.
 - Portfolio optimization and construction can create operator-approved
-  rebalance plans, but any resulting PAPER `OrderIntent` must use the same
+  rebalance plans, but any resulting `PAPER` or `LIVE` `OrderIntent` must use the same
   common intent execution service.
 - Strategy flatten is an explicit operator action that may create a target; it
   cannot submit an order and must proceed through snapshot, rebalance, and the
@@ -274,7 +275,7 @@ contribute, the order policy belonging to the lowest-priority-number
 `StrategyAllocation` wins, with strategy ID as the deterministic tie-breaker;
 that choice is stored in the immutable snapshot.
 
-Every PAPER strategy also registers a framework-owned `average_volume`
+Every executable Paper or Live strategy also registers a framework-owned `average_volume`
 requirement. Flink computes it like any other full-identity market input, while
 the strategy plugin may ignore it. The Rebalance Planner freezes that value in
 its sizing decision so the risk service can enforce participation limits; a
@@ -283,7 +284,7 @@ missing value cannot silently disable the liquidity bound.
 ## Automatic execution readiness
 
 `GET /api/v1/execution/readiness/` is the fail-closed readiness surface for
-automatic PAPER execution. It does not replace `/healthz` process liveness or
+automatic execution for portfolio-bound Paper and Live sessions. It does not replace `/healthz` process liveness or
 general `/readyz` application readiness. Its response names every signal,
 threshold, age, and blocker used in the decision.
 
@@ -300,7 +301,7 @@ The report includes:
 Automatic execution readiness is false if a required Flink job or checkpoint
 is missing/stale, required market data or a producer/consumer heartbeat is
 stale, the strategy backlog exceeds its threshold, a required worker is
-missing/stale, a PAPER portfolio Gateway or account is not reconciled, or an
+missing/stale, a required portfolio Gateway or account is not mode-matched and reconciled, or an
 uncertain command blocks a portfolio. Target, intent, and command backlog ages
 are reported and become blockers at their configured limits. An active
 rebalance is reported but is not itself a readiness failure because the

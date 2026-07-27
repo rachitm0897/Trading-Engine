@@ -1,5 +1,7 @@
 from django.db import models
 
+from apps.execution.modes import ExecutionMode
+
 
 class PortfolioUniverse(models.Model):
     portfolio = models.OneToOneField("portfolios.TradingPortfolio", on_delete=models.PROTECT, related_name="optimization_universe")
@@ -37,9 +39,19 @@ class PortfolioOptimizationPolicy(models.Model):
     transaction_cost_penalty = models.DecimalField(max_digits=16, decimal_places=8, default="0")
     long_only = models.BooleanField(default=True)
     enabled = models.BooleanField(default=True)
-    execution_mode = models.CharField(max_length=16, default="SHADOW")
+    execution_mode = models.CharField(
+        max_length=16, choices=ExecutionMode.choices, default=ExecutionMode.PAPER
+    )
     version = models.PositiveIntegerField(default=1)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(execution_mode__in=ExecutionMode.values),
+                name="optimization_policy_valid_execution_mode",
+            ),
+        ]
 
 
 class PortfolioOptimizationRun(models.Model):

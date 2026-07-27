@@ -6,7 +6,7 @@ Recorded on 2026-07-15 after implementing the phases in `trading_engine_implemen
 
 All final acceptance conditions in the implementation plan are satisfied. The backend, Gateway, streaming, frontend, migration, Compose, smoke, and PostgreSQL concurrency checks pass. There are no known test failures or unresolved implementation blockers.
 
-The deployment remains a single backend application deployment with its existing worker processes and a single Gateway deployment. No authentication, user-specific behavior, tenant behavior, live trading, or additional application service was added. Backend and Gateway startup now reject live configuration; all execution is `SHADOW` or `PAPER`.
+The deployment remains a single backend application deployment with its existing worker processes and Gateway sessions. No authentication, user-specific behavior, tenant behavior, or additional application service was added. Runtime execution supports session-derived `PAPER` and `LIVE`, with Live gated by `ALLOW_LIVE_TRADING`.
 
 ## Baseline
 
@@ -58,13 +58,13 @@ The first baseline Compose inspection encountered an unavailable Docker Desktop 
 - Evaluation work runs inside a rollback savepoint. Plugin failures leave an error run and strategy state without partial signals, targets, or outbox events. Explicit retries restore the retained pre-evaluation state and reuse the same run identity.
 - Kafka consumer failures persist a retryable failed-consumption record and a full dead-letter envelope before committing the offset. The health metric is `DEGRADED`, not healthy. Replay can retry the failed event, and replay status is pollable.
 
-### Validation and paper-only enforcement
+### Validation and Paper/Live enforcement
 
 - Read endpoints reject unsupported methods with structured `405` responses. Mutations validate JSON-object shape, allowed/required fields, supported enum values, exact booleans, relationships, positive finite decimals, field precision, order-type price requirements, and state transitions.
 - Manual and Gateway order modification rejects placement-only fields, prices incompatible with the existing order type, and quantity below an already-filled amount.
 - Portfolio/universe/policy/optimization, flow, sizing, rebalance, kill-switch, replay, instrument, and Gateway relationships/payloads are validated before work is queued.
 - Invalid OMS transitions are explicit and leave no status-history side effect.
-- Backend safety gates reject unsupported live execution paths; private child-image validation uses paper mode, and strategy, rebalance, and optimization APIs accept only observe/shadow/paper behavior.
+- Backend safety gates reject disabled or mismatched Live execution paths; private child-image validation uses Paper mode, and strategy, rebalance, and optimization APIs accept only Paper/Live behavior.
 
 ## Asynchronous and performance changes
 

@@ -24,7 +24,7 @@ The completed system must:
 7. generate a fast stock-and-strategy portfolio for a goal's timeframe and risk;
 8. preserve the exact recommended stock and strategy-sleeve weights through Portfolio Builder preview;
 9. require the current manual preview and apply flow before any rebalance;
-10. preserve the existing SHADOW/PAPER-only and disabled-strategy safety boundaries.
+10. preserve explicit non-executing preview, Paper/Live session routing, and disabled-strategy safety boundaries.
 
 The JSON files are research specifications and metadata. They are not runtime strategy code and must never be interpreted with `eval`, arbitrary expressions, or generated code at execution time.
 
@@ -44,7 +44,7 @@ The repository already contains:
 - parameter hashes and schema-based validation;
 - aggregation of duplicate stock and strategy identities across goals;
 - explicit non-zero `target_weight` and `capital_share` on builder-created strategy instances;
-- reuse of only disabled SHADOW instances;
+- reuse of only disabled session-mode-derived instances;
 - one final combined rebalance;
 - `BrokerInstrumentSearch`;
 - `SchemaParameterForm`;
@@ -70,7 +70,7 @@ Reuse the existing implementation:
 - `PortfolioOptimizationRun`;
 - `PortfolioConstructionRun`;
 - the current strategy plugin registry;
-- SHADOW/PAPER execution controls;
+- Preview/Paper/Live execution controls;
 - operation attempts, idempotency keys, throttling, and immutable snapshots.
 
 Do not create a second provider-mapping system.
@@ -218,7 +218,7 @@ A research strategy may map to an executable `StrategyDefinition` only after:
 8. multiple-testing controls pass;
 9. a human approval record exists;
 10. the implementation is compatible with current long-only Portfolio Builder rules;
-11. SHADOW evaluation passes.
+11. Paper validation passes.
 
 ### 4.2 Separate strategy roles
 
@@ -328,7 +328,7 @@ Accepted recommendation weight source
         ↓
 Existing construction preview
         ↓
-Existing one combined SHADOW/PAPER rebalance
+Existing one combined Preview/Paper/Live rebalance
 ```
 
 ---
@@ -941,7 +941,7 @@ For `ACCEPTED_RECOMMENDATION`:
 9. validate strategy shares total 100% per stock;
 10. block apply when the recommendation has expired or materially stale data is detected;
 11. use the accepted fixed local weights instead of calling the current Markowitz optimizer;
-12. preserve all existing final aggregation, target creation, preview, rebalance, and SHADOW instance logic.
+12. preserve all existing final aggregation, target creation, preview, rebalance, and disabled instance logic.
 
 ### 8.4 Manual edits after acceptance
 
@@ -1743,7 +1743,7 @@ IMPORTED
 → IMPLEMENTED
 → BACKTESTED
 → APPROVED
-→ SHADOW_VALIDATED
+→ PAPER_VALIDATED
 → BUILDER_ELIGIBLE
 → RETIRED
 ```
@@ -1762,7 +1762,7 @@ Promotion requires:
 10. long-only compatibility;
 11. exact `StrategyDefinition` mapping;
 12. valid `StrategyConstructionProfile`;
-13. successful SHADOW evaluation.
+13. successful Paper validation.
 
 New executable definitions must begin disabled or non-user-selectable until approval is complete.
 
@@ -2015,7 +2015,7 @@ Update:
 - manual mode behaves exactly as before;
 - manual edits require detach;
 - apply still creates one combined rebalance;
-- created strategy instances remain disabled SHADOW.
+- created strategy instances remain disabled and derive Paper or Live from the portfolio Gateway.
 
 ### 25.7 Frontend tests
 
@@ -2085,7 +2085,7 @@ The implementation is complete only when:
 20. recommendation acceptance creates no orders, rebalance, or strategy instances;
 21. current preview remains mandatory;
 22. apply still creates one combined rebalance;
-23. created or reused strategy instances remain disabled SHADOW;
+23. created or reused strategy instances remain disabled and derive Paper or Live from the portfolio Gateway;
 24. safe strategy deletion leaves construction and recommendation history intact;
 25. APIs are paginated and research tasks do not block web workers;
 26. recommendation latency is within 3-15 seconds when cached data is current;

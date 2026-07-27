@@ -83,7 +83,7 @@ docker buildx build --platform linux/amd64 --load -t trading-engine-gateway ./IB
 
 `GET /healthz` is process liveness. Backend `GET /readyz` checks database and
 recommendation readiness. `GET /api/v1/execution/readiness/` is the stricter,
-fail-closed automatic PAPER readiness report for Flink checkpoints, Kafka and
+fail-closed automatic Paper and Live readiness report for Flink checkpoints, Kafka and
 worker heartbeats, workflow backlogs, market freshness, Gateway connectivity,
 broker reconciliation, and uncertain orders. Missing managed-session
 configuration does not make process health fail. Live broker sessions remain

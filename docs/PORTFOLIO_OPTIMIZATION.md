@@ -11,7 +11,7 @@ Portfolio universe -> Finnhub daily history -> Markowitz optimizer
   -> ledgers -> audit -> reconciliation
 ```
 
-`NEW_EXECUTION_MODE=SHADOW` remains the default. Optimization previews and optimized deposit/withdrawal plans are always SHADOW. Applying a preview can only use `SHADOW` or `PAPER`; LIVE is neither accepted by the optimization policy nor supported by the rebalance service.
+Execution mode is derived from the portfolio's assigned IBKR Gateway session. Optimization previews use `run_type=PREVIEW` and never create order intents or broker commands. Applying an immutable preview uses `run_type=EXECUTION` in either `PAPER` or `LIVE`; Live application remains blocked unless `ALLOW_LIVE_TRADING=true`.
 
 ## Configuration
 
@@ -41,8 +41,8 @@ On the Portfolio page:
 1. Select at least two active stocks in one portfolio universe.
 2. Configure minimum variance or maximum Sharpe, lookback, minimum observations, min/max stock weights, target cash, maximum turnover, risk-free rate, and transaction-cost penalty.
 3. Save the universe and policy.
-4. Preview optimization. Metrics include expected return, volatility, Sharpe ratio, cash, turnover, allocation changes, exclusions, warnings, and planned SHADOW trades.
-5. Apply the immutable preview through rebalancing. Under the default configuration it stays SHADOW. If an operator has deliberately enabled existing PAPER mode, the planner creates normal sizing records and order intents for subsequent risk and OMS processing.
+4. Preview optimization. Metrics include expected return, volatility, Sharpe ratio, cash, turnover, allocation changes, exclusions, warnings, and planned preview trades. Preview never creates executable work.
+5. Apply the immutable preview through rebalancing. Readiness is rechecked, then the planner creates normal sizing records and order intents in the assigned Gateway session's Paper or Live mode for subsequent risk, OMS, and broker-command processing.
 
 The first release is long-only. Weight feasibility is checked before solving. Covariance is regularized when needed. Completed runs store input dates, current weights, expected returns, covariance, constraints, policy version, solver status, metrics, and target-level return/risk contributions.
 
@@ -54,7 +54,7 @@ Flow allocation accepts `AUTO`, `PORTFOLIO_OPTIMIZATION`, or `STRATEGY_ALLOCATIO
 - `PORTFOLIO_OPTIMIZATION` requires the universe and policy and fails atomically if post-flow targets cannot be calculated.
 - `STRATEGY_ALLOCATION` preserves the previous behavior.
 
-Deposits use post-deposit NAV and cash. Withdrawals use reduced NAV and cash after consuming available cash. Both create an immutable optimization run and SHADOW rebalance plan, preserving lot sizes, minimum notional, drift, cash buffers, turnover, and sell-before-buy sequencing.
+Deposits use post-deposit NAV and cash. Withdrawals use reduced NAV and cash after consuming available cash. Both create an immutable optimization run and an execution rebalance in the portfolio Gateway session's mode, preserving lot sizes, minimum notional, drift, cash buffers, turnover, and sell-before-buy sequencing.
 
 ## Operations
 
