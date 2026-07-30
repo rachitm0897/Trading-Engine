@@ -415,6 +415,18 @@ export interface StrategyInstance {
   warmup_required: number
   warmup_started_at: string | null
   warmup_last_progress_at: string | null
+  subscription_ready_at: string | null
+  warmup_completed_at: string | null
+  ready_waiting_since: string | null
+  first_evaluation_completed_at: string | null
+  execution_active_at: string | null
+  activation_stages: {
+    subscription_ready: boolean
+    warmup_complete: boolean
+    waiting_for_live_bar: boolean
+    first_evaluation_complete: boolean
+    execution_active: boolean
+  }
   block_reason: string
   effective_from: string | null
   effective_to: string | null
@@ -993,7 +1005,9 @@ export interface PortfolioConstructionRun {
     }[]
     application?: {
       construction_application: string
-      rebalance_creation: string
+      rebalance_creation?: string
+      initial_allocation_preview?: string
+      strategy_execution_rebalance?: string
       strategy_creation: string
       strategy_activation: string
       market_subscription: string
@@ -1009,6 +1023,11 @@ export interface PortfolioConstructionRun {
       active_provider?: string
       warmup_progress?: number
       warmup_required?: number
+      subscription_ready?: boolean
+      warmup_complete?: boolean
+      waiting_for_live_bar?: boolean
+      first_evaluation_complete?: boolean
+      execution_active?: boolean
       block_reason?: string
     }[]
   }

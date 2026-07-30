@@ -182,11 +182,13 @@ def test_builder_apply_activates_and_reports_each_strategy(
     for subscription in MarketDataSubscription.objects.all():
         confirm_subscription(portfolio,subscription)
     applied.refresh_from_db()
-    assert applied.application_status=="APPLIED"
-    assert applied.metrics["application"]["strategy_activation"]=="COMPLETED"
+    assert applied.application_status=="ACTIVATING"
+    assert applied.metrics["application"]["strategy_activation"]=="SUBSCRIPTION_READY"
     assert applied.metrics["application"]["market_subscription"]=="ACTIVE"
     assert all(row["activation_status"]=="WARMING_UP" for row in applied.metrics["strategy_instances"])
     assert all(row["market_subscription"]=="ACTIVE" for row in applied.metrics["strategy_instances"])
+    assert all(row["subscription_ready"] for row in applied.metrics["strategy_instances"])
+    assert all(not row["warmup_complete"] for row in applied.metrics["strategy_instances"])
 
 
 def test_builder_activation_failure_is_not_full_success(
@@ -317,4 +319,4 @@ def test_subscription_timeout_identifies_pending_command(
     subscription=MarketDataSubscription.objects.get()
     assert instance.state=="BLOCKED"
     assert instance.block_reason=="Warm-up timeout: subscription command is still pending"
-    assert subscription.state=="ERROR"
+    assert subscription.state=="SUBSCRIBING"

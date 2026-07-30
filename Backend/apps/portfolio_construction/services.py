@@ -894,18 +894,18 @@ def _application_progress(rows):
     activation_states={str(row.get("activation_status") or "") for row in rows}
     subscription_states={str(row.get("market_subscription") or "") for row in rows}
     failures=activation_states & {"BLOCKED","ERROR"} or subscription_states & {"ERROR"}
-    complete=bool(rows) and all(
-        row.get("activation_status") in {
-            "WARMING_UP","READY_WAITING_FOR_LIVE_BAR","FLAT","ENTRY_PENDING",
-            "PARTIALLY_LONG","LONG","EXIT_PENDING","PARTIALLY_SHORT","SHORT",
-        }
-        and row.get("market_subscription") in {"ACTIVE","DEGRADED"}
-        for row in rows
-    )
     if failures:
         return "PARTIALLY_APPLIED","FAILED","FAILED"
-    if complete:
-        return "APPLIED","COMPLETED","ACTIVE"
+    if rows and all(row.get("execution_active") for row in rows):
+        return "APPLIED","EXECUTION_ACTIVE","ACTIVE"
+    if rows and all(row.get("first_evaluation_complete") for row in rows):
+        return "ACTIVATING","FIRST_EVALUATION_COMPLETE","ACTIVE"
+    if rows and all(row.get("waiting_for_live_bar") for row in rows):
+        return "ACTIVATING","WAITING_FOR_LIVE_BAR","ACTIVE"
+    if rows and all(row.get("warmup_complete") for row in rows):
+        return "ACTIVATING","WARMUP_COMPLETE","ACTIVE"
+    if rows and all(row.get("subscription_ready") for row in rows):
+        return "ACTIVATING","SUBSCRIPTION_READY","ACTIVE"
     return "ACTIVATING","PENDING","PENDING"
 
 
@@ -937,6 +937,11 @@ def record_strategy_activation_result(construction_run_id,strategy_instance_id):
         row["warmup_progress"]=instance.warmup_progress
         from apps.market_streams.services import current_warmup_required
         row["warmup_required"]=current_warmup_required(instance)
+        row["subscription_ready"]=instance.subscription_ready_at is not None
+        row["warmup_complete"]=instance.warmup_completed_at is not None
+        row["waiting_for_live_bar"]=instance.state=="READY_WAITING_FOR_LIVE_BAR"
+        row["first_evaluation_complete"]=instance.first_evaluation_completed_at is not None
+        row["execution_active"]=instance.execution_active_at is not None
     application_status,activation_status,subscription_status=_application_progress(rows)
     failures=[row["block_reason"] for row in rows if row.get("block_reason")]
     run.metrics={
@@ -1037,8 +1042,8 @@ def apply_construction_run(construction_run, idempotency_key, *, mode=None):
         run,
         f"{idempotency_key}:rebalance",
         mode=mode,
-        run_type=RunType.EXECUTION,
-        strict_market_state=True,
+        run_type=RunType.PREVIEW,
+        strict_market_state=False,
     )
     if rebalance.construction_run_id != run.pk:
         raise ConstructionError("Idempotency-Key was already used for a different construction application")
@@ -1049,7 +1054,8 @@ def apply_construction_run(construction_run, idempotency_key, *, mode=None):
         **run.metrics,
         "application":{
             "construction_application":"APPLIED",
-            "rebalance_creation":"CREATED",
+            "initial_allocation_preview":"CREATED",
+            "strategy_execution_rebalance":"WAITING_FOR_FIRST_LIVE_TARGET",
             "strategy_creation":"COMPLETED",
             "strategy_activation":"QUEUED" if linked_instances else "NOT_REQUIRED",
             "market_subscription":"PENDING" if linked_instances else "NOT_REQUIRED",

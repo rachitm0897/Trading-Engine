@@ -79,6 +79,11 @@ class StrategyInstance(models.Model):
     warmup_progress = models.PositiveIntegerField(default=0)
     warmup_started_at = models.DateTimeField(null=True, blank=True)
     warmup_last_progress_at = models.DateTimeField(null=True, blank=True)
+    subscription_ready_at = models.DateTimeField(null=True, blank=True)
+    warmup_completed_at = models.DateTimeField(null=True, blank=True)
+    ready_waiting_since = models.DateTimeField(null=True, blank=True)
+    first_evaluation_completed_at = models.DateTimeField(null=True, blank=True)
+    execution_active_at = models.DateTimeField(null=True, blank=True)
     block_reason = models.CharField(max_length=255, blank=True)
     last_market_event_at = models.DateTimeField(null=True, blank=True)
     last_market_bar_id = models.CharField(max_length=160, blank=True)
@@ -145,6 +150,32 @@ class StrategyInputBinding(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["strategy_version", "requirement"], name="unique_version_input_requirement")]
+
+
+class StrategyWarmupReadiness(models.Model):
+    strategy_instance = models.ForeignKey(
+        StrategyInstance, on_delete=models.PROTECT, related_name="warmup_readiness_records"
+    )
+    strategy_version = models.ForeignKey(
+        StrategyVersion, on_delete=models.PROTECT, related_name="warmup_readiness_records"
+    )
+    provider = models.CharField(max_length=16)
+    provider_generation = models.CharField(max_length=64)
+    requirement_hashes = models.JSONField(default=list)
+    requirement_snapshot_hash = models.CharField(max_length=64)
+    bar_ids = models.JSONField(default=list)
+    bar_timestamps = models.JSONField(default=list)
+    evidence_hash = models.CharField(max_length=64, unique=True)
+    is_current = models.BooleanField(default=True)
+    completed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["strategy_instance", "strategy_version", "-completed_at"],
+                name="strategy_warmup_audit_idx",
+            ),
+        ]
 
 
 class StrategyRun(models.Model):

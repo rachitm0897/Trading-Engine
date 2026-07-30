@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from apps.accounts.models import BrokerAccount
 from apps.allocation.models import PortfolioTargetCoordination, RebalanceRun
+from apps.audit.models import OutboxEvent
 from apps.broker_gateway.models import BrokerGatewaySession
 from apps.event_bus.models import StreamHealthMetric
 from apps.market_streams.models import (
@@ -341,7 +342,7 @@ def _execution_scope(now):
                 strategy.timeframe,
             )
         ) or subscriptions.get((None, strategy.instrument_id, strategy.timeframe))
-        state_usable = bool(state and state.is_usable(now))
+        state_usable = bool(state and state.is_execution_usable(now))
         subscription_age = _age_seconds(
             subscription.last_event_at if subscription else None, now
         )
@@ -570,6 +571,22 @@ def collect_execution_readiness(*, http_get=None, now=None):
     )
     blockers.extend(flink_blockers)
 
+    required_topics=_setting_tuple(
+        "EXECUTION_REQUIRED_KAFKA_TOPICS",()
+    )
+    kafka_metric=StreamHealthMetric.objects.filter(
+        component="kafka",metric="connectivity"
+    ).first()
+    kafka_signal=_heartbeat_signal(
+        kafka_metric,
+        stale_seconds=int(getattr(settings,"KAFKA_HEALTH_STALE_SECONDS",60)),
+        now=now,
+    )
+    available_topics=set((kafka_metric.value or {}).get("topics") or []) if kafka_metric else set()
+    missing_topics=sorted(set(required_topics)-available_topics)
+    kafka_signal["required_topics"]=list(required_topics)
+    kafka_signal["available_topics"]=sorted(available_topics)
+    kafka_signal["missing_topics"]=missing_topics
     if not settings.KAFKA_ENABLED:
         blockers.append(
             {
@@ -578,7 +595,44 @@ def collect_execution_readiness(*, http_get=None, now=None):
                 "details": {},
             }
         )
+    elif not kafka_signal["healthy"]:
+        blockers.append({
+            "code":"KAFKA_UNAVAILABLE",
+            "message":"Kafka connectivity proof is missing, stale, or degraded",
+            "details":{"status":kafka_signal["status"]},
+        })
+    elif missing_topics:
+        blockers.append({
+            "code":"REQUIRED_KAFKA_TOPICS_MISSING",
+            "message":"One or more required Kafka topics are missing",
+            "details":{"topics":missing_topics},
+        })
 
+    outbox_metric=StreamHealthMetric.objects.filter(
+        component="outbox-publisher",metric="heartbeat"
+    ).first()
+    outbox_signal=_heartbeat_signal(
+        outbox_metric,
+        stale_seconds=int(getattr(
+            settings,"OUTBOX_PUBLISHER_HEARTBEAT_STALE_SECONDS",30
+        )),
+        now=now,
+    )
+    outbox_signal["pending_count"]=OutboxEvent.objects.filter(
+        status__in=["PENDING","PUBLISHING"]
+    ).count()
+    outbox_signal["failed_count"]=OutboxEvent.objects.filter(status="FAILED").count()
+    if not outbox_signal["healthy"] or outbox_signal["failed_count"]:
+        blockers.append({
+            "code":"OUTBOX_PUBLISHER_UNHEALTHY",
+            "message":"Transactional outbox publishing is missing, stale, or failing",
+            "details":{
+                "status":outbox_signal["status"],
+                "failed_count":outbox_signal["failed_count"],
+            },
+        })
+
+    scope = _execution_scope(now)
     raw_metric = StreamHealthMetric.objects.filter(
         component="market-raw-producer", metric="heartbeat"
     ).first()
@@ -593,7 +647,7 @@ def collect_execution_readiness(*, http_get=None, now=None):
         ),
         now=now,
     )
-    if not raw_signal["healthy"]:
+    if scope["strategy_count"] and not raw_signal["healthy"]:
         blockers.append(
             {
                 "code": "MARKET_RAW_PRODUCER_HEARTBEAT_STALE",
@@ -647,7 +701,6 @@ def collect_execution_readiness(*, http_get=None, now=None):
             }
         )
 
-    scope = _execution_scope(now)
     if scope["stale_strategies"]:
         blockers.append(
             {
@@ -827,6 +880,8 @@ def collect_execution_readiness(*, http_get=None, now=None):
         "observed_at": now,
         "blockers": blockers,
         "signals": {
+            "kafka":kafka_signal,
+            "outbox_publisher":outbox_signal,
             "market_raw_producer": raw_signal,
             "flink": flink_signal,
             "kafka_consumer": consumer_signal,

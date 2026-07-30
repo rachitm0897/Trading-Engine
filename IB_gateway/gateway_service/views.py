@@ -231,7 +231,7 @@ def orders(request, internal_id=None):
     if invalid:return invalid
     payload=_payload(request)
     if internal_id: payload["internal_id"]=internal_id
-    allowed={"internal_id","account","symbol","conid","asset_class","exchange","currency","side","quantity",
+    allowed={"internal_id","account","symbol","local_symbol","conid","asset_class","exchange","primary_exchange","currency","side","quantity",
         "order_type","limit_price","stop_price","time_in_force"} if not internal_id else {
             "internal_id","quantity","limit_price","stop_price","time_in_force"
         }

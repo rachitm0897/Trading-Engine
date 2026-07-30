@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from apps.research.configuration import RecommendationSystemConfiguration
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR.parent / ".env", override=False)
 load_dotenv(BASE_DIR / ".env", override=False)
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "test-only-secret")
 DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
@@ -61,11 +62,23 @@ PORTFOLIO_TARGET_COORDINATION_DEBOUNCE_SECONDS = int(
 PORTFOLIO_TARGET_COORDINATION_BATCH_SIZE = int(
     os.getenv("PORTFOLIO_TARGET_COORDINATION_BATCH_SIZE", "50")
 )
+PORTFOLIO_TARGET_COORDINATION_RETRY_BASE_SECONDS = int(
+    os.getenv("PORTFOLIO_TARGET_COORDINATION_RETRY_BASE_SECONDS", "5")
+)
+PORTFOLIO_TARGET_COORDINATION_RETRY_MAX_SECONDS = int(
+    os.getenv("PORTFOLIO_TARGET_COORDINATION_RETRY_MAX_SECONDS", "300")
+)
 EXECUTION_AVERAGE_VOLUME_WINDOW = int(
     os.getenv("EXECUTION_AVERAGE_VOLUME_WINDOW", "20")
 )
 if EXECUTION_AVERAGE_VOLUME_WINDOW < 1:
     raise RuntimeError("EXECUTION_AVERAGE_VOLUME_WINDOW must be positive")
+EXECUTION_REGISTER_ADV_INPUT = (
+    os.getenv("EXECUTION_REGISTER_ADV_INPUT", "true").lower() == "true"
+)
+EXECUTION_ADV_TIMEFRAME = os.getenv(
+    "EXECUTION_ADV_TIMEFRAME", "RUNTIME"
+).strip()
 ORDER_INTENT_BATCH_SIZE = int(os.getenv("ORDER_INTENT_BATCH_SIZE", "50"))
 ORDER_INTENT_CLAIM_TIMEOUT_SECONDS = int(
     os.getenv("ORDER_INTENT_CLAIM_TIMEOUT_SECONDS", "120")
@@ -171,8 +184,30 @@ KAFKA_ENABLED = os.getenv("KAFKA_ENABLED", "false").lower() == "true"
 MARKET_PRICE_STALE_SECONDS = int(os.getenv("MARKET_PRICE_STALE_SECONDS", "300"))
 WARMUP_SAFETY_BARS = int(os.getenv("WARMUP_SAFETY_BARS", "5"))
 WARMUP_TIMEOUT_SECONDS = int(os.getenv("WARMUP_TIMEOUT_SECONDS", "300"))
+LIVE_BAR_TIMEOUT_MULTIPLIER = int(os.getenv("LIVE_BAR_TIMEOUT_MULTIPLIER", "3"))
+LIVE_BAR_TIMEOUT_GRACE_SECONDS = int(os.getenv("LIVE_BAR_TIMEOUT_GRACE_SECONDS", "60"))
+LIVE_BAR_TIMEOUT_MIN_SECONDS = int(os.getenv("LIVE_BAR_TIMEOUT_MIN_SECONDS", "120"))
 MARKET_CONSUMER_HEARTBEAT_STALE_SECONDS = int(os.getenv("MARKET_CONSUMER_HEARTBEAT_STALE_SECONDS", "30"))
 KAFKA_LAG_DEGRADED_THRESHOLD = int(os.getenv("KAFKA_LAG_DEGRADED_THRESHOLD", "1000"))
+KAFKA_HEALTH_STALE_SECONDS = int(os.getenv("KAFKA_HEALTH_STALE_SECONDS", "60"))
+OUTBOX_PUBLISHER_HEARTBEAT_STALE_SECONDS = int(
+    os.getenv("OUTBOX_PUBLISHER_HEARTBEAT_STALE_SECONDS", "30")
+)
+EXECUTION_REQUIRED_KAFKA_TOPICS = tuple(
+    value.strip()
+    for value in os.getenv(
+        "EXECUTION_REQUIRED_KAFKA_TOPICS",
+        "market.raw.v1,market.canonical.v1,market.bars.v1,market.indicators.v1,"
+        "market.quality.v1,instrument.registry.v1,strategy.inputs.v1,"
+        "strategy.targets.v1,portfolio.rebalance.planned.v1,risk.decisions.v1,"
+        "orders.events.v1,executions.events.v1,reconciliation.events.v1,"
+        "system.health.v1,dead-letter.v1",
+    ).split(",")
+    if value.strip()
+)
+EXECUTION_ACTIVATION_PREFLIGHT_ENABLED = (
+    os.getenv("EXECUTION_ACTIVATION_PREFLIGHT_ENABLED", "true").lower() == "true"
+)
 FLINK_REST_URL = os.getenv("FLINK_REST_URL", "http://localhost:8081")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 FINNHUB_BASE_URL = os.getenv("FINNHUB_BASE_URL", "https://finnhub.io/api/v1").rstrip("/")
@@ -198,6 +233,13 @@ FINNHUB_SUPPORTED_ASSET_CLASSES = tuple(
     value.strip().upper() for value in os.getenv("FINNHUB_SUPPORTED_ASSET_CLASSES", "STK").split(",") if value.strip()
 )
 GATEWAY_HTTP_TIMEOUT_SECONDS = float(os.getenv("GATEWAY_HTTP_TIMEOUT_SECONDS", "10"))
+LOCAL_PAPER_GATEWAY_URL = os.getenv("LOCAL_PAPER_GATEWAY_URL", "").strip()
+LOCAL_PAPER_GATEWAY_SERVICE_TOKEN = os.getenv(
+    "LOCAL_PAPER_GATEWAY_SERVICE_TOKEN", ""
+).strip()
+LOCAL_PAPER_GATEWAY_CONTAINER_NAME = os.getenv(
+    "LOCAL_PAPER_GATEWAY_CONTAINER_NAME", "paper-ibkr-gateway"
+).strip()
 GATEWAY_COMMAND_POLL_INTERVAL_SECONDS = float(os.getenv("GATEWAY_COMMAND_POLL_INTERVAL_SECONDS", "0.25"))
 GATEWAY_COMMAND_TIMEOUT_DEFAULT_SECONDS = float(os.getenv("GATEWAY_COMMAND_TIMEOUT_DEFAULT_SECONDS", "20"))
 GATEWAY_COMMAND_TIMEOUT_SEARCH_CONTRACTS_SECONDS = float(

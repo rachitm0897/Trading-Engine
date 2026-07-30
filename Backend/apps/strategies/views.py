@@ -1,4 +1,5 @@
 import json
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import OuterRef, Prefetch, Subquery
 from django.utils import timezone
@@ -122,8 +123,27 @@ def _instance(item, detail=False):
         "parameters":item.parameters,"target_configuration":item.target_configuration,"risk_policy_id":item.risk_policy_id,
         "order_policy_id":item.order_policy_id,"execution_mode":item.execution_mode,"state":item.state,
         "enabled":item.enabled,"activation_status":activation_status,
-        "version":item.version,"warmup_progress":item.warmup_progress,"warmup_required":plugin.warmup_bars(item.parameters),
+        "version":item.version,"warmup_progress":item.warmup_progress,
+        "warmup_required":max(
+            plugin.warmup_bars(item.parameters),
+            (
+                int(settings.EXECUTION_AVERAGE_VOLUME_WINDOW)
+                if settings.EXECUTION_REGISTER_ADV_INPUT else 0
+            ),
+        ),
         "warmup_started_at":item.warmup_started_at,"warmup_last_progress_at":item.warmup_last_progress_at,
+        "subscription_ready_at":item.subscription_ready_at,
+        "warmup_completed_at":item.warmup_completed_at,
+        "ready_waiting_since":item.ready_waiting_since,
+        "first_evaluation_completed_at":item.first_evaluation_completed_at,
+        "execution_active_at":item.execution_active_at,
+        "activation_stages":{
+            "subscription_ready":item.subscription_ready_at is not None,
+            "warmup_complete":item.warmup_completed_at is not None,
+            "waiting_for_live_bar":item.state=="READY_WAITING_FOR_LIVE_BAR",
+            "first_evaluation_complete":item.first_evaluation_completed_at is not None,
+            "execution_active":item.execution_active_at is not None,
+        },
         "block_reason":item.block_reason,"effective_from":item.effective_from,"effective_to":item.effective_to,
         "last_final_bar":latest_bar_at,"latest_indicators":latest_indicators,
         "latest_signal":latest_signal,"current_target":latest_target,
@@ -139,6 +159,21 @@ def _instance(item, detail=False):
             "implementation_version":b.requirement.implementation_version,
             "warmup_bars":b.requirement.warmup_bars,"shared_by":b.requirement.active_ref_count,"active":b.active}
             for b in item.input_bindings.all() if b.strategy_version.version==item.version]
+        row["warmup_readiness"]=[{
+            "id":evidence.pk,
+            "strategy_version":evidence.strategy_version.version,
+            "provider":evidence.provider,
+            "provider_generation":evidence.provider_generation,
+            "requirement_hashes":evidence.requirement_hashes,
+            "requirement_snapshot_hash":evidence.requirement_snapshot_hash,
+            "bar_ids":evidence.bar_ids,
+            "bar_timestamps":evidence.bar_timestamps,
+            "evidence_hash":evidence.evidence_hash,
+            "is_current":evidence.is_current,
+            "completed_at":evidence.completed_at,
+        } for evidence in item.warmup_readiness_records.select_related(
+            "strategy_version"
+        ).order_by("-completed_at")[:10]]
     return row
 
 
@@ -243,7 +278,7 @@ def action(request, instance_id, action_name):
             operation.refresh_from_db()
             row=_instance(_get(item.pk),True)
             row["action_id"]=operation.pk
-            row["activation_status"]=operation.status
+            row["activation_operation_status"]=operation.status
             return response(row,status=202 if operation.status=="PROCESSING" else 200)
         if action_name=="pause":
             item=pause_instance(item)

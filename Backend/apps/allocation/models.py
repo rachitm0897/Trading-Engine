@@ -212,6 +212,8 @@ class PortfolioTargetCoordination(models.Model):
     status = models.CharField(max_length=16, choices=STATUSES, default="IDLE")
     requested_at = models.DateTimeField(null=True, blank=True)
     debounce_until = models.DateTimeField(null=True, blank=True)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    attempt_count = models.PositiveIntegerField(default=0)
     logical_event_time = models.DateTimeField(null=True, blank=True)
     active_rebalance = models.ForeignKey(
         RebalanceRun,

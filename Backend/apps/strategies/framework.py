@@ -15,7 +15,7 @@ from apps.oms.models import Order
 from .models import (StrategyAllocation, StrategyAttributedPosition, StrategyDefinition, StrategyInputBinding,
     StrategyInputRequirement, StrategyInstance, StrategyRun, StrategySignal, StrategyTarget, StrategyVersion)
 from .plugins import get_plugin
-from .plugins.base import EvaluationContext
+from .plugins.base import EvaluationContext, StreamInput
 
 
 AUTOMATIC_EXECUTION_STREAMING_DISABLED = "AUTOMATIC_EXECUTION_STREAMING_DISABLED"
@@ -110,6 +110,11 @@ def update_instance(instance, changes):
         instance.warmup_progress=0
         instance.warmup_started_at=timezone.now() if instance.enabled else None
         instance.warmup_last_progress_at=instance.warmup_started_at
+        instance.subscription_ready_at=None
+        instance.warmup_completed_at=None
+        instance.ready_waiting_since=None
+        instance.first_evaluation_completed_at=None
+        instance.execution_active_at=None
     if "instrument" in changes and not hasattr(instance.instrument,"broker_contract"):
         instance.enabled=False;instance.state="BLOCKED";instance.block_reason="Instrument does not have a qualified IBKR contract"
     instance.clean();instance.save()
@@ -151,6 +156,19 @@ def register_inputs(instance, version=None):
     version=version or current_version(instance);plugin=get_plugin(instance.definition)
     requirements=[]
     declared_inputs=list(plugin.required_stream_inputs(instance.parameters))
+    execution_adv_window=int(getattr(settings,"EXECUTION_AVERAGE_VOLUME_WINDOW",20))
+    if getattr(settings,"EXECUTION_REGISTER_ADV_INPUT",True) and not any(
+        item.input_type=="INDICATOR"
+        and item.name=="average_volume"
+        and int((item.parameters or {}).get("window",0))==execution_adv_window
+        for item in declared_inputs
+    ):
+        declared_inputs.append(StreamInput(
+            "INDICATOR",
+            "average_volume",
+            {"window":execution_adv_window},
+            warmup_bars=execution_adv_window,
+        ))
     for declared in declared_inputs:
         parameters=dict(declared.parameters or {})
         role=declared.role or parameters.get("role","")
@@ -205,6 +223,16 @@ def _validate_activation(instance):
     require_live_trading_allowed(mode)
     if not settings.KAFKA_ENABLED:
         raise StrategyActivationError(AUTOMATIC_EXECUTION_STREAMING_DISABLED)
+    preflight_enabled=getattr(settings,"EXECUTION_ACTIVATION_PREFLIGHT_ENABLED",True)
+    if preflight_enabled:
+        from apps.execution.readiness import collect_execution_readiness
+        readiness=collect_execution_readiness()
+        if not readiness["ready"]:
+            codes=",".join(sorted({item["code"] for item in readiness["blockers"]}))
+            raise StrategyActivationError(
+                f"Execution readiness preflight failed: {codes}",
+                retryable=True,
+            )
     contract=getattr(instance.instrument,"broker_contract",None)
     if not contract or not contract.conid:
         raise StrategyActivationError("Instrument does not have a qualified IBKR contract")
@@ -215,6 +243,31 @@ def _validate_activation(instance):
     if (session.deleted_at or session.status!=BrokerGatewaySession.Status.CONNECTED
             or not session.commands_enabled or not (session.last_gateway_state or {}).get("connected")):
         raise StrategyActivationError("Portfolio broker Gateway session is not connected and command-ready",retryable=True)
+    checked_at=session.last_checked_at
+    if preflight_enabled and (
+        checked_at is None
+        or (timezone.now()-checked_at).total_seconds()
+        > int(getattr(settings,"GATEWAY_CONNECTIVITY_STALE_SECONDS",30))
+    ):
+        raise StrategyActivationError(
+            "Portfolio broker Gateway connectivity proof is stale",
+            retryable=True,
+        )
+    if not (session.last_gateway_state or {}).get("reconciled") or not instance.portfolio.account.is_reconciled:
+        raise StrategyActivationError(
+            "Portfolio account and broker Gateway session are not reconciliation-ready",
+            retryable=True,
+        )
+    from apps.reconciliation.models import ReconciliationBreak
+    if ReconciliationBreak.objects.filter(
+        run__broker_account=instance.portfolio.account,
+        material=True,
+        resolved=False,
+    ).exists():
+        raise StrategyActivationError(
+            "Portfolio account has unresolved material reconciliation breaks",
+            retryable=True,
+        )
     if not session.session_accounts.filter(
             broker_account_id=instance.portfolio.account_id,available=True).exists():
         raise StrategyActivationError("Portfolio account is not available through its broker Gateway session")
@@ -280,8 +333,10 @@ def activate_instance(instance_id, *, gateway=None, action_id=None, construction
         instance=_activation_queryset().get(pk=instance_id)
         _validate_activation(instance)
         with transaction.atomic():
-            instance=StrategyInstance.objects.select_for_update().select_related(
-                "definition","instrument","portfolio__gateway_session").get(pk=instance_id)
+            # PostgreSQL cannot lock a row through the nullable outer join used
+            # by portfolio__gateway_session. Lock only the strategy row and
+            # resolve related objects normally while the transaction is open.
+            instance=StrategyInstance.objects.select_for_update().get(pk=instance_id)
             now=timezone.now()
             first_activation=not instance.enabled
             instance.enabled=True
@@ -292,9 +347,17 @@ def activate_instance(instance_id, *, gateway=None, action_id=None, construction
             instance.warmup_started_at=instance.warmup_started_at or now
             instance.warmup_last_progress_at=instance.warmup_last_progress_at or now
             if first_activation:instance.warmup_progress=0
+            if first_activation:
+                instance.subscription_ready_at=None
+                instance.warmup_completed_at=None
+                instance.ready_waiting_since=None
+                instance.first_evaluation_completed_at=None
+                instance.execution_active_at=None
             instance.kill_switch=False
             instance.save(update_fields=["enabled","kill_switch","state","block_reason","effective_from",
-                "effective_to","warmup_started_at","warmup_last_progress_at","warmup_progress","updated_at"])
+                "effective_to","warmup_started_at","warmup_last_progress_at","warmup_progress",
+                "subscription_ready_at","warmup_completed_at","ready_waiting_since",
+                "first_evaluation_completed_at","execution_active_at","updated_at"])
             version=current_version(instance)
             requirements=register_inputs(instance,version)
             declared=list(get_plugin(instance.definition).required_stream_inputs(instance.parameters))
@@ -407,7 +470,14 @@ def evaluate_instance(instance, *, bar, indicators, previous_indicators=None, ev
                     instrument=instance.instrument,signal_time=when,source_event_id=event_id,
                     execution_mode=instance.execution_mode,**target_data,rationale=target_data["reason"])
             instance.state=decision.next_state;instance.state_data=decision.state_data
-            instance.save(update_fields=["state","state_data","updated_at"])
+            completed_at=timezone.now()
+            instance.first_evaluation_completed_at=instance.first_evaluation_completed_at or completed_at
+            if target_data:
+                instance.execution_active_at=instance.execution_active_at or completed_at
+            instance.save(update_fields=[
+                "state","state_data","first_evaluation_completed_at",
+                "execution_active_at","updated_at",
+            ])
             run.status="COMPLETED";run.completed_at=timezone.now();run.save(update_fields=["status","completed_at"])
             OutboxEvent.objects.create(topic="strategy.targets.v1",event_type="strategy.evaluated",aggregate_type="strategy_instance",
                 aggregate_id=str(instance.pk),partition_key=str(instance.instrument_id),payload={"strategy_run_id":run.pk,
@@ -416,6 +486,10 @@ def evaluate_instance(instance, *, bar, indicators, previous_indicators=None, ev
                 idempotency_key=f"strategy-run:{run.pk}:completed")
             from apps.rebalancing.coordinator import mark_portfolio_for_target_coordination
             mark_portfolio_for_target_coordination(instance.portfolio_id, logical_event_time=when)
+            construction_run_id=instance.target_configuration.get("construction_run_id")
+            if construction_run_id:
+                from apps.portfolio_construction.services import record_strategy_activation_result
+                record_strategy_activation_result(construction_run_id,instance.pk)
         return run
     except (OperationalError, InterfaceError, ConnectionError, TimeoutError):
         raise

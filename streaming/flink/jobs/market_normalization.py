@@ -197,7 +197,7 @@ class Deduplicate(KeyedProcessFunction):
 
 def main():
     env = environment("market-normalization-v2")
-    raw = source(env, "market.raw.v1", "market-normalization-v1").key_by(
+    raw = source(env, "market.raw.v1", "market-normalization-v2").key_by(
         lambda value: str(payload_of(json.loads(value)).get("conid"))
     )
     registry = source(

@@ -7,6 +7,7 @@ import pytest
 import responses
 from django.utils import timezone
 
+from apps.accounts.models import BrokerAccount
 from apps.audit.models import OutboxEvent
 from apps.broker_gateway.sync import process_snapshot
 from apps.instruments.models import BrokerContract, Instrument, InstrumentProviderMapping
@@ -20,6 +21,10 @@ from apps.market_data.providers.base import ProviderCandle, ProviderError, Provi
 from apps.market_data.providers.finnhub import FinnhubClient, FinnhubError
 from apps.market_data.realtime import FinnhubRealtimeWorker, FinnhubWebSocketTransport, reconnect_delay
 from apps.market_streams.models import InstrumentMarketState, MarketDataProviderTransition, MarketDataSubscription
+from apps.portfolios.models import TradingPortfolio
+from apps.strategies.framework import create_instance
+from apps.strategies.models import StrategyWarmupReadiness
+from tests.managed_gateway import bind_gateway_mode
 
 
 pytestmark = pytest.mark.django_db
@@ -290,6 +295,82 @@ def test_finnhub_failure_marks_both_providers_unusable(settings):
     error = ProviderError("down", code=ProviderErrorCode.FINNHUB_UNAVAILABLE, provider="FINNHUB")
     result = failover_subscription(item.pk, ProviderErrorCode.IBKR_DISCONNECTED, client=ProviderStub(error=error))
     assert result.active_provider == "NONE" and result.fallback_state == "FAILED" and result.state == "ERROR"
+
+
+def test_provider_recovery_restores_audited_active_strategy_state(settings):
+    enable_fallback(settings)
+    instrument, contract = canonical()
+    item = subscription(instrument, contract.conid)
+    account = BrokerAccount.objects.create(account_id="DU-RECOVERY")
+    portfolio = TradingPortfolio.objects.create(name="Provider recovery", account=account)
+    bind_gateway_mode(portfolio)
+    item.gateway_session = portfolio.gateway_session
+    item.save(update_fields=["gateway_session", "updated_at"])
+    instance, _ = create_instance(
+        name="Audited active recovery",
+        definition_key="FIXED_WEIGHT_REBALANCE",
+        portfolio=portfolio,
+        instrument_id=instrument.pk,
+        timeframe="1m",
+        parameters={"direction": "LONG"},
+        target_configuration={"target_weight": "0.01"},
+        qualify=False,
+    )
+    version = instance.versions.get(version=instance.version)
+    now = timezone.now()
+    instance.enabled = True
+    instance.state = "LONG"
+    instance.warmup_completed_at = now
+    instance.first_evaluation_completed_at = now
+    instance.execution_active_at = now
+    instance.save()
+    StrategyWarmupReadiness.objects.create(
+        strategy_instance=instance,
+        strategy_version=version,
+        provider="IBKR",
+        provider_generation=str(item.provider_generation),
+        requirement_hashes=[],
+        requirement_snapshot_hash="r" * 64,
+        bar_ids=["warmup-bar"],
+        bar_timestamps=[],
+        evidence_hash="e" * 64,
+        is_current=True,
+    )
+
+    error = ProviderError(
+        "down",
+        code=ProviderErrorCode.FINNHUB_UNAVAILABLE,
+        provider="FINNHUB",
+    )
+    result = failover_subscription(
+        item.pk,
+        ProviderErrorCode.IBKR_DISCONNECTED,
+        client=ProviderStub(error=error),
+    )
+    instance.refresh_from_db()
+    assert result.state == "ERROR"
+    assert instance.state == "BLOCKED"
+    assert instance.state_data["market_data_resume_state"] == "LONG"
+
+    recovered_generation = uuid.uuid4()
+    MarketDataSubscription.objects.filter(pk=item.pk).update(
+        active_provider="IBKR",
+        provider_generation=recovered_generation,
+        fallback_state="PRIMARY",
+        state="ACTIVE",
+    )
+    item.refresh_from_db()
+    start = timezone.now().replace(microsecond=0, second=0)
+    recovered_payload=bar_payload(item,recovered_generation,start)
+    recovered_payload["subscription_key"]=(
+        f"{item.gateway_session_id}:{item.instrument_id}:{item.timeframe}"
+    )
+    accepted = publish_provider_event(recovered_payload)
+    instance.refresh_from_db()
+    assert accepted["accepted"] is True
+    assert instance.state == "LONG"
+    assert instance.block_reason == ""
+    assert "market_data_resume_state" not in instance.state_data
 
 
 def test_trade_aggregation_deduplicates_orders_and_rejects_late_ticks():

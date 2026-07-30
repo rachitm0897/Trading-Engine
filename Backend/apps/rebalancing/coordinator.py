@@ -85,8 +85,14 @@ def _lifecycle(instance):
         return "PAUSED"
     if instance.state == "ERROR":
         return "ERROR"
-    if instance.state == "WARMING_UP":
-        return "WARMING_UP"
+    if instance.state in {
+        "ACTIVATING",
+        "SUBSCRIBING",
+        "WARMING_UP",
+        "READY_WAITING_FOR_LIVE_BAR",
+        "BLOCKED",
+    }:
+        return instance.state
     if instance.state == "DISABLED":
         return "DISABLED"
     if not instance.enabled:
@@ -102,31 +108,49 @@ def _lifecycle_policy(instance, lifecycle):
         return str(configuration.get("killed_behavior", "HOLD")).upper()
     if lifecycle == "ERROR":
         return str(configuration.get("error_behavior", "HOLD")).upper()
-    if lifecycle in {"PAUSED", "DISABLED", "WARMING_UP"}:
+    if lifecycle in {
+        "PAUSED",
+        "DISABLED",
+        "ACTIVATING",
+        "SUBSCRIBING",
+        "WARMING_UP",
+        "READY_WAITING_FOR_LIVE_BAR",
+        "BLOCKED",
+    }:
         return str(configuration.get(f"{lifecycle.lower()}_behavior", "HOLD")).upper()
     return "TARGET"
 
 
 def _prices(portfolio, instrument_ids, supplied):
     prices = {
-        int(key): _decimal(value)
-        for key, value in (supplied or {}).items()
-        if str(key).isdigit() and _decimal(value) > 0
+        int(key):_decimal(value)
+        for key,value in (supplied or {}).items()
+        if not str(key).startswith("lot:")
     }
     states = {
         state.instrument_id: state
         for state in InstrumentMarketState.objects.filter(instrument_id__in=instrument_ids)
     }
     for instrument_id, state in states.items():
-        if state.is_usable() and state.reference_price:
+        if state.is_execution_usable() and state.reference_price:
             prices[instrument_id] = _decimal(state.reference_price)
-    for position in PortfolioPosition.objects.filter(
-        portfolio=portfolio, instrument_id__in=instrument_ids
-    ):
-        if instrument_id := position.instrument_id:
-            if instrument_id not in prices and _decimal(position.market_price) > 0:
-                prices[instrument_id] = _decimal(position.market_price)
     return prices
+
+
+def _target_price_instruments(allocations, latest):
+    instrument_ids = set()
+    for allocation in allocations:
+        instance = allocation.strategy_instance
+        target = latest.get(instance.pk)
+        lifecycle = _lifecycle(instance)
+        behavior = _lifecycle_policy(instance, lifecycle)
+        if lifecycle == "WARMING_UP" and target is not None:
+            behavior = "TARGET"
+        if target is not None and (
+            behavior == "TARGET" or lifecycle == "FLATTEN_REQUESTED"
+        ):
+            instrument_ids.add(target.instrument_id)
+    return instrument_ids
 
 
 def _order_policy_snapshot(allocations, contributions_by_instrument):
@@ -196,7 +220,7 @@ def _strategy_limit_error(instance, target, capital, price):
 @transaction.atomic
 def build_portfolio_target_snapshot(portfolio, *, logical_time=None, prices=None):
     portfolio = (
-        TradingPortfolio.objects.select_for_update()
+        TradingPortfolio.objects.select_for_update(of=("self",))
         .select_related("account", "gateway_session")
         .get(pk=portfolio.pk)
     )
@@ -239,7 +263,7 @@ def build_portfolio_target_snapshot(portfolio, *, logical_time=None, prices=None
     instrument_ids = {
         *[position.instrument_id for position in positions],
         *[row.instrument_id for row in attributed],
-        *[target.instrument_id for target in latest.values()],
+        *_target_price_instruments(allocations, latest),
         *[order.intent.instrument_id for order in active_orders],
         *[intent.instrument_id for intent in reserved_intents],
     }
@@ -288,15 +312,11 @@ def build_portfolio_target_snapshot(portfolio, *, logical_time=None, prices=None
             behavior = "TARGET"
         version = instance.versions.filter(version=instance.version).first()
         strategy_versions[str(instance.pk)] = version.pk if version else None
+        if behavior == "TARGET" and target is None:
+            # A strategy cannot trade until its first valid live evaluation
+            # creates a target. Until then it contributes an explicit HOLD.
+            behavior = "HOLD"
         if behavior == "TARGET":
-            if target is None:
-                rejected.append(
-                    {
-                        "strategy_instance_id": instance.pk,
-                        "reason": "MISSING_ACTIVE_TARGET",
-                    }
-                )
-                continue
             event_time = _target_time(target)
             age = max((now - event_time).total_seconds(), 0)
             target_ages.append(
@@ -659,6 +679,8 @@ def mark_portfolio_for_target_coordination(portfolio_id, *, logical_event_time=N
     else:
         coordination.status = "PENDING"
         coordination.debounce_until = now + timedelta(seconds=debounce_seconds)
+        coordination.next_attempt_at = coordination.debounce_until
+        coordination.attempt_count = 0
     coordination.last_error = ""
     coordination.save()
     return coordination
@@ -667,7 +689,7 @@ def mark_portfolio_for_target_coordination(portfolio_id, *, logical_event_time=N
 @transaction.atomic
 def coordinate_portfolio(portfolio_id):
     portfolio = (
-        TradingPortfolio.objects.select_for_update()
+        TradingPortfolio.objects.select_for_update(of=("self",))
         .select_related("account", "gateway_session")
         .get(pk=portfolio_id)
     )
@@ -732,6 +754,7 @@ def process_target_coordination(limit=None):
             PortfolioTargetCoordination.objects.select_for_update(skip_locked=True)
             .filter(needs_coordination=True)
             .filter(Q(debounce_until__isnull=True) | Q(debounce_until__lte=now))
+            .filter(Q(next_attempt_at__isnull=True) | Q(next_attempt_at__lte=now))
             .exclude(status="ACTIVE")
             .order_by("requested_at", "pk")[:limit]
         )
@@ -745,15 +768,32 @@ def process_target_coordination(limit=None):
             result = coordinate_portfolio(portfolio_id)
             results.append({"portfolio_id": portfolio_id, "result_id": result.pk})
         except Exception as exc:
-            PortfolioTargetCoordination.objects.filter(portfolio_id=portfolio_id).update(
-                status="ERROR",
-                needs_coordination=True,
-                last_error=str(exc)[:1000],
-            )
+            with transaction.atomic():
+                coordination=PortfolioTargetCoordination.objects.select_for_update().get(
+                    portfolio_id=portfolio_id
+                )
+                coordination.attempt_count+=1
+                base=int(getattr(
+                    settings,"PORTFOLIO_TARGET_COORDINATION_RETRY_BASE_SECONDS",5
+                ))
+                maximum=int(getattr(
+                    settings,"PORTFOLIO_TARGET_COORDINATION_RETRY_MAX_SECONDS",300
+                ))
+                delay=min(maximum,base*(2**max(0,coordination.attempt_count-1)))
+                coordination.status="PENDING"
+                coordination.needs_coordination=True
+                coordination.next_attempt_at=timezone.now()+timedelta(seconds=delay)
+                coordination.last_error=str(exc)[:1000]
+                coordination.save(update_fields=[
+                    "status","needs_coordination","attempt_count","next_attempt_at",
+                    "last_error","updated_at",
+                ])
             results.append(
                 {
                     "portfolio_id": portfolio_id,
                     "error": str(exc)[:1000],
+                    "retry_queued":True,
+                    "retry_in_seconds":delay,
                 }
             )
     return results

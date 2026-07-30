@@ -146,7 +146,8 @@ class IBAsyncBrokerAdapter(BrokerAdapter):
             "window_end":end.isoformat(),"open":str(field("open","open_")),"high":str(field("high","high")),
             "low":str(field("low","low")),"close":str(field("close","close")),
             "volume":str(max(0,field("volume","volume"))),"is_final":True,"source":source,
-            "provider":"IBKR","provider_generation":str(payload.get("provider_generation") or "")}
+            "provider":"IBKR","provider_generation":str(payload.get("provider_generation") or ""),
+            "processing_mode":"WARMUP" if source=="ibkr_historical" else "LIVE"}
     def subscribe_market_data(self,payload):
         key=payload["subscription_key"];runtime_key=payload.get("gateway_subscription_key") or key
         if runtime_key in self.market_subscriptions:return {"subscription_key":key,"gateway_subscription_key":runtime_key,

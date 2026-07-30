@@ -458,9 +458,21 @@ def process_snapshot(event, gateway_session=None):
     elif event_type=="snapshot.completed_orders": sync_orders(rows,"completed",gateway_session)
     elif event_type=="snapshot.executions": sync_executions(rows,gateway_session)
 
-def sync_events(client, gateway_session=None):
+def sync_events(client, gateway_session=None, connection_generation=None):
     gateway_session=gateway_session or getattr(client,"gateway_session",None)
     cursor,_=BrokerSyncCursor.objects.get_or_create(session=gateway_session,name="gateway-events")
+    generation=str(connection_generation or "").strip()
+    if generation and cursor.connection_generation!=generation:
+        with transaction.atomic():
+            cursor=BrokerSyncCursor.objects.select_for_update().get(pk=cursor.pk)
+            if cursor.connection_generation!=generation:
+                cursor.connection_generation=generation
+                cursor.last_sequence=0
+                cursor.last_synced_at=None
+                cursor.last_error=""
+                cursor.save(update_fields=[
+                    "connection_generation","last_sequence","last_synced_at","last_error",
+                ])
     events=client.events(cursor.last_sequence) or []
     for event in events:
         if event["id"] <= cursor.last_sequence:

@@ -70,21 +70,26 @@ def aggregate_bars(events, interval="1m", seconds=60, prior_versions=None, final
         lows=[Decimal(str(x.get("low",x["price"]))) for x in ticks]
         closes=[Decimal(str(x.get("close",x["price"]))) for x in ticks]
         bar_id = market_bar_id(instrument_id,interval,start.isoformat())
+        causal_tick=ticks[-1]
         result.append({"bar_id": bar_id, "instrument_id": instrument_id, "interval": interval,
             "window_start": start.isoformat(), "window_end": datetime.fromtimestamp(start.timestamp()+seconds, tz=timezone.utc).isoformat(),
             "open": str(opens[0]), "high": str(max(highs)), "low": str(min(lows)), "close": str(closes[-1]),
             "volume": str(sum(Decimal(str(x.get("volume", 0))) for x in ticks)),
             "source_event_count": len(ticks), "version": prior_versions.get(bar_id, 0) + 1,
+            "provider":causal_tick.get("provider",""),
+            "provider_generation":causal_tick.get("provider_generation") or "",
+            "source":causal_tick.get("source",""),
             "is_final": final, "processing_mode":mode})
     return result
 
 
 def bar_content_fingerprint(bar):
     return stable_hash({
-        key: bar[key]
+        key: bar.get(key, "")
         for key in (
             "bar_id", "instrument_id", "interval", "window_start", "window_end",
             "open", "high", "low", "close", "volume", "source_event_count",
+            "provider", "provider_generation", "source",
         )
     })
 

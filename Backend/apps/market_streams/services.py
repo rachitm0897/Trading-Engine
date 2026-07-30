@@ -1,6 +1,9 @@
+import hashlib
+import json
 from decimal import Decimal
+from django.conf import settings
 from django.db import transaction
-from django.db.models import F, Max, Prefetch
+from django.db.models import F, Max, Prefetch, Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from apps.event_bus.identity import processing_mode
@@ -40,6 +43,9 @@ def persist_bar(envelope):
         "open": Decimal(payload["open"]), "high": Decimal(payload["high"]), "low": Decimal(payload["low"]),
         "close": Decimal(payload["close"]), "volume": Decimal(payload.get("volume", "0")),
         "is_final": payload.get("is_final", False), "source_event_count": payload.get("source_event_count", 0),
+        "provider":payload.get("provider",""),
+        "provider_generation":str(payload.get("provider_generation") or ""),
+        "source":payload.get("source",""),
         "processing_mode":mode,"produced_at": _dt(envelope["produced_at"]),})
     promoted_to_live=False
     if not created:
@@ -56,6 +62,9 @@ def persist_bar(envelope):
             "volume":Decimal(payload.get("volume","0")),
             "is_final":payload.get("is_final",False),
             "source_event_count":payload.get("source_event_count",0),
+            "provider":payload.get("provider",""),
+            "provider_generation":str(payload.get("provider_generation") or ""),
+            "source":payload.get("source",""),
         })
         if mode=="LIVE" and bar.processing_mode!="LIVE":
             bar.processing_mode="LIVE";bar.save(update_fields=["processing_mode"])
@@ -116,6 +125,7 @@ def persist_indicator(envelope):
 
 
 WARMUP_BLOCK_PREFIX="Warm-up timeout:"
+LIVE_BAR_BLOCK_PREFIX="Live-bar timeout:"
 
 
 def _current_bindings(instance):
@@ -132,21 +142,107 @@ def current_warmup_required(instance):
         required=Max("requirement__warmup_bars"))["required"] or 0
 
 
-def _warmup_inputs_ready(instance,bindings):
+def _warmup_inputs_ready(instance,bindings,bars,required):
     indicator_hashes=[
         binding.requirement.identity_hash
         for binding in bindings
         if binding.requirement.input_type=="INDICATOR"
     ]
-    if not indicator_hashes:return True
-    available=set(IndicatorValue.objects.filter(
+    if len(bars)<required:
+        return False,[]
+    if not indicator_hashes:
+        return True,bars[-required:] if required else []
+    available_by_bar={}
+    rows=IndicatorValue.objects.filter(
         instrument=instance.instrument,
         timeframe=instance.timeframe,
         requirement_identity_hash__in=indicator_hashes,
         is_final=True,
-        processing_mode__in=["LIVE","WARMUP"],
-    ).values_list("requirement_identity_hash",flat=True))
-    return set(indicator_hashes).issubset(available)
+        processing_mode="WARMUP",
+        source_bar_id__in=[bar.bar_id for bar in bars],
+        value__isnull=False,
+    ).values_list("source_bar_id","source_bar_version","requirement_identity_hash")
+    for bar_id,version,identity_hash in rows:
+        available_by_bar.setdefault((bar_id,version),set()).add(identity_hash)
+    expected=set(indicator_hashes)
+    for index in range(len(bars)-1,required-2,-1):
+        bar=bars[index]
+        if expected.issubset(available_by_bar.get((bar.bar_id,bar.version),set())):
+            return True,bars[index-required+1:index+1] if required else []
+    return False,[]
+
+
+def _warmup_bars(instance, subscription, required):
+    if required <= 0:
+        return []
+    limit=required+int(getattr(settings,"WARMUP_SAFETY_BARS",5))
+    query=MarketBar.objects.filter(
+        instrument=instance.instrument,
+        interval=instance.timeframe,
+        is_final=True,
+        processing_mode="WARMUP",
+    )
+    generation=str(subscription.provider_generation) if subscription else ""
+    if generation:
+        query=query.filter(Q(provider_generation=generation) | Q(provider_generation=""))
+    selected={}
+    for bar in query.order_by("-window_end","-version","-pk"):
+        selected.setdefault(bar.bar_id,bar)
+        if len(selected)>=limit:
+            break
+    return sorted(
+        selected.values(),
+        key=lambda item:(item.window_end,item.bar_id,item.version),
+    )
+
+
+def _record_warmup_readiness(instance, version, subscription, bindings, bars):
+    from apps.strategies.models import StrategyWarmupReadiness
+    requirement_hashes=sorted(binding.requirement.identity_hash for binding in bindings)
+    bar_ids=[bar.bar_id for bar in bars]
+    bar_timestamps=[{
+        "bar_id":bar.bar_id,
+        "version":bar.version,
+        "window_start":bar.window_start.isoformat(),
+        "window_end":bar.window_end.isoformat(),
+        "processing_mode":bar.processing_mode,
+        "provider":bar.provider,
+        "provider_generation":bar.provider_generation,
+        "source":bar.source,
+    } for bar in bars]
+    requirement_snapshot_hash=hashlib.sha256(json.dumps(
+        requirement_hashes,separators=(",",":"),sort_keys=True
+    ).encode()).hexdigest()
+    evidence={
+        "strategy_instance_id":instance.pk,
+        "strategy_version_id":version.pk,
+        "strategy_version":version.version,
+        "provider":subscription.active_provider if subscription else "",
+        "provider_generation":str(subscription.provider_generation) if subscription else "",
+        "requirement_snapshot_hash":requirement_snapshot_hash,
+        "bar_ids":bar_ids,
+        "bar_timestamps":bar_timestamps,
+    }
+    evidence_hash=hashlib.sha256(json.dumps(
+        evidence,separators=(",",":"),sort_keys=True
+    ).encode()).hexdigest()
+    StrategyWarmupReadiness.objects.filter(
+        strategy_instance=instance,is_current=True
+    ).exclude(evidence_hash=evidence_hash).update(is_current=False)
+    return StrategyWarmupReadiness.objects.get_or_create(
+        evidence_hash=evidence_hash,
+        defaults={
+            "strategy_instance":instance,
+            "strategy_version":version,
+            "provider":subscription.active_provider if subscription else "",
+            "provider_generation":str(subscription.provider_generation) if subscription else "",
+            "requirement_hashes":requirement_hashes,
+            "requirement_snapshot_hash":requirement_snapshot_hash,
+            "bar_ids":bar_ids,
+            "bar_timestamps":bar_timestamps,
+            "is_current":True,
+        },
+    )[0]
 
 
 def refresh_strategy_warmup_state(instance):
@@ -156,22 +252,19 @@ def refresh_strategy_warmup_state(instance):
     if not instance.enabled:return instance
     bindings=list(_current_bindings(instance))
     required=max((binding.requirement.warmup_bars for binding in bindings),default=0)
-    bar_count=MarketBar.objects.filter(
-        instrument=instance.instrument,interval=instance.timeframe,is_final=True,
-        processing_mode__in=["LIVE","WARMUP"],
-    ).values("bar_id").distinct().count()
-    progress=min(bar_count,required)
     subscription=instance.instrument.market_subscriptions.filter(
         gateway_session=instance.portfolio.gateway_session,
         timeframe=instance.timeframe,
     ).first()
+    bars=_warmup_bars(instance,subscription,required)
+    progress=min(len(bars),required)
     subscription_ready=bool(subscription and subscription.state in {"ACTIVE","DEGRADED"})
-    inputs_ready=_warmup_inputs_ready(instance,bindings)
+    inputs_ready,readiness_bars=_warmup_inputs_ready(instance,bindings,bars,required)
     next_state=instance.state
     next_reason=instance.block_reason
     recoverable_block=(
         instance.state=="BLOCKED"
-        and instance.block_reason.startswith(WARMUP_BLOCK_PREFIX)
+        and instance.block_reason.startswith((WARMUP_BLOCK_PREFIX,LIVE_BAR_BLOCK_PREFIX))
     )
     if subscription_ready and progress>=required and inputs_ready:
         if instance.state in {"ACTIVATING","SUBSCRIBING","WARMING_UP"} or recoverable_block:
@@ -188,14 +281,34 @@ def refresh_strategy_warmup_state(instance):
     )
     if changed:
         now=timezone.now()
+        if subscription_ready and instance.subscription_ready_at is None:
+            instance.subscription_ready_at=now
         if progress!=instance.warmup_progress:
             instance.warmup_last_progress_at=now
+        if next_state=="READY_WAITING_FOR_LIVE_BAR":
+            instance.warmup_completed_at=instance.warmup_completed_at or now
+            instance.ready_waiting_since=instance.ready_waiting_since or now
         instance.warmup_progress=progress
         instance.state=next_state
         instance.block_reason=next_reason
         instance.save(update_fields=[
+            "subscription_ready_at","warmup_completed_at","ready_waiting_since",
             "warmup_progress","warmup_last_progress_at","state","block_reason","updated_at",
         ])
+        if next_state=="READY_WAITING_FOR_LIVE_BAR":
+            version=instance.versions.get(version=instance.version)
+            _record_warmup_readiness(
+                instance,version,subscription,bindings,readiness_bars,
+            )
+            buffered_live=MarketBar.objects.filter(
+                instrument=instance.instrument,
+                interval=instance.timeframe,
+                is_final=True,
+                processing_mode="LIVE",
+                window_end__gte=instance.warmup_started_at,
+            ).order_by("-window_end","-version","-pk").first()
+            if buffered_live:
+                coordinate_bar_readiness(buffered_live)
         construction_run_id=instance.target_configuration.get("construction_run_id")
         if construction_run_id:
             from apps.portfolio_construction.services import record_strategy_activation_result

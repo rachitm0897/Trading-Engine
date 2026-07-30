@@ -95,6 +95,23 @@ def healthy_runtime(settings):
     settings.TARGET_COORDINATION_BACKLOG_THRESHOLD = 100
     settings.PENDING_INTENT_MAX_AGE_SECONDS = 60
     settings.BROKER_COMMAND_MAX_AGE_SECONDS = 60
+    settings.KAFKA_HEALTH_STALE_SECONDS = 60
+    settings.OUTBOX_PUBLISHER_HEARTBEAT_STALE_SECONDS = 30
+    StreamHealthMetric.objects.create(
+        component="kafka",
+        metric="connectivity",
+        status="HEALTHY",
+        value={
+            "enabled": True,
+            "topics": list(settings.EXECUTION_REQUIRED_KAFKA_TOPICS),
+        },
+    )
+    StreamHealthMetric.objects.create(
+        component="outbox-publisher",
+        metric="heartbeat",
+        status="HEALTHY",
+        value={"published": 0, "failed": 0},
+    )
     StreamHealthMetric.objects.create(
         component="market-raw-producer",
         metric="heartbeat",

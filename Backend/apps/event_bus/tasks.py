@@ -8,7 +8,26 @@ from .services import publish_batch
 
 @shared_task
 def publish_outbox_events():
-    return publish_batch()
+    try:
+        published=publish_batch()
+        from apps.audit.models import OutboxEvent
+        failed=OutboxEvent.objects.filter(status="FAILED").count()
+        StreamHealthMetric.objects.update_or_create(
+            component="outbox-publisher",
+            metric="heartbeat",
+            defaults={
+                "status":"HEALTHY" if failed==0 else "DEGRADED",
+                "value":{"published":published,"failed":failed},
+            },
+        )
+        return published
+    except Exception as exc:
+        StreamHealthMetric.objects.update_or_create(
+            component="outbox-publisher",
+            metric="heartbeat",
+            defaults={"status":"DEGRADED","value":{"error":str(exc)[:255]}},
+        )
+        raise
 
 
 @shared_task
@@ -40,7 +59,15 @@ def check_stream_health():
         try:
             from confluent_kafka.admin import AdminClient
             metadata = AdminClient({"bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS}).list_topics(timeout=5)
-            status, value = "HEALTHY", {"enabled": True, "topics": len(metadata.topics)}
+            topic_names=sorted(
+                name for name,value in metadata.topics.items()
+                if not getattr(value,"error",None)
+            )
+            status, value = "HEALTHY", {
+                "enabled": True,
+                "topic_count":len(topic_names),
+                "topics":topic_names,
+            }
         except Exception as exc:
             status, value = "DEGRADED", {"enabled": True, "error": str(exc)[:255]}
     metric, _ = StreamHealthMetric.objects.update_or_create(component="kafka", metric="connectivity",
@@ -52,7 +79,7 @@ def check_stream_health():
             from confluent_kafka import Consumer, TopicPartition
             topics=["market.bars.v1","market.indicators.v1","market.quality.v1"]
             consumer=Consumer({"bootstrap.servers":settings.KAFKA_BOOTSTRAP_SERVERS,
-                "group.id":"finflock-backend-market-persistence-v1","enable.auto.commit":False})
+                "group.id":"finflock-backend-market-persistence-v2","enable.auto.commit":False})
             partitions=[]
             topic_partitions={}
             cluster=consumer.list_topics(timeout=5)

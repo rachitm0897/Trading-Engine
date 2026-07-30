@@ -100,12 +100,18 @@ def enqueue_broker_command(order, command_type, payload, idempotency_key):
 def _place_payload(order):
     intent = order.intent
     instrument = intent.instrument
+    contract = getattr(instrument, "broker_contract", None)
     return {
         "internal_id": order.internal_id,
         "account": intent.portfolio.account.account_id,
+        "conid": contract.conid if contract else None,
         "symbol": instrument.symbol,
+        "local_symbol": contract.local_symbol if contract else instrument.symbol,
         "asset_class": instrument.asset_class,
         "exchange": instrument.exchange,
+        "primary_exchange": (
+            contract.primary_exchange if contract else instrument.primary_exchange
+        ),
         "currency": instrument.currency,
         "side": intent.side,
         "quantity": str(order.quantity),

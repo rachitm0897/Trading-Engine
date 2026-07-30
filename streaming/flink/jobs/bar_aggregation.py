@@ -61,6 +61,8 @@ class RegistryBars(KeyedBroadcastProcessFunction):
                 bar={"bar_id":bar_id,"instrument_id":str(tick["instrument_id"]),"interval":requirement["timeframe"],
                     "window_start":tick["window_start"],"window_end":tick["window_end"],"open":tick["open"],"high":tick["high"],
                     "low":tick["low"],"close":tick["close"],"volume":tick.get("volume","0"),"source_event_count":1,
+                    "provider":tick.get("provider",""),"provider_generation":tick.get("provider_generation") or "",
+                    "source":tick.get("source",""),
                     "version":1,"is_final":True,"processing_mode":processing_mode(tick.get("processing_mode"))}
                 key=f"direct:{identity_hash}:{bar['window_start']}:{bar['processing_mode']}"
                 bucket=stored.get(key,{"version":0,"fingerprint":""})

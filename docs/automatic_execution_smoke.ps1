@@ -1,12 +1,21 @@
 param(
     [switch]$SkipInfrastructure,
     [switch]$NoBuild,
-    [int]$TimeoutSeconds = 180
+    [int]$TimeoutSeconds = 180,
+    [string]$ComposeProjectName = ""
 )
 
 $ErrorActionPreference = "Stop"
+if ($ComposeProjectName) {
+    if ($ComposeProjectName -notmatch "^[a-z0-9][a-z0-9_-]+$") {
+        throw "ComposeProjectName must contain only lowercase letters, digits, hyphens, and underscores"
+    }
+    $env:COMPOSE_PROJECT_NAME = $ComposeProjectName
+}
 $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Python = Join-Path $RepositoryRoot ".venv\Scripts\python.exe"
+$BackendPort = if ($env:BACKEND_PORT) { [int]$env:BACKEND_PORT } else { 8000 }
+$BackendBaseUrl = "http://127.0.0.1:$BackendPort"
 $RequiredFlinkJobs = @(
     "market-normalization-v2",
     "bar-aggregation-v2",
@@ -34,22 +43,62 @@ function Invoke-AutomaticExecutionStage {
 }
 
 function Get-FlinkJobs {
-    $raw = docker compose exec -T flink-jobmanager curl -fsS http://127.0.0.1:8081/jobs/overview
-    if ($LASTEXITCODE -ne 0) {
-        throw "Flink jobs endpoint failed"
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $raw = docker compose --profile paper-ibkr exec -T flink-jobmanager `
+            curl -fsS http://127.0.0.1:8081/jobs/overview 2>$null
+        $curlExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($curlExitCode -ne 0) {
+        return @()
     }
     return @((ConvertFrom-Json $raw).jobs)
 }
 
+function Get-ExecutionReadiness {
+    try {
+        $response = Invoke-RestMethod "$BackendBaseUrl/api/v1/execution/readiness/"
+    }
+    catch {
+        if (-not $_.ErrorDetails.Message) {
+            throw
+        }
+        $response = ConvertFrom-Json $_.ErrorDetails.Message
+    }
+    if ($null -eq $response.data.ready -or $null -eq $response.data.signals) {
+        throw "execution readiness response is missing ready/signals"
+    }
+    return $response.data
+}
+
 Push-Location $RepositoryRoot
 try {
+    if (-not $SkipInfrastructure) {
+        if (-not $env:LOCAL_PAPER_GATEWAY_DJANGO_SECRET_KEY) {
+            $env:LOCAL_PAPER_GATEWAY_DJANGO_SECRET_KEY = [guid]::NewGuid().ToString("N")
+        }
+        if (-not $env:LOCAL_PAPER_GATEWAY_SERVICE_TOKEN) {
+            $env:LOCAL_PAPER_GATEWAY_SERVICE_TOKEN = [guid]::NewGuid().ToString("N")
+        }
+        if (-not $env:LOCAL_PAPER_GATEWAY_NOVNC_PASSWORD) {
+            $env:LOCAL_PAPER_GATEWAY_NOVNC_PASSWORD = [guid]::NewGuid().ToString("N")
+        }
+    }
+    elseif (-not $env:LOCAL_PAPER_GATEWAY_SERVICE_TOKEN) {
+        throw "SkipInfrastructure requires LOCAL_PAPER_GATEWAY_SERVICE_TOKEN for the already-running paper Gateway"
+    }
+
     Invoke-AutomaticExecutionStage "compose-config" {
-        docker compose config --quiet
+        docker compose --profile paper-ibkr config --quiet
     }
 
     if (-not $SkipInfrastructure) {
         Invoke-AutomaticExecutionStage "infrastructure-start" {
-            $arguments = @("compose", "up", "-d")
+            $arguments = @("compose", "--profile", "paper-ibkr", "up", "-d")
             if (-not $NoBuild) {
                 $arguments += "--build"
             }
@@ -60,7 +109,8 @@ try {
                 "kafka-init",
                 "flink-jobmanager",
                 "flink-taskmanager",
-                "backend"
+                "backend",
+                "paper-ibkr-gateway"
             )
             docker @arguments
         }
@@ -72,11 +122,12 @@ try {
                 "kafka",
                 "flink-jobmanager",
                 "flink-taskmanager",
-                "backend"
+                "backend",
+                "paper-ibkr-gateway"
             )
             $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
             do {
-                $rows = @(docker compose ps --format json | ConvertFrom-Json)
+                $rows = @(docker compose --profile paper-ibkr ps --format json | ConvertFrom-Json)
                 $missing = @($required | Where-Object { $_ -notin $rows.Service })
                 $bad = @(
                     $rows |
@@ -120,7 +171,7 @@ try {
                 $jobs = @(Get-FlinkJobs | Where-Object { $_.name -in $RequiredFlinkJobs })
                 $missing = @()
                 foreach ($job in $jobs) {
-                    $raw = docker compose exec -T flink-jobmanager curl -fsS "http://127.0.0.1:8081/jobs/$($job.jid)/checkpoints"
+                    $raw = docker compose --profile paper-ibkr exec -T flink-jobmanager curl -fsS "http://127.0.0.1:8081/jobs/$($job.jid)/checkpoints"
                     $summary = ConvertFrom-Json $raw
                     if ([int]$summary.counts.completed -lt 1) {
                         $missing += $job.name
@@ -139,7 +190,7 @@ try {
         Invoke-AutomaticExecutionStage "backend-consumer" {
             $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
             do {
-                $health = Invoke-RestMethod "http://127.0.0.1:8000/api/v1/streaming/health/"
+                $health = Invoke-RestMethod "$BackendBaseUrl/api/v1/streaming/health/"
                 if ($health.data.consumer.status -eq "HEALTHY") {
                     break
                 }
@@ -150,23 +201,26 @@ try {
             }
         }
 
-        Invoke-AutomaticExecutionStage "execution-readiness-report" {
-            try {
-                $response = Invoke-RestMethod "http://127.0.0.1:8000/api/v1/execution/readiness/"
-            }
-            catch {
-                if (-not $_.ErrorDetails.Message) {
-                    throw
+        Invoke-AutomaticExecutionStage "paper-gateway-reconciliation" {
+            docker compose --profile paper-ibkr exec -T backend python manage.py sync_local_paper_gateway --reconcile
+        }
+
+        Invoke-AutomaticExecutionStage "retire-prior-smoke-strategies" {
+            docker compose --profile paper-ibkr exec -T backend python manage.py retire_paper_smoke_strategies
+        }
+
+        Invoke-AutomaticExecutionStage "execution-readiness" {
+            $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+            do {
+                $readiness = Get-ExecutionReadiness
+                if ($readiness.ready) {
+                    break
                 }
-                $response = ConvertFrom-Json $_.ErrorDetails.Message
-            }
-            $readiness = $response.data
-            if ($null -eq $readiness.ready -or $null -eq $readiness.signals) {
-                throw "execution readiness response is missing ready/signals"
-            }
+                Start-Sleep -Seconds 3
+            } while ((Get-Date) -lt $deadline)
             if (-not $readiness.ready) {
                 $codes = @($readiness.blockers | ForEach-Object code)
-                Write-Host "Local execution is intentionally blocked: $($codes -join '; ')"
+                throw "execution readiness is false: $($codes -join '; ')"
             }
         }
     }
@@ -179,24 +233,32 @@ try {
     }
 
     Invoke-AutomaticExecutionStage "paper-pipeline" {
-        $previousDatabaseUrl = $env:DATABASE_URL
-        try {
-            $env:DATABASE_URL = "sqlite:///:memory:"
-            Push-Location (Join-Path $RepositoryRoot "Backend")
-            try {
-                & $Python -m pytest tests\test_automatic_execution_e2e.py -q
-            }
-            finally {
-                Pop-Location
-            }
+        docker compose --profile paper-ibkr exec -T backend mkdir -p /app/tests
+        if ($LASTEXITCODE -ne 0) {
+            throw "could not prepare the backend integration-test directory"
         }
-        finally {
-            if ($null -eq $previousDatabaseUrl) {
-                Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue
+        docker compose --profile paper-ibkr cp `
+            Backend/tests/test_docker_paper_pipeline.py `
+            backend:/app/tests/test_docker_paper_pipeline.py
+        if ($LASTEXITCODE -ne 0) {
+            throw "could not copy the paper-pipeline integration test into the backend container"
+        }
+        docker compose --profile paper-ibkr exec -T -e RUN_DOCKER_PAPER_PIPELINE=1 backend `
+            pytest --ds=config.settings tests/test_docker_paper_pipeline.py -m docker_integration -q
+    }
+
+    Invoke-AutomaticExecutionStage "final-execution-readiness" {
+        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        do {
+            $readiness = Get-ExecutionReadiness
+            if ($readiness.ready) {
+                break
             }
-            else {
-                $env:DATABASE_URL = $previousDatabaseUrl
-            }
+            Start-Sleep -Seconds 3
+        } while ((Get-Date) -lt $deadline)
+        if (-not $readiness.ready) {
+            $codes = @($readiness.blockers | ForEach-Object code)
+            throw "execution readiness is false after the pipeline test: $($codes -join '; ')"
         }
     }
 

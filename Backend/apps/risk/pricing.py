@@ -14,7 +14,7 @@ def trusted_market_price(instrument):
         raise OrderPriceUnavailable(
             "A fresh persisted market price is required for this order"
         ) from exc
-    if not state.is_usable() or state.reference_price is None:
+    if not state.is_execution_usable() or state.reference_price is None:
         raise OrderPriceUnavailable(
             "A fresh persisted market price is required for this order"
         )

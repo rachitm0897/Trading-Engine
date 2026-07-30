@@ -115,6 +115,7 @@ class BrokerSyncCursor(models.Model):
         BrokerGatewaySession, on_delete=models.PROTECT, related_name="sync_cursors", null=True, blank=True
     )
     name = models.CharField(max_length=64, default="gateway-events")
+    connection_generation = models.CharField(max_length=64, blank=True)
     last_sequence = models.BigIntegerField(default=0)
     last_synced_at = models.DateTimeField(null=True, blank=True)
     last_error = models.CharField(max_length=1000, blank=True)

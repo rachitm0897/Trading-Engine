@@ -44,7 +44,7 @@ def _reference_prices(portfolio, prices, strict):
         result.update({key:D(str(value)) for key,value in prices.items() if not str(key).startswith("lot:")})
     for state in InstrumentMarketState.objects.filter(instrument_id__in=set(result) | set(
             PortfolioPosition.objects.filter(portfolio=portfolio).values_list("instrument_id", flat=True))):
-        if state.is_usable() and state.reference_price:
+        if state.is_execution_usable() and state.reference_price:
             result[state.instrument_id] = D(state.reference_price)
         elif strict:
             unusable.add(state.instrument_id)
@@ -87,15 +87,14 @@ def _portfolio_order_limit(snapshot, quantity, notional):
 
 
 def _execution_adv(instrument, target_snapshot, policy):
-    """Resolve only the configured, daily, final, fresh execution ADV."""
+    """Resolve only a registered, final, fresh live execution ADV."""
     from django.conf import settings
     from apps.market_streams.models import IndicatorValue
 
     window = int(getattr(settings, "EXECUTION_AVERAGE_VOLUME_WINDOW", 20))
     cutoff = timezone.now() - timedelta(seconds=int(policy.price_staleness_limit))
-    row = IndicatorValue.objects.filter(
+    query = IndicatorValue.objects.filter(
         instrument=instrument,
-        timeframe="1d",
         is_final=True,
         processing_mode="LIVE",
         parameters={"window": window},
@@ -103,7 +102,11 @@ def _execution_adv(instrument, target_snapshot, policy):
         value__isnull=False,
     ).filter(
         Q(indicator_name="average_volume") | Q(indicator="average_volume")
-    ).order_by("-event_time", "-pk").first()
+    )
+    timeframe=str(getattr(settings,"EXECUTION_ADV_TIMEFRAME","RUNTIME") or "").strip()
+    if timeframe.upper()!="RUNTIME":
+        query=query.filter(timeframe=timeframe)
+    row=query.order_by("-event_time", "-pk").first()
     return D(row.value) if row is not None else D(0)
 
 
@@ -126,7 +129,11 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
             target_snapshot = build_portfolio_target_snapshot(
                 portfolio,
                 logical_time=timezone.now(),
-                prices=prices,
+                prices=(
+                    None
+                    if strict_market_state and portfolio.gateway_session_id
+                    else prices
+                ),
             )
     if target_snapshot:
         target_snapshot = PortfolioTargetSnapshot.objects.get(pk=target_snapshot.pk)
@@ -208,6 +215,21 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
     instrument_ids = set(target_weights) | set(current_rows)
     if target_snapshot:
         instrument_ids |= {int(key) for key in target_snapshot.current_positions}
+        no_op_instruments = {
+            instrument_id
+            for instrument_id in instrument_ids
+            if target_weights.get(instrument_id, D(0)) == 0
+            and instrument_id not in current_rows
+            and D(
+                str(
+                    target_snapshot.current_positions.get(
+                        str(instrument_id), {}
+                    ).get("projected_quantity", 0)
+                )
+            )
+            == 0
+        }
+        instrument_ids -= no_op_instruments
         reference = {
             int(instrument_id): D(str(price))
             for instrument_id, price in target_snapshot.reference_prices.items()

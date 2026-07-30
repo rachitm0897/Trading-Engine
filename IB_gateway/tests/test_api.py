@@ -11,7 +11,8 @@ def test_service_authentication(client):
     assert body["ok"] and "connected" in body["data"]
 
 def test_order_command_idempotency(client):
-    payload={"internal_id":"I1","account":"DU1","symbol":"AAPL","side":"BUY","quantity":"1"}
+    payload={"internal_id":"I1","account":"DU1","symbol":"AAPL","local_symbol":"AAPL",
+        "conid":265598,"primary_exchange":"NASDAQ","side":"BUY","quantity":"1"}
     headers={**AUTH,"HTTP_IDEMPOTENCY_KEY":"same","content_type":"application/json"}
     first=client.post("/api/v1/orders/",json.dumps(payload),**headers).json()
     second=client.post("/api/v1/orders/",json.dumps(payload),**headers).json()

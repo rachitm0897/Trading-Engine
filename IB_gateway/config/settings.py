@@ -26,7 +26,12 @@ MIDDLEWARE = ["django.middleware.security.SecurityMiddleware", "django.middlewar
 ROOT_URLCONF = "config.urls"
 TEMPLATES = []
 WSGI_APPLICATION = "config.wsgi.application"
-DATABASES = {"default":{"ENGINE":"django.db.backends.sqlite3", "NAME":os.getenv("GATEWAY_DB_PATH", str(BASE_DIR / "gateway.sqlite3")), "OPTIONS":{"timeout":20}}}
+DATABASES = {"default":{
+    "ENGINE":"django.db.backends.sqlite3",
+    "NAME":os.getenv("GATEWAY_DB_PATH", str(BASE_DIR / "gateway.sqlite3")),
+    "CONN_MAX_AGE":60,
+    "OPTIONS":{"timeout":20},
+}}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
 GATEWAY_SERVICE_TOKEN = required_environment("GATEWAY_SERVICE_TOKEN")

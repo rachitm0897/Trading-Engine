@@ -365,6 +365,49 @@ def test_warming_strategy_without_a_target_does_not_block_portfolio_coordination
     assert snapshot.target_contributions[0]["lifecycle_policy"] == "HOLD"
 
 
+def test_disabled_strategy_target_without_price_does_not_block_active_strategy():
+    portfolio = make_portfolio("disabled-target-price")
+    active_instrument = make_instrument("ACTIVEPRICE")
+    disabled_instrument = make_instrument("NOPRICE")
+    make_strategy(portfolio, active_instrument, "active-priced")
+    disabled, _, _, _ = make_strategy(
+        portfolio,
+        disabled_instrument,
+        "disabled-unpriced",
+        state="DISABLED",
+        enabled=False,
+    )
+    InstrumentMarketState.objects.filter(instrument=disabled_instrument).delete()
+
+    snapshot = build_portfolio_target_snapshot(portfolio)
+
+    assert snapshot.status == "READY"
+    assert snapshot.rejected_targets == []
+    assert Decimal(snapshot.net_targets[str(active_instrument.pk)]) == Decimal("0.10")
+    disabled_contribution = next(
+        item
+        for item in snapshot.target_contributions
+        if item["strategy_instance_id"] == disabled.pk
+    )
+    assert disabled_contribution["lifecycle_policy"] == "HOLD"
+    run = plan_rebalance(
+        portfolio,
+        "STRATEGY_TARGETS",
+        "disabled-target-without-price",
+        target_snapshot=snapshot,
+        automatic=True,
+    )
+    assert run.status == "INTENTS_CREATED"
+    assert OrderIntent.objects.filter(
+        rebalance=run,
+        instrument=active_instrument,
+    ).exists()
+    assert not OrderIntent.objects.filter(
+        rebalance=run,
+        instrument=disabled_instrument,
+    ).exists()
+
+
 @override_settings(PORTFOLIO_TARGET_COORDINATION_DEBOUNCE_SECONDS=0)
 def test_one_coordination_failure_does_not_starve_later_portfolios(monkeypatch):
     failing = make_portfolio("coordination-fails")
@@ -389,9 +432,11 @@ def test_one_coordination_failure_does_not_starve_later_portfolios(monkeypatch):
     assert "isolated portfolio failure" in results[0]["error"]
     assert results[1]["portfolio_id"] == succeeding.pk
     assert results[1]["result_id"]
-    assert PortfolioTargetCoordination.objects.get(
-        portfolio=failing
-    ).status == "ERROR"
+    failed=PortfolioTargetCoordination.objects.get(portfolio=failing)
+    assert failed.status == "PENDING"
+    assert failed.needs_coordination and failed.next_attempt_at is not None
+    assert failed.attempt_count == 1
+    assert results[0]["retry_queued"] is True
     assert PortfolioTargetCoordination.objects.get(
         portfolio=succeeding
     ).status != "CLAIMED"
