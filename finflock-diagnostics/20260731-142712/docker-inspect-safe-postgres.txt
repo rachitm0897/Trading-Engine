@@ -1,0 +1,1 @@
+Name=/finflock-real-paper-test-postgres-1 Image=postgres:16-alpine State=running Running=true ExitCode=0 StartedAt=2026-07-31T04:53:25.302996184Z Health=healthy Ports={"5432/tcp":[{"HostIp":"0.0.0.0","HostPort":"5433"},{"HostIp":"::","HostPort":"5433"}]} Networks=finflock-real-paper-test_private=172.18.0.2 

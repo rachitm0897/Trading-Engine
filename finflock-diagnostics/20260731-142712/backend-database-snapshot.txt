@@ -1,0 +1,5174 @@
+
+===== DATABASE =====
+{
+  "host": "postgres",
+  "name": "trading_engine",
+  "port": 5432,
+  "time": "2026-07-31 05:28:46.385452+00:00",
+  "vendor": "postgresql"
+}
+
+===== SELECTED SETTINGS =====
+{
+  "ALLOW_LIVE_TRADING": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+  "EXECUTION_ACTIVATION_PREFLIGHT_ENABLED": true,
+  "FINNHUB_API_KEY_OVERRIDE_ENABLED": "[REDACTED]",
+  "FINNHUB_AUTO_FAILBACK_ENABLED": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+  "FINNHUB_HISTORICAL_FALLBACK_ENABLED": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+  "FINNHUB_LIVE_FALLBACK_ENABLED": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+  "FLINK_REST_URL": "http://flink-jobmanager:8081",
+  "GLOBAL_KILL_SWITCH": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+  "KAFKA_BOOTSTRAP_SERVERS": "kafka:9092",
+  "KAFKA_ENABLED": true,
+  "LOCAL_PAPER_GATEWAY_CONTAINER_NAME": "paper-ibkr-gateway",
+  "LOCAL_PAPER_GATEWAY_URL": "http://paper-ibkr-gateway:8080/api/v1",
+  "MARKET_DATA_FALLBACK_ENABLED": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+  "MARKET_PRICE_STALE_SECONDS": 300,
+  "RECOMMENDATION_MAX_STOCKS": 20,
+  "RECOMMENDATION_MIN_STOCKS": 5,
+  "RECOMMENDATION_SNAPSHOT_MAX_AGE_HOURS": 24,
+  "RECOMMENDATION_SYSTEM_ENABLED": true,
+  "RECOMMENDATION_UNIVERSE_KEY": "US_LARGE_CAP_GICS",
+  "RESEARCH_ENABLED": true,
+  "RESEARCH_MINIMUM_DAILY_BARS": 756,
+  "RESEARCH_SCORE_MAX_AGE_DAYS": 7
+}
+
+===== RELEVANT URL ROUTES =====
+[
+  {
+    "route": "api/v1/portfolios/",
+    "view": "apps.core.views.portfolios"
+  },
+  {
+    "route": "api/v1/executions/",
+    "view": "apps.core.views.executions"
+  },
+  {
+    "route": "api/v1/broker-sessions/",
+    "view": "apps.broker_gateway.views.sessions"
+  },
+  {
+    "route": "api/v1/broker-sessions/<uuid:session_id>/",
+    "view": "apps.broker_gateway.views.sessions"
+  },
+  {
+    "route": "api/v1/broker-sessions/<uuid:session_id>/reconnect/",
+    "view": "apps.broker_gateway.views.sessions"
+  },
+  {
+    "route": "api/v1/broker-sessions/<uuid:session_id>/credentials/",
+    "view": "apps.broker_gateway.views.sessions"
+  },
+  {
+    "route": "api/v1/broker-sessions/<uuid:session_id>/accounts/",
+    "view": "apps.broker_gateway.views.sessions"
+  },
+  {
+    "route": "api/v1/portfolios/series/",
+    "view": "apps.core.analytics.portfolio_series"
+  },
+  {
+    "route": "api/v1/strategy-instances/<int:instance_id>/execution-timeline/",
+    "view": "apps.strategies.views.related"
+  },
+  {
+    "route": "api/v1/execution/readiness/",
+    "view": "apps.execution.views.readiness"
+  },
+  {
+    "route": "api/v1/execution/diagnostics/",
+    "view": "apps.execution.views.diagnostics"
+  },
+  {
+    "route": "api/v1/portfolio-universe/",
+    "view": "apps.portfolio_optimization.views.universes"
+  },
+  {
+    "route": "api/v1/portfolio-optimization/policies/",
+    "view": "apps.portfolio_optimization.views.policies"
+  },
+  {
+    "route": "api/v1/portfolio-optimization/preview/",
+    "view": "apps.portfolio_optimization.views.execute"
+  },
+  {
+    "route": "api/v1/portfolio-optimization/run/",
+    "view": "apps.portfolio_optimization.views.execute"
+  },
+  {
+    "route": "api/v1/portfolio-optimization/runs/",
+    "view": "apps.portfolio_optimization.views.runs"
+  },
+  {
+    "route": "api/v1/portfolio-optimization/runs/<int:run_id>/",
+    "view": "apps.portfolio_optimization.views.runs"
+  },
+  {
+    "route": "api/v1/portfolio-construction/plans/",
+    "view": "apps.portfolio_construction.views.plans"
+  },
+  {
+    "route": "api/v1/portfolio-construction/plans/<int:plan_id>/",
+    "view": "apps.portfolio_construction.views.plans"
+  },
+  {
+    "route": "api/v1/portfolio-construction/plans/<int:plan_id>/goals/",
+    "view": "apps.portfolio_construction.views.plan_goals"
+  },
+  {
+    "route": "api/v1/portfolio-construction/plans/<int:plan_id>/recommendations/",
+    "view": "apps.portfolio_construction.views.plan_recommendations"
+  },
+  {
+    "route": "api/v1/portfolio-construction/recommendation-batches/<int:batch_id>/",
+    "view": "apps.portfolio_construction.views.recommendation_batches"
+  },
+  {
+    "route": "api/v1/portfolio-construction/readiness/",
+    "view": "apps.portfolio_construction.views.builder_readiness"
+  },
+  {
+    "route": "api/v1/portfolio-construction/goals/<int:goal_id>/",
+    "view": "apps.portfolio_construction.views.goal_detail"
+  },
+  {
+    "route": "api/v1/portfolio-construction/goals/<int:goal_id>/eligible-strategies/",
+    "view": "apps.portfolio_construction.views.goal_eligible_strategies"
+  },
+  {
+    "route": "api/v1/portfolio-construction/goals/<int:goal_id>/instruments/",
+    "view": "apps.portfolio_construction.views.goal_instruments"
+  },
+  {
+    "route": "api/v1/portfolio-construction/instruments/<int:goal_instrument_id>/",
+    "view": "apps.portfolio_construction.views.instrument_detail"
+  },
+  {
+    "route": "api/v1/portfolio-construction/instruments/<int:goal_instrument_id>/assignments/",
+    "view": "apps.portfolio_construction.views.instrument_assignments"
+  },
+  {
+    "route": "api/v1/portfolio-construction/assignments/<int:assignment_id>/",
+    "view": "apps.portfolio_construction.views.assignment_detail"
+  },
+  {
+    "route": "api/v1/portfolio-construction/preview/",
+    "view": "apps.portfolio_construction.views.preview"
+  },
+  {
+    "route": "api/v1/portfolio-construction/runs/",
+    "view": "apps.portfolio_construction.views.runs"
+  },
+  {
+    "route": "api/v1/portfolio-construction/runs/<int:run_id>/",
+    "view": "apps.portfolio_construction.views.runs"
+  },
+  {
+    "route": "api/v1/portfolio-construction/runs/<int:run_id>/apply/",
+    "view": "apps.portfolio_construction.views.apply"
+  },
+  {
+    "route": "api/v1/research/dataset-versions/",
+    "view": "apps.research.views.dataset_versions"
+  },
+  {
+    "route": "api/v1/research/universes/",
+    "view": "apps.research.views.universes"
+  },
+  {
+    "route": "api/v1/research/universes/<int:universe_id>/members/",
+    "view": "apps.research.views.universes"
+  },
+  {
+    "route": "api/v1/research/strategies/",
+    "view": "apps.research.views.strategies"
+  },
+  {
+    "route": "api/v1/research/strategies/<str:research_id>/",
+    "view": "apps.research.views.strategies"
+  },
+  {
+    "route": "api/v1/research/readiness/",
+    "view": "apps.research.views.readiness"
+  },
+  {
+    "route": "api/v1/research/candidate-scores/",
+    "view": "apps.research.views.candidate_scores"
+  },
+  {
+    "route": "api/v1/research/experiments/<int:experiment_id>/",
+    "view": "apps.research.views.experiments"
+  }
+]
+
+===== PORTFOLIO BUILDER RESEARCH METRICS =====
+{
+  "caches_completed_unexpired": 1,
+  "caches_latest": "2026-07-31 05:08:03.115810+00:00",
+  "caches_total": 1,
+  "coverage_latest": null,
+  "coverage_ready": 0,
+  "coverage_rows": 0,
+  "daily_bar_instruments_valid": 0,
+  "daily_bars_latest": null,
+  "daily_bars_total": 0,
+  "daily_bars_valid": 0,
+  "feature_instruments": 0,
+  "feature_latest": null,
+  "feature_snapshots_total": 0
+}
+
+===== research.ResearchDatasetVersion =====
+{
+  "count": 1,
+  "filters": {},
+  "latest_rows": [
+    {
+      "activated_at": "2026-07-31 05:07:54.432390+00:00",
+      "bundle_name": "Trading Engine Stock and Strategy Research Universe",
+      "file_hashes": {
+        "backtest_spec.json": "060440b846fe759e878f5769dc56784a4e6e56b022a4e888067a9a631ecf49bf",
+        "compatibility_rules.json": "ff32ed2a7cf9d7e6f6f0f9ce807ae4e1b9ef4048fb353cd9082c6501561c21e2",
+        "gics_taxonomy.json": "6b2d496999b4fcdb99d59928a641e573eec5b46dfb057a214e9bfd7f191e1854",
+        "stock_universe.json": "99d908a499bceb7eb4c25412029a7331ca5d097db87138cb6bc5b4b0b1eedae9",
+        "strategy_universe.json": "ae53814cace43254b56a3355391609b0616b4762dc33d95fffd1231874d7eb98"
+      },
+      "id": 1,
+      "imported_at": "2026-07-31 05:07:43.105681+00:00",
+      "manifest_hash": "67632655d825591acd35c26c16634f8b6720b9483f7e1220ea47fb78ae22ccf3",
+      "retired_at": null,
+      "snapshot_date": "2026-07-15",
+      "source_metadata": {
+        "gics": {
+          "attribution": "Hierarchy names/codes transcribed from the public Wikipedia GICS classification table, CC BY-SA 4.0. GICS is a trademark of MSCI and S&P Global.",
+          "classification_rule": "A company receives one primary sub-industry according to principal business activity; historical research should retain point-in-time classifications.",
+          "hierarchy_counts": {
+            "industries": "<max-depth>",
+            "industry_groups": "<max-depth>",
+            "sectors": "<max-depth>",
+            "sub_industries": "<max-depth>"
+          },
+          "name": "Global Industry Classification Standard research taxonomy",
+          "snapshot_date": "2026-07-15",
+          "source": "https://en.wikipedia.org/wiki/Global_Industry_Classification_Standard",
+          "status": "public research representation; not an official licensed GICS product"
+        },
+        "manifest": {
+          "bundle_name": "Trading Engine Stock and Strategy Research Universe",
+          "counts": {
+            "full_gics_taxonomy_sub_industries": "<max-depth>",
+            "gics_industries_represented": "<max-depth>",
+            "gics_industry_groups_represented": "<max-depth>",
+            "gics_sectors_represented": "<max-depth>",
+            "gics_sub_industries_represented": "<max-depth>",
+            "stocks": "<max-depth>",
+            "strategies": "<max-depth>",
+            "strategy_families": "<max-depth>"
+          },
+          "files": [
+            "<max-depth>",
+            "<max-depth>",
+            "<max-depth>",
+            "<max-depth>",
+            "<max-depth>"
+          ],
+          "generated_on": "2026-07-15",
+          "stock_distribution": {
+            "by_industry_group": "<max-depth>",
+            "by_sector": "<max-depth>"
+          },
+          "strategy_distribution": {
+            "allocation": "<max-depth>",
+            "baseline": "<max-depth>",
+            "cross_sectional_factor": "<max-depth>",
+            "event": "<max-depth>",
+            "income": "<max-depth>",
+            "mean_reversion": "<max-depth>",
+            "momentum": "<max-depth>",
+            "statistical_arbitrage": "<max-depth>",
+            "trend": "<max-depth>",
+            "volatility_control": "<max-depth>"
+          },
+          "usage_order": [
+            "<max-depth>",
+            "<max-depth>",
+            "<max-depth>",
+            "<max-depth>",
+            "<max-depth>"
+          ],
+          "warnings": [
+            "<max-depth>",
+            "<max-depth>",
+            "<max-depth>",
+            "<max-depth>"
+          ]
+        },
+        "stocks": {
+          "excluded_secondary_share_classes": {
+            "FOX": "<max-depth>",
+            "GOOG": "<max-depth>",
+            "NWS": "<max-depth>"
+          },
+          "important_warning": "This is a present-day membership snapshot. Backtests must use point-in-time membership and historical GICS classifications to avoid survivorship and classification look-ahead bias.",
+          "license_note": "Source dataset states Public Domain Dedication and License (PDDL). Verify upstream terms before redistribution.",
+          "name": "US Large-Cap GICS Stock Research Universe",
+          "record_count": 500,
+          "representative_company_count": 500,
+          "snapshot_date": "2026-07-15",
+          "source_blob_sha": "cea95b27244e5a18b357fee726ae526eeab71c9d",
+          "source_last_observed_modified_utc": "2026-07-10T01:26:31Z",
+          "source_path": "data/constituents.csv",
+          "source_repository": "datasets/s-and-p-500-companies",
+          "source_security_count": 503
+        },
+        "strategies": {
+          "current_engine_constraint": "Portfolio Builder is long-only; long-short and intraday definitions are marked research-only where incompatible.",
+          "name": "Equity Strategy Research Universe",
+          "purpose": "broad candidate library for systematic research, not a claim that any strategy is profitable or suitable",
+          "selection_rule": "No strategy may be recommended until it passes the shared out-of-sample, cost, stability, capacity and multiple-testing controls.",
+          "snapshot_date": "2026-07-15",
+          "strategy_count": 97
+        }
+      },
+      "source_path": "/app/research_bundle",
+      "status": "ACTIVE",
+      "validation_report": {
+        "counts": {
+          "industries": 74,
+          "industry_groups": 25,
+          "sectors": 11,
+          "stocks": 500,
+          "strategies": 97,
+          "sub_industries": 163
+        },
+        "current_snapshot_only": true,
+        "files": {
+          "backtest_spec.json": {
+            "bytes": "<max-depth>",
+            "sha256": "<max-depth>"
+          },
+          "compatibility_rules.json": {
+            "bytes": "<max-depth>",
+            "sha256": "<max-depth>"
+          },
+          "gics_taxonomy.json": {
+            "bytes": "<max-depth>",
+            "sha256": "<max-depth>"
+          },
+          "stock_universe.json": {
+            "bytes": "<max-depth>",
+            "sha256": "<max-depth>"
+          },
+          "strategy_universe.json": {
+            "bytes": "<max-depth>",
+            "sha256": "<max-depth>"
+          }
+        },
+        "valid": true,
+        "warnings": [
+          "Not investment advice or a ready-to-trade recommendation.",
+          "The stock list is a current snapshot and causes survivorship bias if used directly for historical claims.",
+          "The GICS representation is a public research transcription, not an official licensed GICS data product.",
+          "Strategies are hypotheses. They require point-in-time data, realistic costs and independent out-of-sample validation."
+        ]
+      },
+      "version": "2026-07-15"
+    }
+  ]
+}
+
+===== research.ResearchUniverse =====
+{
+  "count": 1,
+  "filters": {},
+  "latest_rows": [
+    {
+      "active": true,
+      "created_at": "2026-07-31 05:07:43.280647+00:00",
+      "dataset_version_id": 1,
+      "description": "broad liquid US large-cap research starting set",
+      "id": 1,
+      "key": "US_LARGE_CAP_GICS",
+      "membership_type": "CURRENT_SNAPSHOT",
+      "name": "US Large-Cap GICS Stock Research Universe",
+      "updated_at": "2026-07-31 05:07:43.280665+00:00"
+    }
+  ]
+}
+
+===== research.ResearchUniverseMember =====
+{
+  "count": 500,
+  "filters": {},
+  "latest_rows": [
+    {
+      "active": true,
+      "currency": "USD",
+      "exchange_hint": "SMART",
+      "id": 500,
+      "instrument_id": 502,
+      "issuer_id": 500,
+      "mapping_notes": "Mapped deterministically; broker qualification remains a separate gate",
+      "mapping_status": "INSTRUMENT_MAPPED",
+      "membership_end": null,
+      "membership_start": null,
+      "membership_status": "CURRENT_SNAPSHOT",
+      "research_eligibility_configuration": {
+        "base_enabled": true,
+        "corporate_action_adjusted_ohlcv_required": true,
+        "delisting_return_required_when_applicable": true,
+        "minimum_adjusted_history_days": 756,
+        "minimum_median_dollar_volume_20d_usd": 25000000,
+        "minimum_trading_days_252d": 240,
+        "minimum_unadjusted_price_usd": 5.0,
+        "point_in_time_membership_required_for_historical_tests": true
+      },
+      "risk_timeframe_profile": {
+        "dynamic_revalidation_required": true,
+        "notes": "Static tags are broad research priors, not suitability labels. Liquidity, volatility, drawdown, profitability, borrowability and data quality decide actual eligibility on each rebalance date.",
+        "static_candidate_goal_timeframes": [
+          "HURRY",
+          "FAST",
+          "BUILD",
+          "GROW",
+          "COMPOUND"
+        ],
+        "static_candidate_risk_range": [
+          1,
+          5
+        ],
+        "strategy_family_candidates": [
+          "baseline",
+          "cross_sectional_factor",
+          "mean_reversion",
+          "momentum",
+          "trend",
+          "volatility_control"
+        ]
+      },
+      "security_name": "Zoetis",
+      "source_symbol": "ZTS",
+      "universe_id": 1
+    },
+    {
+      "active": true,
+      "currency": "USD",
+      "exchange_hint": "SMART",
+      "id": 499,
+      "instrument_id": 501,
+      "issuer_id": 499,
+      "mapping_notes": "Mapped deterministically; broker qualification remains a separate gate",
+      "mapping_status": "INSTRUMENT_MAPPED",
+      "membership_end": null,
+      "membership_start": null,
+      "membership_status": "CURRENT_SNAPSHOT",
+      "research_eligibility_configuration": {
+        "base_enabled": true,
+        "corporate_action_adjusted_ohlcv_required": true,
+        "delisting_return_required_when_applicable": true,
+        "minimum_adjusted_history_days": 756,
+        "minimum_median_dollar_volume_20d_usd": 25000000,
+        "minimum_trading_days_252d": 240,
+        "minimum_unadjusted_price_usd": 5.0,
+        "point_in_time_membership_required_for_historical_tests": true
+      },
+      "risk_timeframe_profile": {
+        "dynamic_revalidation_required": true,
+        "notes": "Static tags are broad research priors, not suitability labels. Liquidity, volatility, drawdown, profitability, borrowability and data quality decide actual eligibility on each rebalance date.",
+        "static_candidate_goal_timeframes": [
+          "HURRY",
+          "FAST",
+          "BUILD",
+          "GROW",
+          "COMPOUND"
+        ],
+        "static_candidate_risk_range": [
+          1,
+          5
+        ],
+        "strategy_family_candidates": [
+          "baseline",
+          "cross_sectional_factor",
+          "mean_reversion",
+          "momentum",
+          "trend",
+          "volatility_control"
+        ]
+      },
+      "security_name": "Zimmer Biomet",
+      "source_symbol": "ZBH",
+      "universe_id": 1
+    },
+    {
+      "active": true,
+      "currency": "USD",
+      "exchange_hint": "SMART",
+      "id": 498,
+      "instrument_id": 500,
+      "issuer_id": 498,
+      "mapping_notes": "Mapped deterministically; broker qualification remains a separate gate",
+      "mapping_status": "INSTRUMENT_MAPPED",
+      "membership_end": null,
+      "membership_start": null,
+      "membership_status": "CURRENT_SNAPSHOT",
+      "research_eligibility_configuration": {
+        "base_enabled": true,
+        "corporate_action_adjusted_ohlcv_required": true,
+        "delisting_return_required_when_applicable": true,
+        "minimum_adjusted_history_days": 756,
+        "minimum_median_dollar_volume_20d_usd": 25000000,
+        "minimum_trading_days_252d": 240,
+        "minimum_unadjusted_price_usd": 5.0,
+        "point_in_time_membership_required_for_historical_tests": true
+      },
+      "risk_timeframe_profile": {
+        "dynamic_revalidation_required": true,
+        "notes": "Static tags are broad research priors, not suitability labels. Liquidity, volatility, drawdown, profitability, borrowability and data quality decide actual eligibility on each rebalance date.",
+        "static_candidate_goal_timeframes": [
+          "FAST",
+          "BUILD",
+          "GROW",
+          "COMPOUND"
+        ],
+        "static_candidate_risk_range": [
+          2,
+          5
+        ],
+        "strategy_family_candidates": [
+          "baseline",
+          "cross_sectional_factor",
+          "mean_reversion",
+          "momentum",
+          "trend",
+          "volatility_control"
+        ]
+      },
+      "security_name": "Zebra Technologies",
+      "source_symbol": "ZBRA",
+      "universe_id": 1
+    },
+    {
+      "active": true,
+      "currency": "USD",
+      "exchange_hint": "SMART",
+      "id": 497,
+      "instrument_id": 499,
+      "issuer_id": 497,
+      "mapping_notes": "Mapped deterministically; broker qualification remains a separate gate",
+      "mapping_status": "INSTRUMENT_MAPPED",
+      "membership_end": null,
+      "membership_start": null,
+      "membership_status": "CURRENT_SNAPSHOT",
+      "research_eligibility_configuration": {
+        "base_enabled": true,
+        "corporate_action_adjusted_ohlcv_required": true,
+        "delisting_return_required_when_applicable": true,
+        "minimum_adjusted_history_days": 756,
+        "minimum_median_dollar_volume_20d_usd": 25000000,
+        "minimum_trading_days_252d": 240,
+        "minimum_unadjusted_price_usd": 5.0,
+        "point_in_time_membership_required_for_historical_tests": true
+      },
+      "risk_timeframe_profile": {
+        "dynamic_revalidation_required": true,
+        "notes": "Static tags are broad research priors, not suitability labels. Liquidity, volatility, drawdown, profitability, borrowability and data quality decide actual eligibility on each rebalance date.",
+        "static_candidate_goal_timeframes": [
+          "FAST",
+          "BUILD",
+          "GROW",
+          "COMPOUND"
+        ],
+        "static_candidate_risk_range": [
+          2,
+          5
+        ],
+        "strategy_family_candidates": [
+          "baseline",
+          "cross_sectional_factor",
+          "cycle_relative",
+          "mean_reversion",
+          "momentum",
+          "sector_relative",
+          "trend",
+          "volatility_control"
+        ]
+      },
+      "security_name": "Yum! Brands",
+      "source_symbol": "YUM",
+      "universe_id": 1
+    },
+    {
+      "active": true,
+      "currency": "USD",
+      "exchange_hint": "SMART",
+      "id": 496,
+      "instrument_id": 498,
+      "issuer_id": 496,
+      "mapping_notes": "Mapped deterministically; broker qualification remains a separate gate",
+      "mapping_status": "INSTRUMENT_MAPPED",
+      "membership_end": null,
+      "membership_start": null,
+      "membership_status": "CURRENT_SNAPSHOT",
+      "research_eligibility_configuration": {
+        "base_enabled": true,
+        "corporate_action_adjusted_ohlcv_required": true,
+        "delisting_return_required_when_applicable": true,
+        "minimum_adjusted_history_days": 756,
+        "minimum_median_dollar_volume_20d_usd": 25000000,
+        "minimum_trading_days_252d": 240,
+        "minimum_unadjusted_price_usd": 5.0,
+        "point_in_time_membership_required_for_historical_tests": true
+      },
+      "risk_timeframe_profile": {
+        "dynamic_revalidation_required": true,
+        "notes": "Static tags are broad research priors, not suitability labels. Liquidity, volatility, drawdown, profitability, borrowability and data quality decide actual eligibility on each rebalance date.",
+        "static_candidate_goal_timeframes": [
+          "FAST",
+          "BUILD",
+          "GROW",
+          "COMPOUND"
+        ],
+        "static_candidate_risk_range": [
+          2,
+          5
+        ],
+        "strategy_family_candidates": [
+          "baseline",
+          "cross_sectional_factor",
+          "cycle_relative",
+          "mean_reversion",
+          "momentum",
+          "sector_relative",
+          "trend",
+          "volatility_control"
+        ]
+      },
+      "security_name": "Xylem Inc.",
+      "source_symbol": "XYL",
+      "universe_id": 1
+    },
+    {
+      "active": true,
+      "currency": "USD",
+      "exchange_hint": "SMART",
+      "id": 495,
+      "instrument_id": 497,
+      "issuer_id": 495,
+      "mapping_notes": "Mapped deterministically; broker qualification remains a separate gate",
+      "mapping_status": "INSTRUMENT_MAPPED",
+      "membership_end": null,
+      "membership_start": null,
+      "membership_status": "CURRENT_SNAPSHOT",
+      "research_eligibility_configuration": {
+        "base_enabled": true,
+        "corporate_action_adjusted_ohlcv_required": true,
+        "delisting_return_required_when_applicable": true,
+        "minimum_adjusted_history_days": 756,
+        "minimum_median_dollar_volume_20d_usd": 25000000,
+        "minimum_trading_days_252d": 240,
+        "minimum_unadjusted_price_usd": 5.0,
+        "point_in_time_membership_required_for_historical_tests": true
+      },
+      "risk_timeframe_profile": {
+        "dynamic_revalidation_required": true,
+        "notes": "Static tags are broad research priors, not suitability labels. Liquidity, volatility, drawdown, profitability, borrowability and data quality decide actual eligibility on each rebalance date.",
+        "static_candidate_goal_timeframes": [
+          "HURRY",
+          "FAST",
+          "BUILD",
+          "GROW",
+          "COMPOUND"
+        ],
+        "static_candidate_risk_range": [
+          1,
+          5
+        ],
+        "strategy_family_candidates": [
+          "baseline",
+          "income",
+          "mean_reversion",
+          "momentum",
+          "trend",
+          "value",
+          "volatility_control"
+        ]
+      },
+      "security_name": "Xcel Energy",
+      "source_symbol": "XEL",
+      "universe_id": 1
+    },
+    {
+      "active": true,
+      "currency": "USD",
+      "exchange_hint": "SMART",
+      "id": 494,
+      "instrument_id": 496,
+      "issuer_id": 494,
+      "mapping_notes": "Mapped deterministically; broker qualification remains a separate gate",
+      "mapping_status": "INSTRUMENT_MAPPED",
+      "membership_end": null,
+      "membership_start": null,
+      "membership_status": "CURRENT_SNAPSHOT",
+      "research_eligibility_configuration": {
+        "base_enabled": true,
+        "corporate_action_adjusted_ohlcv_required": true,
+        "delisting_return_required_when_applicable": true,
+        "minimum_adjusted_history_days": 756,
+        "minimum_median_dollar_volume_20d_usd": 25000000,
+        "minimum_trading_days_252d": 240,
+        "minimum_unadjusted_price_usd": 5.0,
+        "point_in_time_membership_required_for_historical_tests": true
+      },
+      "risk_timeframe_profile": {
+        "dynamic_revalidation_required": true,
+        "notes": "Static tags are broad research priors, not suitability labels. Liquidity, volatility, drawdown, profitability, borrowability and data quality decide actual eligibility on each rebalance date.",
+        "static_candidate_goal_timeframes": [
+          "FAST",
+          "BUILD",
+          "GROW",
+          "COMPOUND"
+        ],
+        "static_candidate_risk_range": [
+          3,
+          5
+        ],
+        "strategy_family_candidates": [
+          "baseline",
+          "cross_sectional_factor",
+          "cycle_relative",
+          "event",
+          "gap_risk_control",
+          "mean_reversion",
+          "momentum",
+          "sector_relative",
+          "trend",
+          "volatility_control"
+        ]
+      },
+      "security_name": "Wynn Resorts",
+      "source_symbol": "WYNN",
+      "universe_id": 1
+    },
+    {
+      "active": true,
+      "currency": "USD",
+      "exchange_hint": "SMART",
+      "id": 493,
+      "instrument_id": 495,
+      "issuer_id": 493,
+      "mapping_notes": "Mapped deterministically; broker qualification remains a separate gate",
+      "mapping_status": "INSTRUMENT_MAPPED",
+      "membership_end": null,
+      "membership_start": null,
+      "membership_status": "CURRENT_SNAPSHOT",
+      "research_eligibility_configuration": {
+        "base_enabled": true,
+        "corporate_action_adjusted_ohlcv_required": true,
+        "delisting_return_required_when_applicable": true,
+        "minimum_adjusted_history_days": 756,
+        "minimum_median_dollar_volume_20d_usd": 25000000,
+        "minimum_trading_days_252d": 240,
+        "minimum_unadjusted_price_usd": 5.0,
+        "point_in_time_membership_required_for_historical_tests": true
+      },
+      "risk_timeframe_profile": {
+        "dynamic_revalidation_required": true,
+        "notes": "Static tags are broad research priors, not suitability labels. Liquidity, volatility, drawdown, profitability, borrowability and data quality decide actual eligibility on each rebalance date.",
+        "static_candidate_goal_timeframes": [
+          "FAST",
+          "BUILD",
+          "GROW",
+          "COMPOUND"
+        ],
+        "static_candidate_risk_range": [
+          3,
+          5
+        ],
+        "strategy_family_candidates": [
+          "baseline",
+          "cross_sectional_factor",
+          "event",
+          "gap_risk_control",
+          "mean_reversion",
+          "momentum",
+          "trend",
+          "volatility_control"
+        ]
+      },
+      "security_name": "Workday, Inc.",
+      "source_symbol": "WDAY",
+      "universe_id": 1
+    },
+    {
+      "active": true,
+      "currency": "USD",
+      "exchange_hint": "SMART",
+      "id": 492,
+      "instrument_id": 494,
+      "issuer_id": 492,
+      "mapping_notes": "Mapped deterministically; broker qualification remains a separate gate",
+      "mapping_status": "INSTRUMENT_MAPPED",
+      "membership_end": null,
+      "membership_start": null,
+      "membership_status": "CURRENT_SNAPSHOT",
+      "research_eligibility_configuration": {
+        "base_enabled": true,
+        "corporate_action_adjusted_ohlcv_required": true,
+        "delisting_return_required_when_applicable": true,
+        "minimum_adjusted_history_days": 756,
+        "minimum_median_dollar_volume_20d_usd": 25000000,
+        "minimum_trading_days_252d": 240,
+        "minimum_unadjusted_price_usd": 5.0,
+        "point_in_time_membership_required_for_historical_tests": true
+      },
+      "risk_timeframe_profile": {
+        "dynamic_revalidation_required": true,
+        "notes": "Static tags are broad research priors, not suitability labels. Liquidity, volatility, drawdown, profitability, borrowability and data quality decide actual eligibility on each rebalance date.",
+        "static_candidate_goal_timeframes": [
+          "FAST",
+          "BUILD",
+          "GROW",
+          "COMPOUND"
+        ],
+        "static_candidate_risk_range": [
+          2,
+          5
+        ],
+        "strategy_family_candidates": [
+          "baseline",
+          "cross_sectional_factor",
+          "income",
+          "mean_reversion",
+          "momentum",
+          "trend",
+          "value",
+          "volatility_control"
+        ]
+      },
+      "security_name": "Willis Towers Watson",
+      "source_symbol": "WTW",
+      "universe_id": 1
+    },
+    {
+      "active": true,
+      "currency": "USD",
+      "exchange_hint": "SMART",
+      "id": 491,
+      "instrument_id": 493,
+      "issuer_id": 491,
+      "mapping_notes": "Mapped deterministically; broker qualification remains a separate gate",
+      "mapping_status": "INSTRUMENT_MAPPED",
+      "membership_end": null,
+      "membership_start": null,
+      "membership_status": "CURRENT_SNAPSHOT",
+      "research_eligibility_configuration": {
+        "base_enabled": true,
+        "corporate_action_adjusted_ohlcv_required": true,
+        "delisting_return_required_when_applicable": true,
+        "minimum_adjusted_history_days": 756,
+        "minimum_median_dollar_volume_20d_usd": 25000000,
+        "minimum_trading_days_252d": 240,
+        "minimum_unadjusted_price_usd": 5.0,
+        "point_in_time_membership_required_for_historical_tests": true
+      },
+      "risk_timeframe_profile": {
+        "dynamic_revalidation_required": true,
+        "notes": "Static tags are broad research priors, not suitability labels. Liquidity, volatility, drawdown, profitability, borrowability and data quality decide actual eligibility on each rebalance date.",
+        "static_candidate_goal_timeframes": [
+          "FAST",
+          "BUILD",
+          "GROW",
+          "COMPOUND"
+        ],
+        "static_candidate_risk_range": [
+          2,
+          5
+        ],
+        "strategy_family_candidates": [
+          "baseline",
+          "cross_sectional_factor",
+          "cycle_relative",
+          "mean_reversion",
+          "momentum",
+          "sector_relative",
+          "trend",
+          "volatility_control"
+        ]
+      },
+      "security_name": "Williams Companies",
+      "source_symbol": "WMB",
+      "universe_id": 1
+    }
+  ]
+}
+
+===== research.ResearchDataCoverageSummary =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== research.ResearchDailyBar =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== research.InstrumentFeatureSnapshot =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== research.ResearchStrategyReadiness =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== research.GoalRecommendationPolicy =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== research.RecommendationCacheSnapshot =====
+{
+  "count": 1,
+  "filters": {},
+  "latest_rows": [
+    {
+      "allocator_strategy_id": "INV_VOL_001",
+      "as_of_date": "2026-07-31",
+      "candidate_pool": [],
+      "created_at": "2026-07-31 05:08:03.115810+00:00",
+      "data_freshness": {
+        "as_of_date": "2026-07-31",
+        "feature_count": 0
+      },
+      "dataset_version_id": 1,
+      "expected_metrics": {
+        "cash_weight": 1.0,
+        "expected_drawdown": 0,
+        "expected_return": 0,
+        "expected_volatility": 0
+      },
+      "expires_at": "2026-08-01 05:28:29.770244+00:00",
+      "fallback_tier": 1,
+      "gics_exposure": {
+        "industry": {},
+        "sector": {},
+        "sub_industry": {}
+      },
+      "goal_timeframe": "NOW",
+      "id": 1,
+      "input_hash": "fb50535e728f04e0d9e85ef592b60a67b74250ef79066743737f03466018b9fe",
+      "overlay_strategy_ids": [],
+      "protocol_version_id": 1,
+      "risk_level": 1,
+      "selected_stocks": [],
+      "status": "COMPLETED"
+    }
+  ]
+}
+
+===== research.RecommendationBatchRun =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== research.GoalRecommendationRun =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== portfolio_construction.StrategyConstructionProfile =====
+{
+  "count": 34,
+  "filters": {},
+  "latest_rows": [
+    {
+      "construction_enabled": true,
+      "id": 34,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 5,
+      "minimum_risk": 4,
+      "strategy_definition_id": 34,
+      "summary": "Buy large negative deviations from session VWAP under stable spread and volume conditions.",
+      "supported_goal_timeframes": [
+        "FAST"
+      ],
+      "updated_at": "2026-07-31 05:07:55.005087+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 33,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 5,
+      "minimum_risk": 4,
+      "strategy_definition_id": 33,
+      "summary": "Fade statistically extreme overnight gaps when no known corporate event is present.",
+      "supported_goal_timeframes": [
+        "FAST"
+      ],
+      "updated_at": "2026-07-31 05:07:54.996799+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 32,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 4,
+      "minimum_risk": 2,
+      "strategy_definition_id": 32,
+      "summary": "Long-only oversold reversion rule with liquidity and trend filters.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD"
+      ],
+      "updated_at": "2026-07-31 05:07:54.973651+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 31,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 4,
+      "minimum_risk": 2,
+      "strategy_definition_id": 31,
+      "summary": "Long-only oversold reversion rule with liquidity and trend filters.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD"
+      ],
+      "updated_at": "2026-07-31 05:07:54.965790+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 30,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 4,
+      "minimum_risk": 2,
+      "strategy_definition_id": 30,
+      "summary": "Long-only oversold reversion rule with liquidity and trend filters.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD"
+      ],
+      "updated_at": "2026-07-31 05:07:54.957334+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 29,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 4,
+      "minimum_risk": 2,
+      "strategy_definition_id": 29,
+      "summary": "Long-only oversold reversion rule with liquidity and trend filters.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD"
+      ],
+      "updated_at": "2026-07-31 05:07:54.948052+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 28,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 4,
+      "minimum_risk": 2,
+      "strategy_definition_id": 28,
+      "summary": "Long-only oversold reversion rule with liquidity and trend filters.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD"
+      ],
+      "updated_at": "2026-07-31 05:07:54.937856+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 27,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 4,
+      "minimum_risk": 2,
+      "strategy_definition_id": 27,
+      "summary": "Long-only oversold reversion rule with liquidity and trend filters.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD"
+      ],
+      "updated_at": "2026-07-31 05:07:54.930445+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 26,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 4,
+      "minimum_risk": 2,
+      "strategy_definition_id": 26,
+      "summary": "Long-only oversold reversion rule with liquidity and trend filters.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD"
+      ],
+      "updated_at": "2026-07-31 05:07:54.923011+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 25,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 5,
+      "minimum_risk": 2,
+      "strategy_definition_id": 25,
+      "summary": "Long when trailing total return is positive, optionally volatility scaled.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD",
+        "GROW",
+        "COMPOUND"
+      ],
+      "updated_at": "2026-07-31 05:07:54.887050+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 24,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 5,
+      "minimum_risk": 2,
+      "strategy_definition_id": 24,
+      "summary": "Long when trailing total return is positive, optionally volatility scaled.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD",
+        "GROW",
+        "COMPOUND"
+      ],
+      "updated_at": "2026-07-31 05:07:54.879262+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 23,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 5,
+      "minimum_risk": 2,
+      "strategy_definition_id": 23,
+      "summary": "Long when trailing total return is positive, optionally volatility scaled.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD",
+        "GROW",
+        "COMPOUND"
+      ],
+      "updated_at": "2026-07-31 05:07:54.872081+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 22,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 5,
+      "minimum_risk": 2,
+      "strategy_definition_id": 22,
+      "summary": "Long when trailing total return is positive, optionally volatility scaled.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD",
+        "GROW",
+        "COMPOUND"
+      ],
+      "updated_at": "2026-07-31 05:07:54.863742+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 21,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 5,
+      "minimum_risk": 2,
+      "strategy_definition_id": 21,
+      "summary": "Long when trailing total return is positive, optionally volatility scaled.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD",
+        "GROW",
+        "COMPOUND"
+      ],
+      "updated_at": "2026-07-31 05:07:54.855845+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 20,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 4,
+      "minimum_risk": 1,
+      "strategy_definition_id": 20,
+      "summary": "Monthly close above 10-month moving average.",
+      "supported_goal_timeframes": [
+        "HURRY",
+        "BUILD",
+        "GROW",
+        "COMPOUND"
+      ],
+      "updated_at": "2026-07-31 05:07:54.847955+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 19,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 5,
+      "minimum_risk": 3,
+      "strategy_definition_id": 19,
+      "summary": "Enter above an EMA plus ATR envelope.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD",
+        "GROW"
+      ],
+      "updated_at": "2026-07-31 05:07:54.838151+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 18,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 5,
+      "minimum_risk": 3,
+      "strategy_definition_id": 18,
+      "summary": "ATR-band trailing trend state.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD",
+        "GROW"
+      ],
+      "updated_at": "2026-07-31 05:07:54.829340+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 17,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 5,
+      "minimum_risk": 3,
+      "strategy_definition_id": 17,
+      "summary": "Trade positive directional movement when trend strength is high.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD",
+        "GROW"
+      ],
+      "updated_at": "2026-07-31 05:07:54.819426+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 16,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 5,
+      "minimum_risk": 3,
+      "strategy_definition_id": 16,
+      "summary": "MACD line and signal crossover with long-trend filter.",
+      "supported_goal_timeframes": [
+        "FAST",
+        "BUILD",
+        "GROW"
+      ],
+      "updated_at": "2026-07-31 05:07:54.809481+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    },
+    {
+      "construction_enabled": true,
+      "id": 15,
+      "limitations": "Created only by the recommendation system; remains disabled after apply.",
+      "maximum_risk": 4,
+      "minimum_risk": 1,
+      "strategy_definition_id": 15,
+      "summary": "Stay invested only above a long moving average.",
+      "supported_goal_timeframes": [
+        "HURRY",
+        "BUILD",
+        "GROW",
+        "COMPOUND"
+      ],
+      "updated_at": "2026-07-31 05:07:54.799117+00:00",
+      "user_selectable": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED]
+    }
+  ]
+}
+
+===== portfolio_construction.PortfolioConstructionPlan =====
+{
+  "count": 1,
+  "filters": {},
+  "latest_rows": [
+    {
+      "created_at": "2026-07-31 05:13:01.003142+00:00",
+      "id": 1,
+      "name": "Local paper IBKR Gateway \u00b7 DUQ275858 goals",
+      "portfolio_id": 1,
+      "status": "DRAFT",
+      "updated_at": "2026-07-31 05:13:18.110355+00:00",
+      "version": 2
+    }
+  ]
+}
+
+===== portfolio_construction.PortfolioGoalAllocation =====
+{
+  "count": 1,
+  "filters": {},
+  "latest_rows": [
+    {
+      "accepted_recommendation_run_id": null,
+      "allocation_weight": "0E-8",
+      "construction_source": "MANUAL_OPTIMIZER",
+      "created_at": "2026-07-31 05:13:18.108607+00:00",
+      "display_order": 0,
+      "enabled": true,
+      "id": 1,
+      "name": "Goal 1",
+      "plan_id": 1,
+      "risk_level": 3,
+      "timeframe_bucket": "BUILD",
+      "updated_at": "2026-07-31 05:13:18.108618+00:00"
+    }
+  ]
+}
+
+===== market_data.MarketDataProviderConfiguration =====
+{
+  "count": 1,
+  "filters": {},
+  "latest_rows": [
+    {
+      "api_key_last_four": "[REDACTED]",
+      "created_at": "2026-07-31 05:09:42.226942+00:00",
+      "enabled": true,
+      "encrypted_api_key": "[REDACTED]",
+      "id": 1,
+      "last_error": "",
+      "last_success_at": "2026-07-31 05:09:42.233260+00:00",
+      "last_test_success_at": null,
+      "last_tested_at": null,
+      "override_environment": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+      "provider": "FINNHUB",
+      "rate_limit_state": {
+        "limit": "",
+        "remaining": "",
+        "reset": ""
+      },
+      "updated_at": "2026-07-31 05:09:42.233363+00:00",
+      "updated_by": ""
+    }
+  ]
+}
+
+===== instruments.InstrumentProviderMapping =====
+{
+  "count": 501,
+  "filters": {},
+  "latest_rows": [
+    {
+      "created_at": "2026-07-31 05:10:33.283432+00:00",
+      "currency": "",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 501,
+      "instrument_id": 2,
+      "isin": "",
+      "last_error": "IBKR contract identity changed; Finnhub mapping must be reverified",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:10:33.285679+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.422436+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 500,
+      "instrument_id": 502,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "ZTS",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.422445+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.409357+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 499,
+      "instrument_id": 501,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "ZBH",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.409365+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.396318+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 498,
+      "instrument_id": 500,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "ZBRA",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.396330+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.382438+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 497,
+      "instrument_id": 499,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "YUM",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.382446+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.371457+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 496,
+      "instrument_id": 498,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "XYL",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.371466+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.359130+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 495,
+      "instrument_id": 497,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "XEL",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.359139+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.342131+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 494,
+      "instrument_id": 496,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WYNN",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.342138+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.330033+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 493,
+      "instrument_id": 495,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WDAY",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.330041+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.317145+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 492,
+      "instrument_id": 494,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WTW",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.317154+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.302469+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 491,
+      "instrument_id": 493,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WMB",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.302477+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.290180+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 490,
+      "instrument_id": 492,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WSM",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.290188+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.277703+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 489,
+      "instrument_id": 491,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WY",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.277721+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.262968+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 488,
+      "instrument_id": 490,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WDC",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.262980+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.245845+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 487,
+      "instrument_id": 489,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WST",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.245859+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.228644+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 486,
+      "instrument_id": 488,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WELL",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.228660+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.209284+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 485,
+      "instrument_id": 487,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WFC",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.209298+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.188057+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 484,
+      "instrument_id": 486,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WEC",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.188076+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.169629+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 483,
+      "instrument_id": 485,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WAT",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.169643+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.153605+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 482,
+      "instrument_id": 484,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WM",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.153618+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.138477+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 481,
+      "instrument_id": 483,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WBD",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.138488+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.123407+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 480,
+      "instrument_id": 482,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "DIS",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.123421+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.107117+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 479,
+      "instrument_id": 481,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WMT",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.107132+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.090165+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 478,
+      "instrument_id": 480,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WAB",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.090179+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.074284+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 477,
+      "instrument_id": 479,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "GWW",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.074298+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.058491+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 476,
+      "instrument_id": 478,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "WRB",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.058504+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.042099+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 475,
+      "instrument_id": 477,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "VMC",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.042112+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.025843+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 474,
+      "instrument_id": 476,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "VST",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.025854+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:54.009933+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 473,
+      "instrument_id": 475,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "V",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:54.009945+00:00",
+      "verification_method": "",
+      "verified_at": null
+    },
+    {
+      "created_at": "2026-07-31 05:07:53.993248+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 472,
+      "instrument_id": 474,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "VICI",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:53.993259+00:00",
+      "verification_method": "",
+      "verified_at": null
+    }
+  ]
+}
+
+===== broker_gateway.BrokerGatewaySession =====
+{
+  "count": 1,
+  "filters": {},
+  "latest_rows": [
+    {
+      "child_container_id": "paper-ibkr-gateway",
+      "child_container_name": "paper-ibkr-gateway",
+      "commands_enabled": true,
+      "connected_at": "2026-07-31 05:05:38.794181+00:00",
+      "created_at": "2026-07-31 05:05:34.431377+00:00",
+      "deleted_at": null,
+      "display_name": "Local paper IBKR Gateway",
+      "encrypted_gateway_token": "[REDACTED]",
+      "encrypted_novnc_password": "[REDACTED]",
+      "id": "7c807a95-70ff-4e30-a70a-f60985659124",
+      "internal_base_url": "http://paper-ibkr-gateway:8080/api/v1",
+      "last_checked_at": "2026-07-31 05:28:44.668830+00:00",
+      "last_error": "",
+      "last_gateway_state": {
+        "connected": true,
+        "connection_generation": "ef02afc3-78cb-44f2-8901-fef1f01c5c00",
+        "last_callback": "2026-07-31T05:28:42.635Z",
+        "mode": "paper",
+        "mode_matches_session": true,
+        "reconciled": true,
+        "worker": "4de9ce52aeb2:31"
+      },
+      "last_qch_state": {
+        "name": "paper-ibkr-gateway",
+        "status": "STATIC_DOCKER_COMPOSE"
+      },
+      "lifecycle_version": 281,
+      "mode": "paper",
+      "provisioned_at": "2026-07-31 05:05:34.430407+00:00",
+      "status": "CONNECTED",
+      "updated_at": "2026-07-31 05:28:44.668976+00:00",
+      "username_hint": "local-paper"
+    }
+  ]
+}
+
+===== accounts.BrokerAccount =====
+{
+  "count": 1,
+  "filters": {},
+  "latest_rows": [
+    {
+      "account_id": "DUQ275858",
+      "alias": "IBKR DUQ275858",
+      "available_cash": "920751.25000000",
+      "base_currency": "INR",
+      "buying_power": "981745.04000000",
+      "daily_pnl": "0E-8",
+      "id": 1,
+      "is_reconciled": true,
+      "kill_switch": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+      "net_liquidation": "994767.77000000",
+      "updated_at": "2026-07-31 05:28:44.562046+00:00"
+    }
+  ]
+}
+
+===== portfolios.TradingPortfolio =====
+{
+  "count": 1,
+  "filters": {},
+  "latest_rows": [
+    {
+      "account_id": 1,
+      "cash_buffer_pct": "0.020000",
+      "gateway_session_id": "7c807a95-70ff-4e30-a70a-f60985659124",
+      "id": 1,
+      "kill_switch": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+      "margin_buffer_pct": "0.100000",
+      "minimum_drift": "0.001000",
+      "minimum_notional": "10.00000000",
+      "minimum_quantity": "1E-8",
+      "name": "Local paper IBKR Gateway \u00b7 DUQ275858"
+    }
+  ]
+}
+
+===== market_streams.MarketDataSubscription =====
+{
+  "count": 1,
+  "filters": {},
+  "latest_rows": [
+    {
+      "active_provider": "IBKR",
+      "conid": 265598,
+      "consumer_count": 1,
+      "created_at": "2026-07-31 05:11:36.219938+00:00",
+      "failed_over_at": null,
+      "fallback_reason": "",
+      "fallback_state": "PRIMARY",
+      "gateway_command_id": 71,
+      "gateway_connection_generation": "ef02afc3-78cb-44f2-8901-fef1f01c5c00",
+      "gateway_session_id": "7c807a95-70ff-4e30-a70a-f60985659124",
+      "id": 1,
+      "instrument_id": 2,
+      "last_error": "",
+      "last_event_at": "2026-07-31 05:28:30.642000+00:00",
+      "last_fallback_event_at": null,
+      "last_primary_event_at": "2026-07-31 05:28:30.642000+00:00",
+      "last_published_window_end": "2026-07-31 00:00:00+00:00",
+      "primary_probe_event_count": 0,
+      "primary_probe_generation": null,
+      "primary_probe_started_at": null,
+      "primary_provider": "IBKR",
+      "provider_generation": "f68e9fc0-81b6-4f6f-b18c-6d120a74358d",
+      "recovered_at": null,
+      "request_id": "8622bd79-7c89-4ade-a151-e006e98f0ca3",
+      "requested_at": "2026-07-31 05:28:44.487563+00:00",
+      "required_history_bars": 25,
+      "state": "SUBSCRIBING",
+      "timeframe": "1m",
+      "updated_at": "2026-07-31 05:28:44.487681+00:00"
+    }
+  ]
+}
+
+===== market_streams.InstrumentMarketState =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== market_streams.MarketBar =====
+{
+  "count": 25,
+  "filters": {},
+  "latest_rows": [
+    {
+      "bar_id": "a830dd418648371e655c34e99568cbc34dd334b979bad14126122663ce9035a9",
+      "close": "312.38000000",
+      "high": "312.45000000",
+      "id": 25,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.30000000",
+      "open": "312.40000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:52.846415+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "2479.00000000",
+      "window_end": "2026-07-31 00:00:00+00:00",
+      "window_start": "2026-07-30 23:59:00+00:00"
+    },
+    {
+      "bar_id": "21338d93205ea48082e8b17fbf7ba8e457a2baa36425271149b9e60fc2fdac41",
+      "close": "312.40000000",
+      "high": "312.65000000",
+      "id": 24,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.40000000",
+      "open": "312.63000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:52.846142+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "8531.00000000",
+      "window_end": "2026-07-30 23:59:00+00:00",
+      "window_start": "2026-07-30 23:58:00+00:00"
+    },
+    {
+      "bar_id": "309d78d1613e149a418ab51c8d7fe5caaae8cfa0cc41835a7d965ccfdee3375e",
+      "close": "312.70000000",
+      "high": "313.11000000",
+      "id": 23,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.70000000",
+      "open": "313.10000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:52.845800+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "3076.00000000",
+      "window_end": "2026-07-30 23:58:00+00:00",
+      "window_start": "2026-07-30 23:57:00+00:00"
+    },
+    {
+      "bar_id": "387fff477428b9dfa294328dbee883d58766dff4c1eeddddd1dc257921a5938a",
+      "close": "313.10000000",
+      "high": "313.20000000",
+      "id": 22,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "313.05000000",
+      "open": "313.05000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:52.845059+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "1959.00000000",
+      "window_end": "2026-07-30 23:57:00+00:00",
+      "window_start": "2026-07-30 23:56:00+00:00"
+    },
+    {
+      "bar_id": "6460ec000d55dc8f921527e4e2a78c1805deeaba9afe224d0bf3dff72a8440c5",
+      "close": "313.20000000",
+      "high": "313.30000000",
+      "id": 21,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "313.05000000",
+      "open": "313.30000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.861404+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "1015.00000000",
+      "window_end": "2026-07-30 23:56:00+00:00",
+      "window_start": "2026-07-30 23:55:00+00:00"
+    },
+    {
+      "bar_id": "4d9a4a390e2c817e9017fc342aa92318db80bdb7eef3d64064a72eeaff11622a",
+      "close": "313.12000000",
+      "high": "313.26000000",
+      "id": 20,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "313.10000000",
+      "open": "313.26000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.861110+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "2775.00000000",
+      "window_end": "2026-07-30 23:55:00+00:00",
+      "window_start": "2026-07-30 23:54:00+00:00"
+    },
+    {
+      "bar_id": "aed2f7bef2e6d1f84521d66a10041b20f2f3564a848959fe30b1f95615dfe150",
+      "close": "313.20000000",
+      "high": "313.30000000",
+      "id": 19,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "313.00000000",
+      "open": "313.20000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.860714+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "2414.00000000",
+      "window_end": "2026-07-30 23:54:00+00:00",
+      "window_start": "2026-07-30 23:53:00+00:00"
+    },
+    {
+      "bar_id": "fde5587911e419d5147eff1b790dfbb76bbfa1eec5368367072220cf34b51043",
+      "close": "313.30000000",
+      "high": "313.47000000",
+      "id": 18,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.79000000",
+      "open": "312.79000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.860366+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "4674.00000000",
+      "window_end": "2026-07-30 23:53:00+00:00",
+      "window_start": "2026-07-30 23:52:00+00:00"
+    },
+    {
+      "bar_id": "b66d99375029641ab1d12685584fc6cd262a3ff922edb3646de656f4ae7812e7",
+      "close": "312.80000000",
+      "high": "312.80000000",
+      "id": 17,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.80000000",
+      "open": "312.80000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.859953+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "175.00000000",
+      "window_end": "2026-07-30 23:52:00+00:00",
+      "window_start": "2026-07-30 23:51:00+00:00"
+    },
+    {
+      "bar_id": "0b31e46b997f7f86ed3202724383e03fe08470930f5472abd18b34eabc9a8d8d",
+      "close": "312.74000000",
+      "high": "312.74000000",
+      "id": 16,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.65000000",
+      "open": "312.70000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.859120+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "276.00000000",
+      "window_end": "2026-07-30 23:51:00+00:00",
+      "window_start": "2026-07-30 23:50:00+00:00"
+    },
+    {
+      "bar_id": "035d9ddc84f74725fafdb36ba44da1c579e5442044c4666dfb5001bb9e122e0e",
+      "close": "312.80000000",
+      "high": "312.81000000",
+      "id": 15,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.70000000",
+      "open": "312.81000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.858895+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "300.00000000",
+      "window_end": "2026-07-30 23:50:00+00:00",
+      "window_start": "2026-07-30 23:49:00+00:00"
+    },
+    {
+      "bar_id": "57c232d2d186bb74befd3e8902b9f8e60b228e39db1b719c52eeec8af9b8141f",
+      "close": "312.85000000",
+      "high": "313.00000000",
+      "id": 14,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.76000000",
+      "open": "312.76000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.858674+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "1499.00000000",
+      "window_end": "2026-07-30 23:49:00+00:00",
+      "window_start": "2026-07-30 23:48:00+00:00"
+    },
+    {
+      "bar_id": "6626552ad10c553a99e5e3b61243b91ea541844fbf1b617af0edfa3de12a2f06",
+      "close": "312.70000000",
+      "high": "312.79000000",
+      "id": 13,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.70000000",
+      "open": "312.79000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.858461+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "521.00000000",
+      "window_end": "2026-07-30 23:48:00+00:00",
+      "window_start": "2026-07-30 23:47:00+00:00"
+    },
+    {
+      "bar_id": "fa33c7a6c51672c8317ce4c44b57b9c2702375a21ba725c4ddbf4b55f73ca44f",
+      "close": "312.70000000",
+      "high": "312.77000000",
+      "id": 12,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.70000000",
+      "open": "312.77000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.858249+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "395.00000000",
+      "window_end": "2026-07-30 23:47:00+00:00",
+      "window_start": "2026-07-30 23:46:00+00:00"
+    },
+    {
+      "bar_id": "9577c0e7e1f64c9d5bc0a4e2e49b04639437185bcd1eff1d892c0e1548fce48a",
+      "close": "312.89000000",
+      "high": "313.00000000",
+      "id": 11,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.66000000",
+      "open": "312.72000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.858009+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "621.00000000",
+      "window_end": "2026-07-30 23:46:00+00:00",
+      "window_start": "2026-07-30 23:45:00+00:00"
+    },
+    {
+      "bar_id": "09b659e2d86a1ddb4998723d334f7b889e5452e4bcd300f2915f950d5be4ee0e",
+      "close": "312.58000000",
+      "high": "312.61000000",
+      "id": 10,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.45000000",
+      "open": "312.61000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.857674+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "1782.00000000",
+      "window_end": "2026-07-30 23:45:00+00:00",
+      "window_start": "2026-07-30 23:44:00+00:00"
+    },
+    {
+      "bar_id": "53cc1baec9f8ccc73676a7c73695f58260f167cbc36e3c3247e0f5250e857b96",
+      "close": "312.51000000",
+      "high": "312.65000000",
+      "id": 9,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.12000000",
+      "open": "312.65000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.857470+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "4809.00000000",
+      "window_end": "2026-07-30 23:44:00+00:00",
+      "window_start": "2026-07-30 23:43:00+00:00"
+    },
+    {
+      "bar_id": "fcc7f9765b2f1bd1caa41fc1f53b3c7690f9e46a6559510a9d2b9e9e7aee33c1",
+      "close": "312.70000000",
+      "high": "312.82000000",
+      "id": 8,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.65000000",
+      "open": "312.80000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.857271+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "2448.00000000",
+      "window_end": "2026-07-30 23:43:00+00:00",
+      "window_start": "2026-07-30 23:42:00+00:00"
+    },
+    {
+      "bar_id": "7d52d9123a18c8ffb6f93a7fa10c51a9cadd1ee3541dc286e5d7c75c032e3d67",
+      "close": "312.84000000",
+      "high": "313.43000000",
+      "id": 7,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "312.50000000",
+      "open": "313.40000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.857073+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "20703.00000000",
+      "window_end": "2026-07-30 23:42:00+00:00",
+      "window_start": "2026-07-30 23:41:00+00:00"
+    },
+    {
+      "bar_id": "725f07689e88ed83bba97b054ac16682e5aa7f1c4348b6f54ec5ee221b1d39bb",
+      "close": "313.50000000",
+      "high": "313.90000000",
+      "id": 6,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "313.50000000",
+      "open": "313.90000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.856876+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "1208.00000000",
+      "window_end": "2026-07-30 23:41:00+00:00",
+      "window_start": "2026-07-30 23:40:00+00:00"
+    },
+    {
+      "bar_id": "931dd8834b2d0d6f060a05946699f157ebd55b5b3a2495e0a1d061ca80f77b45",
+      "close": "313.94000000",
+      "high": "313.94000000",
+      "id": 5,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "313.86000000",
+      "open": "313.86000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.856669+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "90.00000000",
+      "window_end": "2026-07-30 23:40:00+00:00",
+      "window_start": "2026-07-30 23:39:00+00:00"
+    },
+    {
+      "bar_id": "0910488f63fc7dbfacd0f15443c1257b6e3e6bef5f9c370a6f64e01f4229c0bd",
+      "close": "313.96000000",
+      "high": "313.96000000",
+      "id": 4,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "313.65000000",
+      "open": "313.70000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.856462+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "1500.00000000",
+      "window_end": "2026-07-30 23:39:00+00:00",
+      "window_start": "2026-07-30 23:38:00+00:00"
+    },
+    {
+      "bar_id": "61cf1cfae81cd9a6de7f8345ac8c1402b42f0c67429ec5243fcb292b82eb85ac",
+      "close": "313.79000000",
+      "high": "313.79000000",
+      "id": 3,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "313.60000000",
+      "open": "313.75000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.856253+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "1580.00000000",
+      "window_end": "2026-07-30 23:38:00+00:00",
+      "window_start": "2026-07-30 23:37:00+00:00"
+    },
+    {
+      "bar_id": "135768a833119c41dc522b4ddbc0c0d5097a4340cc16cf8f9e542e4d48fb6afa",
+      "close": "313.75000000",
+      "high": "313.99000000",
+      "id": 2,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "313.67000000",
+      "open": "313.92000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.855989+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "1595.00000000",
+      "window_end": "2026-07-30 23:37:00+00:00",
+      "window_start": "2026-07-30 23:36:00+00:00"
+    },
+    {
+      "bar_id": "460f69b48df7f8df4fa783e6f25af7af84bd061a1866776ddef7e603e89b56f7",
+      "close": "313.86000000",
+      "high": "314.38000000",
+      "id": 1,
+      "instrument_id": 2,
+      "interval": "1m",
+      "is_final": true,
+      "low": "313.80000000",
+      "open": "314.35000000",
+      "processing_mode": "WARMUP",
+      "produced_at": "2026-07-31 05:11:50.855407+00:00",
+      "provider": "IBKR",
+      "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+      "source": "ibkr_historical",
+      "source_event_count": 1,
+      "version": 1,
+      "volume": "5573.00000000",
+      "window_end": "2026-07-30 23:36:00+00:00",
+      "window_start": "2026-07-30 23:35:00+00:00"
+    }
+  ]
+}
+
+===== market_streams.IndicatorValue =====
+{
+  "count": 25,
+  "filters": {},
+  "latest_rows": [
+    {
+      "bar_id": 25,
+      "created_at": "2026-07-31 05:11:54.477087+00:00",
+      "event_time": "2026-07-31 00:00:00+00:00",
+      "id": 25,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": "2963.5500000000",
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "a830dd418648371e655c34e99568cbc34dd334b979bad14126122663ce9035a9",
+      "source_bar_version": 1,
+      "source_key": "360dfd1c186de43f151ec4f7fcbd7e6d036e3ef21330490739906c5e4b3ae1cf",
+      "timeframe": "1m",
+      "value": "3083.0000000000"
+    },
+    {
+      "bar_id": 24,
+      "created_at": "2026-07-31 05:11:54.435485+00:00",
+      "event_time": "2026-07-30 23:59:00+00:00",
+      "id": 24,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": "2612.0000000000",
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "21338d93205ea48082e8b17fbf7ba8e457a2baa36425271149b9e60fc2fdac41",
+      "source_bar_version": 1,
+      "source_key": "262c4592005d66ee4062ff8a91bee101f02d20040f81f52e20760b26be2f0c67",
+      "timeframe": "1m",
+      "value": "2963.5500000000"
+    },
+    {
+      "bar_id": 23,
+      "created_at": "2026-07-31 05:11:54.400452+00:00",
+      "event_time": "2026-07-30 23:58:00+00:00",
+      "id": 23,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": "2537.2000000000",
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "309d78d1613e149a418ab51c8d7fe5caaae8cfa0cc41835a7d965ccfdee3375e",
+      "source_bar_version": 1,
+      "source_key": "1a165a26049844e57dfc31b89bc8ed544c33c92e464511e5fd60ba0c0a41a015",
+      "timeframe": "1m",
+      "value": "2612.0000000000"
+    },
+    {
+      "bar_id": 22,
+      "created_at": "2026-07-31 05:11:54.366183+00:00",
+      "event_time": "2026-07-30 23:57:00+00:00",
+      "id": 22,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": "2519.0000000000",
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "387fff477428b9dfa294328dbee883d58766dff4c1eeddddd1dc257921a5938a",
+      "source_bar_version": 1,
+      "source_key": "4c3e8eea776625a444b26898357c6738e8984e0445dbd5c8ed11f56528a24e24",
+      "timeframe": "1m",
+      "value": "2537.2000000000"
+    },
+    {
+      "bar_id": 21,
+      "created_at": "2026-07-31 05:11:53.060132+00:00",
+      "event_time": "2026-07-30 23:56:00+00:00",
+      "id": 21,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": "2746.9000000000",
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "6460ec000d55dc8f921527e4e2a78c1805deeaba9afe224d0bf3dff72a8440c5",
+      "source_bar_version": 1,
+      "source_key": "b668970cc8583e8e0b4e0d21bb4403b3814249e8ea75733518b5621ea4579bbe",
+      "timeframe": "1m",
+      "value": "2519.0000000000"
+    },
+    {
+      "bar_id": 20,
+      "created_at": "2026-07-31 05:11:53.025643+00:00",
+      "event_time": "2026-07-30 23:55:00+00:00",
+      "id": 20,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "4d9a4a390e2c817e9017fc342aa92318db80bdb7eef3d64064a72eeaff11622a",
+      "source_bar_version": 1,
+      "source_key": "2c9bf29715730879928526ee2749ced368955d74c6aadf952e32826f4fc7f449",
+      "timeframe": "1m",
+      "value": "2746.9000000000"
+    },
+    {
+      "bar_id": 19,
+      "created_at": "2026-07-31 05:11:52.990166+00:00",
+      "event_time": "2026-07-30 23:54:00+00:00",
+      "id": 19,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "aed2f7bef2e6d1f84521d66a10041b20f2f3564a848959fe30b1f95615dfe150",
+      "source_bar_version": 1,
+      "source_key": "2726464d20f6713195fadfa0c8d26369e9f2fcd57e299dcaa993c18079b58e79",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 18,
+      "created_at": "2026-07-31 05:11:52.956615+00:00",
+      "event_time": "2026-07-30 23:53:00+00:00",
+      "id": 18,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "fde5587911e419d5147eff1b790dfbb76bbfa1eec5368367072220cf34b51043",
+      "source_bar_version": 1,
+      "source_key": "b752f33d9e7b67bfeaf5f81dc7fb5c3aea17b88dcfaf6f7232c9127c5373ae06",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 17,
+      "created_at": "2026-07-31 05:11:52.924301+00:00",
+      "event_time": "2026-07-30 23:52:00+00:00",
+      "id": 17,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "b66d99375029641ab1d12685584fc6cd262a3ff922edb3646de656f4ae7812e7",
+      "source_bar_version": 1,
+      "source_key": "59120aea5722bf14f86ec93bde090651713c6c4904b6e0ce03106daa17b5ac14",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 16,
+      "created_at": "2026-07-31 05:11:52.888526+00:00",
+      "event_time": "2026-07-30 23:51:00+00:00",
+      "id": 16,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "0b31e46b997f7f86ed3202724383e03fe08470930f5472abd18b34eabc9a8d8d",
+      "source_bar_version": 1,
+      "source_key": "5e2a11226d0db526fe0ee627e5ca5ef1304bd157ec5025f4cef60b00f6d8ae8b",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 15,
+      "created_at": "2026-07-31 05:11:52.850056+00:00",
+      "event_time": "2026-07-30 23:50:00+00:00",
+      "id": 15,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "035d9ddc84f74725fafdb36ba44da1c579e5442044c4666dfb5001bb9e122e0e",
+      "source_bar_version": 1,
+      "source_key": "6080899558fd70ec4967f83421ab1d81745cf95581611510bdfac6747ff86c88",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 14,
+      "created_at": "2026-07-31 05:11:52.817435+00:00",
+      "event_time": "2026-07-30 23:49:00+00:00",
+      "id": 14,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "57c232d2d186bb74befd3e8902b9f8e60b228e39db1b719c52eeec8af9b8141f",
+      "source_bar_version": 1,
+      "source_key": "2aecc13182cc95a8e5b6271e980b7b0aa46e14ff7297428dcafd64c3b9ad4430",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 13,
+      "created_at": "2026-07-31 05:11:52.786097+00:00",
+      "event_time": "2026-07-30 23:48:00+00:00",
+      "id": 13,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "6626552ad10c553a99e5e3b61243b91ea541844fbf1b617af0edfa3de12a2f06",
+      "source_bar_version": 1,
+      "source_key": "c90f107062d2e318429fd9f6cb866a3dbe83ad71a9839307dde595b28e8e0a89",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 12,
+      "created_at": "2026-07-31 05:11:52.756347+00:00",
+      "event_time": "2026-07-30 23:47:00+00:00",
+      "id": 12,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "fa33c7a6c51672c8317ce4c44b57b9c2702375a21ba725c4ddbf4b55f73ca44f",
+      "source_bar_version": 1,
+      "source_key": "0c2cb2261137ebb977633f6ccdc844872f3f5224a6249366ac3ca90cd4c59afc",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 11,
+      "created_at": "2026-07-31 05:11:52.720066+00:00",
+      "event_time": "2026-07-30 23:46:00+00:00",
+      "id": 11,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "9577c0e7e1f64c9d5bc0a4e2e49b04639437185bcd1eff1d892c0e1548fce48a",
+      "source_bar_version": 1,
+      "source_key": "2980c5dd2b8ce86d6658e03e0a07aedf8a01b6b56f119f10dce8b9ceab5e7ff9",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 10,
+      "created_at": "2026-07-31 05:11:52.690173+00:00",
+      "event_time": "2026-07-30 23:45:00+00:00",
+      "id": 10,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "09b659e2d86a1ddb4998723d334f7b889e5452e4bcd300f2915f950d5be4ee0e",
+      "source_bar_version": 1,
+      "source_key": "b7f4189d816f4cda2ceb6f0c3fb5148a4c363e97766d593cf35a04e1d1a73380",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 9,
+      "created_at": "2026-07-31 05:11:52.659106+00:00",
+      "event_time": "2026-07-30 23:44:00+00:00",
+      "id": 9,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "53cc1baec9f8ccc73676a7c73695f58260f167cbc36e3c3247e0f5250e857b96",
+      "source_bar_version": 1,
+      "source_key": "7c47b697119ffe1eebaa6d0310fc16dd549fc0d336525d454392651ba6362bc3",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 8,
+      "created_at": "2026-07-31 05:11:52.631136+00:00",
+      "event_time": "2026-07-30 23:43:00+00:00",
+      "id": 8,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "fcc7f9765b2f1bd1caa41fc1f53b3c7690f9e46a6559510a9d2b9e9e7aee33c1",
+      "source_bar_version": 1,
+      "source_key": "4664e7bb3160e6181fa49737954ace4f7ea3f098e742957e6aeb2d8995a68032",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 7,
+      "created_at": "2026-07-31 05:11:52.601121+00:00",
+      "event_time": "2026-07-30 23:42:00+00:00",
+      "id": 7,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "7d52d9123a18c8ffb6f93a7fa10c51a9cadd1ee3541dc286e5d7c75c032e3d67",
+      "source_bar_version": 1,
+      "source_key": "b2d28133f137c6d52598dc2cc4890a90af867024bdd44fa33b4e1c09db7dbca5",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 6,
+      "created_at": "2026-07-31 05:11:52.565881+00:00",
+      "event_time": "2026-07-30 23:41:00+00:00",
+      "id": 6,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "725f07689e88ed83bba97b054ac16682e5aa7f1c4348b6f54ec5ee221b1d39bb",
+      "source_bar_version": 1,
+      "source_key": "920129738dc3c8e7b9bd7bb5e1e188b4bbfa98d2ce1b08c7120954d59403f1ac",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 5,
+      "created_at": "2026-07-31 05:11:52.532835+00:00",
+      "event_time": "2026-07-30 23:40:00+00:00",
+      "id": 5,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "931dd8834b2d0d6f060a05946699f157ebd55b5b3a2495e0a1d061ca80f77b45",
+      "source_bar_version": 1,
+      "source_key": "1978c9f9b5cf231ac7fa226d99ce07da4c6a280863e80387cc9163e446403512",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 4,
+      "created_at": "2026-07-31 05:11:52.498832+00:00",
+      "event_time": "2026-07-30 23:39:00+00:00",
+      "id": 4,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "0910488f63fc7dbfacd0f15443c1257b6e3e6bef5f9c370a6f64e01f4229c0bd",
+      "source_bar_version": 1,
+      "source_key": "a8946d01fd797095ed6c82443421276f30f8e8ac96207838e67d21f42692a76e",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 3,
+      "created_at": "2026-07-31 05:11:52.458778+00:00",
+      "event_time": "2026-07-30 23:38:00+00:00",
+      "id": 3,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "61cf1cfae81cd9a6de7f8345ac8c1402b42f0c67429ec5243fcb292b82eb85ac",
+      "source_bar_version": 1,
+      "source_key": "9ed936cb7b504937b6aafc74230a1cb745c3c5c8aa9fb13203ed826ea0bab790",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 2,
+      "created_at": "2026-07-31 05:11:52.427061+00:00",
+      "event_time": "2026-07-30 23:37:00+00:00",
+      "id": 2,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "135768a833119c41dc522b4ddbc0c0d5097a4340cc16cf8f9e542e4d48fb6afa",
+      "source_bar_version": 1,
+      "source_key": "bd9312e1485a691373b5a6f5ff1980fcd1f4ef56637e7eac864c1a4bda9fa63e",
+      "timeframe": "1m",
+      "value": null
+    },
+    {
+      "bar_id": 1,
+      "created_at": "2026-07-31 05:11:52.391476+00:00",
+      "event_time": "2026-07-30 23:36:00+00:00",
+      "id": 1,
+      "implementation_version": 1,
+      "indicator": "average_volume",
+      "indicator_name": "average_volume",
+      "indicator_role": "",
+      "instrument_id": 2,
+      "is_final": true,
+      "parameters": {
+        "window": 20
+      },
+      "previous_value": null,
+      "processing_mode": "WARMUP",
+      "requirement_identity_hash": "489961b1481a642640ef3785d48614751835a5db743c552258f95256a6cafe25",
+      "source_bar_id": "460f69b48df7f8df4fa783e6f25af7af84bd061a1866776ddef7e603e89b56f7",
+      "source_bar_version": 1,
+      "source_key": "5e63015988d9fe3cdb2537a2f8f8e99dd1ab18664f80c7f4255ef688e0663862",
+      "timeframe": "1m",
+      "value": null
+    }
+  ]
+}
+
+===== strategies.StrategyInstance =====
+{
+  "count": 1,
+  "filters": {},
+  "latest_rows": [
+    {
+      "allocated_capital": "0E-8",
+      "block_reason": "IBKR error 354: Requested market data is not subscribed. Check API status by selecting the Account menu then under Management choose Market Data Subscription Manager and/or availability of delayed data.",
+      "created_at": "2026-07-31 05:11:35.681145+00:00",
+      "definition_id": 5,
+      "effective_from": "2026-07-31 05:11:36.150822+00:00",
+      "effective_to": null,
+      "enabled": true,
+      "execution_active_at": null,
+      "execution_mode": "PAPER",
+      "first_evaluation_completed_at": null,
+      "id": 1,
+      "instrument_id": 2,
+      "kill_switch": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+      "last_market_bar_id": "",
+      "last_market_bar_version": 0,
+      "last_market_event_at": null,
+      "name": "Real IBKR Paper AAPL Smoke",
+      "order_policy_id": null,
+      "parameters": {
+        "direction": "LONG"
+      },
+      "portfolio_id": 1,
+      "ready_waiting_since": null,
+      "risk_policy_id": null,
+      "state": "BLOCKED",
+      "state_data": {
+        "market_data_blocked_at": "2026-07-31T05:28:35.832101+00:00",
+        "market_data_resume_state": "WARMING_UP"
+      },
+      "subscription_ready_at": "2026-07-31 05:11:44.522806+00:00",
+      "target_configuration": {
+        "capital_share": 1,
+        "priority": 100,
+        "target_weight": 0.00067037
+      },
+      "timeframe": "1m",
+      "universe": [],
+      "updated_at": "2026-07-31 05:28:35.832236+00:00",
+      "version": 1,
+      "warmup_completed_at": null,
+      "warmup_last_progress_at": "2026-07-31 05:28:34.592287+00:00",
+      "warmup_progress": 0,
+      "warmup_started_at": "2026-07-31 05:11:36.150822+00:00",
+      "workflow_trace_id": "fdeefd29-3d19-40ae-bc10-34ae31d95edc"
+    }
+  ]
+}
+
+===== strategies.StrategyAction =====
+{
+  "count": 1,
+  "filters": {},
+  "latest_rows": [
+    {
+      "action": "enable",
+      "attempt_count": 1,
+      "completed_at": "2026-07-31 05:11:45.689213+00:00",
+      "created_at": "2026-07-31 05:11:35.724131+00:00",
+      "id": 1,
+      "idempotency_key": "create-activate:bf69d0e6fdd9eee0f21285854b6d6bd292b907abb550bbe5b390189f829b3122",
+      "last_error": "IBKR error 420: Invalid Real-time Query:No market data permissions for ISLAND STK",
+      "request_hash": "8e2941f14f1cfe2f139bc4bbfbc32b86d7a125368e752b89cacebd8cc872afe5",
+      "result": {
+        "activation_status": "BLOCKED",
+        "strategy_instance_id": 1,
+        "trace_id": "fdeefd29-3d19-40ae-bc10-34ae31d95edc"
+      },
+      "retryable": true,
+      "status": "FAILED",
+      "strategy_instance_id": 1
+    }
+  ]
+}
+
+===== strategies.StrategyRun =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== oms.OrderIntent =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== oms.Order =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== execution.BrokerCommand =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== execution.Fill =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== risk.RiskCheckResult =====
+{
+  "count": 0,
+  "filters": {},
+  "latest_rows": []
+}
+
+===== audit.OutboxEvent =====
+{
+  "count": 52,
+  "filters": {},
+  "latest_rows": [
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:29:29.574298+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:28:29.486580+00:00",
+      "event_id": "d1c665df-9e15-4a5b-bc66-f0b2fffb5a5f",
+      "event_type": "reconciliation.completed",
+      "id": 52,
+      "idempotency_key": "reconciliation:24:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 24,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:28:30.577993+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:28:29.718457+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:27:29.578974+00:00",
+      "event_id": "a7cb6573-815b-4f8e-ab15-246b618f21e3",
+      "event_type": "reconciliation.completed",
+      "id": 51,
+      "idempotency_key": "reconciliation:23:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 23,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:27:30.754184+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:27:29.567474+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:26:29.483117+00:00",
+      "event_id": "85ecf69f-a8a8-4cf7-b5fd-1b54c25d62a3",
+      "event_type": "reconciliation.completed",
+      "id": 50,
+      "idempotency_key": "reconciliation:22:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 22,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:26:30.570197+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:26:29.578931+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:25:29.496480+00:00",
+      "event_id": "123254e0-f99a-4de6-9ad8-05832d834696",
+      "event_type": "reconciliation.completed",
+      "id": 49,
+      "idempotency_key": "reconciliation:21:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 21,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:25:30.582161+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:25:29.505876+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:24:29.456158+00:00",
+      "event_id": "5fedec2b-d17b-4235-9a5e-89f55cc94ba2",
+      "event_type": "reconciliation.completed",
+      "id": 48,
+      "idempotency_key": "reconciliation:20:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 20,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:24:30.509235+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:24:29.508463+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:23:29.458976+00:00",
+      "event_id": "781a11e4-78e5-4220-a509-795f4d0bf9dd",
+      "event_type": "reconciliation.completed",
+      "id": 47,
+      "idempotency_key": "reconciliation:19:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 19,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:23:30.512325+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:23:29.502748+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:22:29.453915+00:00",
+      "event_id": "84441b2e-54d8-443c-bf86-9cb98765bf4d",
+      "event_type": "reconciliation.completed",
+      "id": 46,
+      "idempotency_key": "reconciliation:18:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 18,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:22:30.505412+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:22:29.524810+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:21:29.453373+00:00",
+      "event_id": "d02d3889-942c-461b-909d-a1fe61c02f1e",
+      "event_type": "reconciliation.completed",
+      "id": 45,
+      "idempotency_key": "reconciliation:17:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 17,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:21:30.527766+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:21:29.528425+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:20:29.456697+00:00",
+      "event_id": "341ea9e7-9de6-47df-919c-749e3d0cbdb6",
+      "event_type": "reconciliation.completed",
+      "id": 44,
+      "idempotency_key": "reconciliation:16:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 16,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:20:30.531201+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:20:29.525284+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:19:29.453586+00:00",
+      "event_id": "3e8c2de2-9b80-4655-979f-b7c7fc6fd840",
+      "event_type": "reconciliation.completed",
+      "id": 43,
+      "idempotency_key": "reconciliation:15:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 15,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:19:30.529049+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:19:29.531068+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:18:29.458685+00:00",
+      "event_id": "b4568a79-2af7-43d8-af73-b94ef8ac0afe",
+      "event_type": "reconciliation.completed",
+      "id": 42,
+      "idempotency_key": "reconciliation:14:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 14,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:18:30.534897+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:18:29.548656+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:17:29.485313+00:00",
+      "event_id": "d55d6adf-5f6e-4ede-9937-7f995289eb38",
+      "event_type": "reconciliation.completed",
+      "id": 41,
+      "idempotency_key": "reconciliation:13:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 13,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:17:30.551696+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:17:29.543019+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:16:29.467098+00:00",
+      "event_id": "40c55d1d-8b37-4bf4-a9b3-8281fccdd93d",
+      "event_type": "reconciliation.completed",
+      "id": 40,
+      "idempotency_key": "reconciliation:12:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 12,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:16:30.546315+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:16:29.688127+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:15:29.458762+00:00",
+      "event_id": "3f92905d-73cd-4a63-9814-75ed2e3dfc39",
+      "event_type": "reconciliation.completed",
+      "id": 39,
+      "idempotency_key": "reconciliation:11:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 11,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:15:30.691251+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:15:29.520329+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:14:29.456029+00:00",
+      "event_id": "463b2acc-7be9-4455-a6ae-f90eec0cccec",
+      "event_type": "reconciliation.completed",
+      "id": 38,
+      "idempotency_key": "reconciliation:10:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 10,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:14:30.523422+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:14:29.520701+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:13:29.451314+00:00",
+      "event_id": "d9d321bc-08a1-47f3-892b-a13b74994b3c",
+      "event_type": "reconciliation.completed",
+      "id": 37,
+      "idempotency_key": "reconciliation:9:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 9,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:13:30.523824+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:13:29.521259+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:12:29.451718+00:00",
+      "event_id": "c4f68efa-1518-43e7-ad86-be7ae0999e76",
+      "event_type": "reconciliation.completed",
+      "id": 36,
+      "idempotency_key": "reconciliation:8:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 8,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:12:30.529479+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:47.440572+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.612835+00:00",
+      "event_id": "04cf1637-2677-5e59-b36c-f38c9a7abbc7",
+      "event_type": "market.raw",
+      "id": 35,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:59:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.38",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:59:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "312.45",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.3",
+        "open": "312.4",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:59:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "2479.0",
+        "window_end": "2026-07-31T00:00:00+00:00",
+        "window_start": "2026-07-30T23:59:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:48.453585+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:47.440572+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.563839+00:00",
+      "event_id": "82c68010-799f-50e4-941f-fccd93ee7b78",
+      "event_type": "market.raw",
+      "id": 34,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:58:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.4",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:58:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "312.65",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.4",
+        "open": "312.63",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:58:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "8531.0",
+        "window_end": "2026-07-30T23:59:00+00:00",
+        "window_start": "2026-07-30T23:58:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:48.453585+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:47.440572+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.521493+00:00",
+      "event_id": "1fd2ddfc-010f-5e90-b101-37dd7a03a518",
+      "event_type": "market.raw",
+      "id": 33,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:57:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.7",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:57:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.11",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.7",
+        "open": "313.1",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:57:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "3076.0",
+        "window_end": "2026-07-30T23:58:00+00:00",
+        "window_start": "2026-07-30T23:57:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:48.453585+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:47.440572+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.470790+00:00",
+      "event_id": "ab26b5c0-0e19-53f6-8ee1-8b3f0d60671c",
+      "event_type": "market.raw",
+      "id": 32,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:56:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "313.1",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:56:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.2",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "313.05",
+        "open": "313.05",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:56:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "1959.0",
+        "window_end": "2026-07-30T23:57:00+00:00",
+        "window_start": "2026-07-30T23:56:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:48.453585+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.419787+00:00",
+      "event_id": "fb902df5-1950-55ab-b065-46d90d818c6d",
+      "event_type": "market.raw",
+      "id": 31,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:55:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "313.2",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:55:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.3",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "313.05",
+        "open": "313.3",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:55:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "1015.0",
+        "window_end": "2026-07-30T23:56:00+00:00",
+        "window_start": "2026-07-30T23:55:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.372452+00:00",
+      "event_id": "544e02f4-cfa6-56d4-92f3-a7c3a93c6616",
+      "event_type": "market.raw",
+      "id": 30,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:54:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "313.12",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:54:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.26",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "313.1",
+        "open": "313.26",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:54:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "2775.0",
+        "window_end": "2026-07-30T23:55:00+00:00",
+        "window_start": "2026-07-30T23:54:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.326901+00:00",
+      "event_id": "469e01b7-03f0-53bb-a785-4ecc258031f0",
+      "event_type": "market.raw",
+      "id": 29,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:53:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "313.2",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:53:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.3",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "313.0",
+        "open": "313.2",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:53:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "2414.0",
+        "window_end": "2026-07-30T23:54:00+00:00",
+        "window_start": "2026-07-30T23:53:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.281890+00:00",
+      "event_id": "21d9616f-3f25-5dff-a017-86a585e769a9",
+      "event_type": "market.raw",
+      "id": 28,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:52:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "313.3",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:52:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.47",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.79",
+        "open": "312.79",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:52:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "4674.0",
+        "window_end": "2026-07-30T23:53:00+00:00",
+        "window_start": "2026-07-30T23:52:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.236685+00:00",
+      "event_id": "e8986b7b-35eb-5c66-9bf0-2752a7a455c8",
+      "event_type": "market.raw",
+      "id": 27,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:51:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.8",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:51:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "312.8",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.8",
+        "open": "312.8",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:51:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "175.0",
+        "window_end": "2026-07-30T23:52:00+00:00",
+        "window_start": "2026-07-30T23:51:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.191844+00:00",
+      "event_id": "e2b4b616-dfea-5f27-98c4-4895be96c34b",
+      "event_type": "market.raw",
+      "id": 26,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:50:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.74",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:50:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "312.74",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.65",
+        "open": "312.7",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:50:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "276.0",
+        "window_end": "2026-07-30T23:51:00+00:00",
+        "window_start": "2026-07-30T23:50:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.147864+00:00",
+      "event_id": "70f92aea-033d-52a6-8d30-7cdf7cfa4624",
+      "event_type": "market.raw",
+      "id": 25,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:49:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.8",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:49:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "312.81",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.7",
+        "open": "312.81",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:49:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "300.0",
+        "window_end": "2026-07-30T23:50:00+00:00",
+        "window_start": "2026-07-30T23:49:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.104722+00:00",
+      "event_id": "e64f9d13-2930-53a3-9417-ef3ba89f25fd",
+      "event_type": "market.raw",
+      "id": 24,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:48:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.85",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:48:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.0",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.76",
+        "open": "312.76",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:48:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "1499.0",
+        "window_end": "2026-07-30T23:49:00+00:00",
+        "window_start": "2026-07-30T23:48:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.060844+00:00",
+      "event_id": "fce44d8e-b2b1-599c-b644-a3c6b2ca0a56",
+      "event_type": "market.raw",
+      "id": 23,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:47:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.7",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:47:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "312.79",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.7",
+        "open": "312.79",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:47:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "521.0",
+        "window_end": "2026-07-30T23:48:00+00:00",
+        "window_start": "2026-07-30T23:47:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:45.015461+00:00",
+      "event_id": "7c9523fe-5ab4-5e73-8ab9-cac8ac919428",
+      "event_type": "market.raw",
+      "id": 22,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:46:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.7",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:46:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "312.77",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.7",
+        "open": "312.77",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:46:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "395.0",
+        "window_end": "2026-07-30T23:47:00+00:00",
+        "window_start": "2026-07-30T23:46:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:44.972334+00:00",
+      "event_id": "c3ef91e3-bcfd-50d7-9927-cef43c379675",
+      "event_type": "market.raw",
+      "id": 21,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:45:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.89",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:45:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.0",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.66",
+        "open": "312.72",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:45:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "621.0",
+        "window_end": "2026-07-30T23:46:00+00:00",
+        "window_start": "2026-07-30T23:45:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:44.925775+00:00",
+      "event_id": "02809ae1-8b97-5423-bfbf-2b9de41e28f7",
+      "event_type": "market.raw",
+      "id": 20,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:44:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.58",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:44:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "312.61",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.45",
+        "open": "312.61",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:44:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "1782.0",
+        "window_end": "2026-07-30T23:45:00+00:00",
+        "window_start": "2026-07-30T23:44:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:44.880378+00:00",
+      "event_id": "e996dfdd-00f0-5982-b255-1fd2d31c7545",
+      "event_type": "market.raw",
+      "id": 19,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:43:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.51",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:43:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "312.65",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.12",
+        "open": "312.65",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:43:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "4809.0",
+        "window_end": "2026-07-30T23:44:00+00:00",
+        "window_start": "2026-07-30T23:43:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:44.839192+00:00",
+      "event_id": "682a26e5-2c80-5985-bbac-666c4c00ac13",
+      "event_type": "market.raw",
+      "id": 18,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:42:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.7",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:42:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "312.82",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.65",
+        "open": "312.8",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:42:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "2448.0",
+        "window_end": "2026-07-30T23:43:00+00:00",
+        "window_start": "2026-07-30T23:42:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:44.798211+00:00",
+      "event_id": "c2eba880-7727-5b77-be88-1b656afe5a90",
+      "event_type": "market.raw",
+      "id": 17,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:41:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "312.84",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:41:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.43",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "312.5",
+        "open": "313.4",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:41:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "20703.0",
+        "window_end": "2026-07-30T23:42:00+00:00",
+        "window_start": "2026-07-30T23:41:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:44.757204+00:00",
+      "event_id": "d92cb0ad-84aa-5a7f-9ccf-b1733d6b5592",
+      "event_type": "market.raw",
+      "id": 16,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:40:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "313.5",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:40:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.9",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "313.5",
+        "open": "313.9",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:40:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "1208.0",
+        "window_end": "2026-07-30T23:41:00+00:00",
+        "window_start": "2026-07-30T23:40:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:44.714719+00:00",
+      "event_id": "6fb14972-6a56-5eec-a50b-77836d724639",
+      "event_type": "market.raw",
+      "id": 15,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:39:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "313.94",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:39:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.94",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "313.86",
+        "open": "313.86",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:39:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "90.0",
+        "window_end": "2026-07-30T23:40:00+00:00",
+        "window_start": "2026-07-30T23:39:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:44.668663+00:00",
+      "event_id": "4907361d-78e3-5e93-8194-37bd855f044f",
+      "event_type": "market.raw",
+      "id": 14,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:38:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "313.96",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:38:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.96",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "313.65",
+        "open": "313.7",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:38:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "1500.0",
+        "window_end": "2026-07-30T23:39:00+00:00",
+        "window_start": "2026-07-30T23:38:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:44.630538+00:00",
+      "event_id": "3b970685-f5dd-563c-913d-fa68d4ec00e0",
+      "event_type": "market.raw",
+      "id": 13,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:37:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "313.79",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:37:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.79",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "313.6",
+        "open": "313.75",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:37:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "1580.0",
+        "window_end": "2026-07-30T23:38:00+00:00",
+        "window_start": "2026-07-30T23:37:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:44.589162+00:00",
+      "event_id": "e9e97adc-a68c-54e7-895b-025fa1b07714",
+      "event_type": "market.raw",
+      "id": 12,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:36:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "313.75",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:36:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "313.99",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "313.67",
+        "open": "313.92",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:36:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "1595.0",
+        "window_end": "2026-07-30T23:37:00+00:00",
+        "window_start": "2026-07-30T23:36:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:45.440249+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:44.549416+00:00",
+      "event_id": "da6af7f0-27e5-5cd4-846a-eebfb5314940",
+      "event_type": "market.raw",
+      "id": 11,
+      "idempotency_key": "market-raw-window:2:1m:2026-07-30T23:35:00+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "close": "313.86",
+        "conid": 265598,
+        "currency": "USD",
+        "event_kind": "BAR",
+        "event_time": "2026-07-30T23:35:00+00:00",
+        "exchange": "NASDAQ",
+        "high": "314.38",
+        "instrument_id": 2,
+        "is_final": true,
+        "low": "313.8",
+        "open": "314.35",
+        "processing_mode": "WARMUP",
+        "provider": "IBKR",
+        "provider_generation": "0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "source": "ibkr_historical",
+        "source_event_id": "265598:7c807a95-70ff-4e30-a70a-f60985659124:2:1m:1m:2026-07-30T23:35:00+00:00:0c41f512-b20e-4886-a9ec-8c62ffcaaa44",
+        "subscription_key": "7c807a95-70ff-4e30-a70a-f60985659124:2:1m",
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "volume": "5573.0",
+        "window_end": "2026-07-30T23:36:00+00:00",
+        "window_start": "2026-07-30T23:35:00+00:00"
+      },
+      "published_at": "2026-07-31 05:11:46.445618+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "market.raw.v1"
+    },
+    {
+      "aggregate_id": "1",
+      "aggregate_type": "strategy_instance",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:37.439926+00:00",
+      "causation_id": null,
+      "correlation_id": "fdeefd29-3d19-40ae-bc10-34ae31d95edc",
+      "created_at": "2026-07-31 05:11:36.177203+00:00",
+      "event_id": "9356c987-0801-49fa-9a4f-b6ddf68c37bd",
+      "event_type": "strategy.inputs.changed",
+      "id": 10,
+      "idempotency_key": "strategy-inputs:1:v1:2026-07-31T05:11:36.150822+00:00",
+      "last_error": "",
+      "partition_key": "2",
+      "payload": {
+        "instrument_id": 2,
+        "removed_requirement_hashes": [],
+        "requirements": [
+          {
+            "identity_hash": "<max-depth>",
+            "implementation_version": "<max-depth>",
+            "input_type": "<max-depth>",
+            "name": "<max-depth>",
+            "parameters": "<max-depth>",
+            "role": "<max-depth>",
+            "warmup_bars": "<max-depth>"
+          },
+          {
+            "identity_hash": "<max-depth>",
+            "implementation_version": "<max-depth>",
+            "input_type": "<max-depth>",
+            "name": "<max-depth>",
+            "parameters": "<max-depth>",
+            "role": "<max-depth>",
+            "warmup_bars": "<max-depth>"
+          }
+        ],
+        "strategy_instance_id": 1,
+        "strategy_version": 1,
+        "timeframe": "1m",
+        "trace_id": "fdeefd29-3d19-40ae-bc10-34ae31d95edc"
+      },
+      "published_at": "2026-07-31 05:11:38.445598+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "strategy.inputs.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:12:29.505786+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:11:29.456969+00:00",
+      "event_id": "693d14d8-bced-4900-beec-fabb1ae0460f",
+      "event_type": "reconciliation.completed",
+      "id": 9,
+      "idempotency_key": "reconciliation:7:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 7,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:11:30.510235+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:11:29.512098+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:10:29.461697+00:00",
+      "event_id": "a55fc6a9-c9cd-4e0d-b0fd-0db1516c3959",
+      "event_type": "reconciliation.completed",
+      "id": 8,
+      "idempotency_key": "reconciliation:6:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 6,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:10:30.515521+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:10:29.513270+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:09:29.459315+00:00",
+      "event_id": "1f20aab6-8c60-416d-bf05-5ee9c4b7d7be",
+      "event_type": "reconciliation.completed",
+      "id": 7,
+      "idempotency_key": "reconciliation:5:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 5,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:09:30.516936+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:09:29.496167+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:08:29.452257+00:00",
+      "event_id": "37d5f243-34d2-4947-9d0a-f0fca06d5c3d",
+      "event_type": "reconciliation.completed",
+      "id": 6,
+      "idempotency_key": "reconciliation:4:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 4,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:08:30.499973+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:08:29.488696+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:07:29.452298+00:00",
+      "event_id": "c7c45ba0-7025-40ac-babf-2e508733d229",
+      "event_type": "reconciliation.completed",
+      "id": 5,
+      "idempotency_key": "reconciliation:3:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 3,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:07:30.492002+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:07:59.486343+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:06:57.661907+00:00",
+      "event_id": "5c93dfbb-e359-45a2-8c69-e8b5b0870179",
+      "event_type": "reconciliation.completed",
+      "id": 4,
+      "idempotency_key": "reconciliation:2:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 2,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:07:00.489204+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "DUQ275858",
+      "aggregate_type": "account",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:07:29.533112+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:06:29.485400+00:00",
+      "event_id": "597346e2-17a5-46d0-9e92-7148dd44676b",
+      "event_type": "reconciliation.completed",
+      "id": 3,
+      "idempotency_key": "reconciliation:1:completed",
+      "last_error": "",
+      "partition_key": "DUQ275858",
+      "payload": {
+        "account": "DUQ275858",
+        "material_breaks": 0,
+        "reconciliation_run_id": 1,
+        "status": "COMPLETED"
+      },
+      "published_at": "2026-07-31 05:06:30.537852+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "reconciliation.events.v1"
+    },
+    {
+      "aggregate_id": "2",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:06:35.389138+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:05:34.721572+00:00",
+      "event_id": "563c1090-9a9a-44f4-9eba-573bae98f057",
+      "event_type": "instrument.registry.updated",
+      "id": 2,
+      "idempotency_key": "instrument-registry:265598",
+      "last_error": "",
+      "partition_key": "265598",
+      "payload": {
+        "active": true,
+        "asset_class": "STK",
+        "conid": 265598,
+        "currency": "USD",
+        "exchange": "NASDAQ",
+        "instrument_id": 2,
+        "local_symbol": "AAPL",
+        "primary_exchange": "",
+        "symbol": "AAPL"
+      },
+      "published_at": "2026-07-31 05:05:36.416166+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "instrument.registry.v1"
+    },
+    {
+      "aggregate_id": "1",
+      "aggregate_type": "instrument",
+      "attempt_count": 1,
+      "available_at": "2026-07-31 05:06:35.389138+00:00",
+      "causation_id": null,
+      "correlation_id": null,
+      "created_at": "2026-07-31 05:05:34.708775+00:00",
+      "event_id": "5b999f61-8a6b-4eb0-a708-3327c7f662e9",
+      "event_type": "instrument.registry.updated",
+      "id": 1,
+      "idempotency_key": "instrument-registry:272093",
+      "last_error": "",
+      "partition_key": "272093",
+      "payload": {
+        "active": true,
+        "asset_class": "STK",
+        "conid": 272093,
+        "currency": "USD",
+        "exchange": "NASDAQ",
+        "instrument_id": 1,
+        "local_symbol": "MSFT",
+        "primary_exchange": "",
+        "symbol": "MSFT"
+      },
+      "published_at": "2026-07-31 05:05:36.416166+00:00",
+      "schema_version": 1,
+      "status": "PUBLISHED",
+      "topic": "instrument.registry.v1"
+    }
+  ]
+}
+
+===== BLK INSTRUMENTS =====
+[
+  {
+    "active": true,
+    "asset_class": "STK",
+    "currency": "USD",
+    "exchange": "SMART",
+    "fractional_support": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+    "id": 67,
+    "issuer_id": 65,
+    "lot_size": "1.00000000",
+    "min_tick": "0.01000000",
+    "multiplier": "1.00000000",
+    "primary_exchange": "",
+    "sector": "",
+    "symbol": "BLK",
+    "tradable": true,
+    "trading_calendar": "XNYS"
+  }
+]
+
+===== market_streams.InstrumentMarketState =====
+{
+  "count": 0,
+  "filters": {
+    "instrument_id": 67
+  },
+  "latest_rows": []
+}
+
+===== market_streams.MarketDataSubscription =====
+{
+  "count": 0,
+  "filters": {
+    "instrument_id": 67
+  },
+  "latest_rows": []
+}
+
+===== market_streams.MarketBar =====
+{
+  "count": 0,
+  "filters": {
+    "instrument_id": 67
+  },
+  "latest_rows": []
+}
+
+===== market_streams.IndicatorValue =====
+{
+  "count": 0,
+  "filters": {
+    "instrument_id": 67
+  },
+  "latest_rows": []
+}
+
+===== instruments.InstrumentProviderMapping =====
+{
+  "count": 1,
+  "filters": {
+    "instrument_id": 67
+  },
+  "latest_rows": [
+    {
+      "created_at": "2026-07-31 05:07:47.522589+00:00",
+      "currency": "USD",
+      "exchange_mic": "",
+      "figi": "",
+      "id": 65,
+      "instrument_id": 67,
+      "isin": "",
+      "last_error": "",
+      "metadata": {},
+      "provider": "FINNHUB",
+      "provider_exchange": "",
+      "provider_symbol": "BLK",
+      "status": "PENDING",
+      "updated_at": "2026-07-31 05:07:47.522601+00:00",
+      "verification_method": "",
+      "verified_at": null
+    }
+  ]
+}

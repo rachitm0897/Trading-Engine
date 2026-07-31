@@ -1,0 +1,459 @@
+->  data@9c0c7d5e7131: OK
+    {
+        "broker": {
+            "alternates": [],
+            "connect_timeout": 4,
+            "credential_provider": null,
+            "failover_strategy": "round-robin",
+            "heartbeat": 120.0,
+            "hostname": "redis",
+            "insist": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "login_method": null,
+            "port": 6379,
+            "ssl": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "transport": "redis",
+            "transport_options": {},
+            "uri_prefix": null,
+            "userid": null,
+            "virtual_host": "1"
+        },
+        "clock": "7635",
+        "pid": 70,
+        "pool": {
+            "implementation": "celery.concurrency.thread:TaskPool",
+            "max-concurrency": 8,
+            "threads": 0
+        },
+        "prefetch_count": 32,
+        "rusage": {
+            "idrss": 0,
+            "inblock": 424,
+            "isrss": 0,
+            "ixrss": 0,
+            "majflt": 0,
+            "maxrss": 149156,
+            "minflt": 31950,
+            "msgrcv": 0,
+            "msgsnd": 0,
+            "nivcsw": 675,
+            "nsignals": 0,
+            "nswap": 0,
+            "nvcsw": 5656,
+            "oublock": 0,
+            "stime": 0.821082,
+            "utime": 8.645277
+        },
+        "total": {},
+        "uptime": 1341
+    }
+->  broker-commands@9c0c7d5e7131: OK
+    {
+        "broker": {
+            "alternates": [],
+            "connect_timeout": 4,
+            "credential_provider": null,
+            "failover_strategy": "round-robin",
+            "heartbeat": 120.0,
+            "hostname": "redis",
+            "insist": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "login_method": null,
+            "port": 6379,
+            "ssl": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "transport": "redis",
+            "transport_options": {},
+            "uri_prefix": null,
+            "userid": null,
+            "virtual_host": "1"
+        },
+        "clock": "7635",
+        "pid": 75,
+        "pool": {
+            "implementation": "celery.concurrency.prefork:TaskPool",
+            "max-concurrency": 1,
+            "max-tasks-per-child": "N/A",
+            "processes": [
+                396
+            ],
+            "put-guarded-by-semaphore": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "timeouts": [
+                0,
+                0
+            ],
+            "writes": {
+                "all": "1.00",
+                "avg": "1.00",
+                "inqueues": {
+                    "active": 0,
+                    "total": 1
+                },
+                "raw": "1381",
+                "strategy": "fair",
+                "total": 1381
+            }
+        },
+        "prefetch_count": 4,
+        "rusage": {
+            "idrss": 0,
+            "inblock": 704,
+            "isrss": 0,
+            "ixrss": 0,
+            "majflt": 0,
+            "maxrss": 148760,
+            "minflt": 34669,
+            "msgrcv": 0,
+            "msgsnd": 0,
+            "nivcsw": 1000,
+            "nsignals": 0,
+            "nswap": 0,
+            "nvcsw": 12159,
+            "oublock": 272,
+            "stime": 1.186675,
+            "utime": 12.306572
+        },
+        "total": {
+            "apps.execution.tasks.dispatch_broker_commands": 1337,
+            "apps.execution.tasks.recover_broker_commands": 44
+        },
+        "uptime": 1341
+    }
+->  research@9c0c7d5e7131: OK
+    {
+        "broker": {
+            "alternates": [],
+            "connect_timeout": 4,
+            "credential_provider": null,
+            "failover_strategy": "round-robin",
+            "heartbeat": 120.0,
+            "hostname": "redis",
+            "insist": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "login_method": null,
+            "port": 6379,
+            "ssl": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "transport": "redis",
+            "transport_options": {},
+            "uri_prefix": null,
+            "userid": null,
+            "virtual_host": "1"
+        },
+        "clock": "7635",
+        "pid": 71,
+        "pool": {
+            "implementation": "celery.concurrency.thread:TaskPool",
+            "max-concurrency": 8,
+            "threads": 0
+        },
+        "prefetch_count": 32,
+        "rusage": {
+            "idrss": 0,
+            "inblock": 1032,
+            "isrss": 0,
+            "ixrss": 0,
+            "majflt": 0,
+            "maxrss": 149168,
+            "minflt": 31912,
+            "msgrcv": 0,
+            "msgsnd": 0,
+            "nivcsw": 559,
+            "nsignals": 0,
+            "nswap": 0,
+            "nvcsw": 5846,
+            "oublock": 0,
+            "stime": 0.668978,
+            "utime": 8.708601999999999
+        },
+        "total": {},
+        "uptime": 1341
+    }
+->  target-coordination@9c0c7d5e7131: OK
+    {
+        "broker": {
+            "alternates": [],
+            "connect_timeout": 4,
+            "credential_provider": null,
+            "failover_strategy": "round-robin",
+            "heartbeat": 120.0,
+            "hostname": "redis",
+            "insist": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "login_method": null,
+            "port": 6379,
+            "ssl": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "transport": "redis",
+            "transport_options": {},
+            "uri_prefix": null,
+            "userid": null,
+            "virtual_host": "1"
+        },
+        "clock": "7635",
+        "pid": 73,
+        "pool": {
+            "implementation": "celery.concurrency.prefork:TaskPool",
+            "max-concurrency": 1,
+            "max-tasks-per-child": "N/A",
+            "processes": [
+                394
+            ],
+            "put-guarded-by-semaphore": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "timeouts": [
+                0,
+                0
+            ],
+            "writes": {
+                "all": "1.00",
+                "avg": "1.00",
+                "inqueues": {
+                    "active": 0,
+                    "total": 1
+                },
+                "raw": "1359",
+                "strategy": "fair",
+                "total": 1359
+            }
+        },
+        "prefetch_count": 4,
+        "rusage": {
+            "idrss": 0,
+            "inblock": 344,
+            "isrss": 0,
+            "ixrss": 0,
+            "majflt": 0,
+            "maxrss": 148916,
+            "minflt": 34775,
+            "msgrcv": 0,
+            "msgsnd": 0,
+            "nivcsw": 660,
+            "nsignals": 0,
+            "nswap": 0,
+            "nvcsw": 11647,
+            "oublock": 272,
+            "stime": 1.195389,
+            "utime": 11.667327
+        },
+        "total": {
+            "apps.rebalancing.tasks.coordinate_portfolio_targets": 1337,
+            "apps.rebalancing.tasks.recover_incomplete_rebalances": 22
+        },
+        "uptime": 1341
+    }
+->  intent-execution@9c0c7d5e7131: OK
+    {
+        "broker": {
+            "alternates": [],
+            "connect_timeout": 4,
+            "credential_provider": null,
+            "failover_strategy": "round-robin",
+            "heartbeat": 120.0,
+            "hostname": "redis",
+            "insist": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "login_method": null,
+            "port": 6379,
+            "ssl": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "transport": "redis",
+            "transport_options": {},
+            "uri_prefix": null,
+            "userid": null,
+            "virtual_host": "1"
+        },
+        "clock": "7635",
+        "pid": 74,
+        "pool": {
+            "implementation": "celery.concurrency.prefork:TaskPool",
+            "max-concurrency": 1,
+            "max-tasks-per-child": "N/A",
+            "processes": [
+                391
+            ],
+            "put-guarded-by-semaphore": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "timeouts": [
+                0,
+                0
+            ],
+            "writes": {
+                "all": "1.00",
+                "avg": "1.00",
+                "inqueues": {
+                    "active": 0,
+                    "total": 1
+                },
+                "raw": "1381",
+                "strategy": "fair",
+                "total": 1381
+            }
+        },
+        "prefetch_count": 4,
+        "rusage": {
+            "idrss": 0,
+            "inblock": 5120,
+            "isrss": 0,
+            "ixrss": 0,
+            "majflt": 1,
+            "maxrss": 149180,
+            "minflt": 35039,
+            "msgrcv": 0,
+            "msgsnd": 0,
+            "nivcsw": 738,
+            "nsignals": 0,
+            "nswap": 0,
+            "nvcsw": 11739,
+            "oublock": 272,
+            "stime": 1.159156,
+            "utime": 11.450208
+        },
+        "total": {
+            "apps.execution.tasks.execute_order_intents": 1337,
+            "apps.execution.tasks.recover_order_intents": 44
+        },
+        "uptime": 1341
+    }
+->  core@9c0c7d5e7131: OK
+    {
+        "broker": {
+            "alternates": [],
+            "connect_timeout": 4,
+            "credential_provider": null,
+            "failover_strategy": "round-robin",
+            "heartbeat": 120.0,
+            "hostname": "redis",
+            "insist": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "login_method": null,
+            "port": 6379,
+            "ssl": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "transport": "redis",
+            "transport_options": {},
+            "uri_prefix": null,
+            "userid": null,
+            "virtual_host": "1"
+        },
+        "clock": "7635",
+        "pid": 69,
+        "pool": {
+            "implementation": "celery.concurrency.prefork:TaskPool",
+            "max-concurrency": 2,
+            "max-tasks-per-child": "N/A",
+            "processes": [
+                392,
+                397
+            ],
+            "put-guarded-by-semaphore": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "timeouts": [
+                0,
+                0
+            ],
+            "writes": {
+                "all": "0.73, 0.27",
+                "avg": "0.50",
+                "inqueues": {
+                    "active": 0,
+                    "total": 2
+                },
+                "raw": "1080, 409",
+                "strategy": "fair",
+                "total": 1489
+            }
+        },
+        "prefetch_count": 8,
+        "rusage": {
+            "idrss": 0,
+            "inblock": 3312,
+            "isrss": 0,
+            "ixrss": 0,
+            "majflt": 0,
+            "maxrss": 149480,
+            "minflt": 47014,
+            "msgrcv": 0,
+            "msgsnd": 0,
+            "nivcsw": 749,
+            "nsignals": 0,
+            "nswap": 0,
+            "nvcsw": 12972,
+            "oublock": 272,
+            "stime": 1.424542,
+            "utime": 12.42428
+        },
+        "total": {
+            "apps.broker_gateway.tasks.sync_broker_events": 267,
+            "apps.event_bus.tasks.check_stream_health": 44,
+            "apps.event_bus.tasks.publish_outbox_events": 668,
+            "apps.instruments.tasks.publish_instrument_registry_snapshot": 22,
+            "apps.market_streams.tasks.check_warmup_timeouts": 44,
+            "apps.market_streams.tasks.monitor_market_data_providers": 267,
+            "apps.market_streams.tasks.restore_active_market_subscriptions": 89,
+            "apps.reconciliation.tasks.run_scheduled_reconciliation": 22,
+            "apps.research.tasks.dispatch_research_experiments": 22,
+            "apps.research.tasks.score_current_candidates": 22,
+            "apps.research.tasks.warm_recommendation_cache": 22
+        },
+        "uptime": 1341
+    }
+->  strategy-evaluation@9c0c7d5e7131: OK
+    {
+        "broker": {
+            "alternates": [],
+            "connect_timeout": 4,
+            "credential_provider": null,
+            "failover_strategy": "round-robin",
+            "heartbeat": 120.0,
+            "hostname": "redis",
+            "insist": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "login_method": null,
+            "port": 6379,
+            "ssl": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "transport": "redis",
+            "transport_options": {},
+            "uri_prefix": null,
+            "userid": null,
+            "virtual_host": "1"
+        },
+        "clock": "7635",
+        "pid": 72,
+        "pool": {
+            "implementation": "celery.concurrency.prefork:TaskPool",
+            "max-concurrency": 1,
+            "max-tasks-per-child": "N/A",
+            "processes": [
+                393
+            ],
+            "put-guarded-by-semaphore": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED],
+            "timeouts": [
+                0,
+                0
+            ],
+            "writes": {
+                "all": "1.00",
+                "avg": "1.00",
+                "inqueues": {
+                    "active": 0,
+                    "total": 1
+                },
+                "raw": "1382",
+                "strategy": "fair",
+                "total": 1382
+            }
+        },
+        "prefetch_count": 4,
+        "rusage": {
+            "idrss": 0,
+            "inblock": 808,
+            "isrss": 0,
+            "ixrss": 0,
+            "majflt": 0,
+            "maxrss": 148744,
+            "minflt": 35207,
+            "msgrcv": 0,
+            "msgsnd": 0,
+            "nivcsw": 533,
+            "nsignals": 0,
+            "nswap": 0,
+            "nvcsw": 11644,
+            "oublock": 272,
+            "stime": 1.13868,
+            "utime": 11.402951999999999
+        },
+        "total": {
+            "apps.strategies.tasks.activate_strategy_instance": 1,
+            "apps.strategies.tasks.execute_strategy_evaluation_jobs": 1337,
+            "apps.strategies.tasks.recover_strategy_evaluation_jobs": 44
+        },
+        "uptime": 1341
+    }
+
+7 nodes online.

@@ -1,0 +1,14 @@
+HTTP/1.1 200 OK
+Server: nginx
+Date: Fri, 31 Jul 2026 05:27:20 GMT
+Content-Type: application/javascript
+Content-Length: 103
+Last-Modified: Fri, 31 Jul 2026 05:09:16 GMT
+Connection: keep-alive
+ETag: "6a6c2dfc-67"
+Cache-Control: no-store
+Accept-Ranges: bytes
+
+window.__TRADING_ENGINE_CONFIG__ = Object.freeze({
+  apiBaseUrl: "http://localhost:8000/api/v1"
+});

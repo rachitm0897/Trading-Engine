@@ -1,0 +1,10 @@
+NAME                                            IMAGE                                         COMMAND                  SERVICE              CREATED          STATUS                      PORTS
+finflock-real-paper-test-backend-1              finflock-real-paper-test-backend              "./entrypoint.sh"        backend              22 minutes ago   Up 22 minutes (healthy)     0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
+finflock-real-paper-test-flink-jobmanager-1     finflock-real-paper-test-flink-jobmanager     "/opt/flink/finflock…"   flink-jobmanager     27 minutes ago   Up 26 minutes               127.0.0.1:8081->8081/tcp
+finflock-real-paper-test-flink-taskmanager-1    finflock-real-paper-test-flink-taskmanager    "/opt/flink/finflock…"   flink-taskmanager    27 minutes ago   Up 26 minutes               6123/tcp, 8081/tcp
+finflock-real-paper-test-frontend-1             finflock-real-paper-test-frontend             "/docker-entrypoint.…"   frontend             17 minutes ago   Up 17 minutes (healthy)     0.0.0.0:5173->5173/tcp, [::]:5173->5173/tcp
+finflock-real-paper-test-kafka-1                apache/kafka:3.9.0                            "/__cacert_entrypoin…"   kafka                33 minutes ago   Up 33 minutes (healthy)     9092/tcp
+finflock-real-paper-test-kafka-init-1           apache/kafka:3.9.0                            "/bin/bash -ec 'sed …"   kafka-init           33 minutes ago   Exited (0) 26 minutes ago   
+finflock-real-paper-test-paper-ibkr-gateway-1   finflock-real-paper-test-paper-ibkr-gateway   "/usr/bin/tini -- ./…"   paper-ibkr-gateway   25 minutes ago   Up 25 minutes (healthy)     127.0.0.1:8082->8080/tcp
+finflock-real-paper-test-postgres-1             postgres:16-alpine                            "docker-entrypoint.s…"   postgres             33 minutes ago   Up 33 minutes (healthy)     0.0.0.0:5433->5432/tcp, [::]:5433->5432/tcp
+finflock-real-paper-test-redis-1                redis:7-alpine                                "docker-entrypoint.s…"   redis                33 minutes ago   Up 33 minutes (healthy)     6379/tcp

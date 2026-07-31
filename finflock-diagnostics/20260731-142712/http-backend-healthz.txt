@@ -1,0 +1,11 @@
+HTTP/1.1 200 OK
+date: Fri, 31 Jul 2026 05:27:19 GMT
+server: uvicorn
+Content-Type: application/json
+Content-Length: 136
+Vary: origin
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Cross-Origin-Opener-Policy: same-origin
+
+{"ok": true, "data": {"status": "healthy", "process": "running", "time": "2026-07-31T05:27:20.010894+00:00"}, "error": null, "meta": {}}

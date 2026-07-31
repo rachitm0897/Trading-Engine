@@ -21,6 +21,7 @@ from .models import (
     BrokerSessionAccount,
 )
 from .qch import QCHBrokerClient, QCHError
+from .vnc import normalize_vnc_password
 
 
 CONTAINER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
@@ -45,7 +46,7 @@ def gateway_environment(session, username, password, gateway_token, novnc_passwo
         "IB_PASSWORD": password,
         "IBC_TRADING_MODE": session.mode,
         "GATEWAY_SERVICE_TOKEN": gateway_token,
-        "NOVNC_PASSWORD": novnc_password,
+        "NOVNC_PASSWORD": normalize_vnc_password(novnc_password),
         "BROKER_ADAPTER": "ib_async",
         "PORT": "8080",
         "GATEWAY_CONTRACT_SEARCH_MAX_RESULTS": str(settings.GATEWAY_CONTRACT_SEARCH_MAX_RESULTS),
@@ -158,11 +159,15 @@ def synchronize_local_paper_gateway():
     """Bind and synchronize the static Docker paper Gateway without QCH."""
     base_url=str(getattr(settings,"LOCAL_PAPER_GATEWAY_URL","") or "").strip()
     token=str(getattr(settings,"LOCAL_PAPER_GATEWAY_SERVICE_TOKEN","") or "").strip()
+    configured_novnc_password=getattr(
+        settings, "LOCAL_PAPER_GATEWAY_NOVNC_PASSWORD", ""
+    )
     child_name=str(getattr(
         settings,"LOCAL_PAPER_GATEWAY_CONTAINER_NAME","paper-ibkr-gateway"
     ) or "").strip()
     if not base_url or not token:
         return None
+    novnc_password=normalize_vnc_password(configured_novnc_password)
     if settings.ALLOW_LIVE_TRADING:
         raise ValueError("The local paper Gateway requires ALLOW_LIVE_TRADING=false")
     if not CONTAINER_NAME_RE.fullmatch(child_name):
@@ -180,7 +185,7 @@ def synchronize_local_paper_gateway():
             child_container_name=child_name,
             internal_base_url=base_url,
             encrypted_gateway_token=encrypt_secret(token),
-            encrypted_novnc_password=encrypt_secret(token),
+            encrypted_novnc_password=encrypt_secret(novnc_password),
             commands_enabled=False,
             provisioned_at=timezone.now(),
         )
@@ -192,6 +197,17 @@ def synchronize_local_paper_gateway():
             token_changed=decrypt_secret(encrypted_token)!=token
         except Exception:
             token_changed=True
+        try:
+            stored_novnc_password=decrypt_secret(session.encrypted_novnc_password)
+            normalized_stored_novnc_password=normalize_vnc_password(
+                stored_novnc_password
+            )
+            novnc_password_changed=(
+                normalized_stored_novnc_password != novnc_password
+                or stored_novnc_password != normalized_stored_novnc_password
+            )
+        except Exception:
+            novnc_password_changed=True
         updates={
             "display_name":"Local paper IBKR Gateway",
             "child_container_id":child_name,
@@ -200,7 +216,8 @@ def synchronize_local_paper_gateway():
         }
         if token_changed:
             updates["encrypted_gateway_token"]=encrypt_secret(token)
-            updates["encrypted_novnc_password"]=encrypt_secret(token)
+        if novnc_password_changed:
+            updates["encrypted_novnc_password"]=encrypt_secret(novnc_password)
         BrokerGatewaySession.objects.filter(pk=session.pk).update(**updates)
         session=BrokerGatewaySession.objects.get(pk=session.pk)
     try:

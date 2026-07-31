@@ -11,5 +11,17 @@ export default defineConfig(function (_a) {
     var defaultBase = mode === 'production' ? '/trading_eng_frontend/' : '/';
     var configuredBase = process.env.VITE_APP_BASE_PATH || env.VITE_APP_BASE_PATH || defaultBase;
     var base = mode === 'test' ? '/' : normalizeBase(configuredBase);
-    return { base: base, plugins: [react()], test: { environment: 'jsdom', globals: true, setupFiles: './tests/setup.ts' } };
+    return {
+        base: base,
+        plugins: [react()],
+        server: {
+            proxy: {
+                '/api/v1': {
+                    target: 'http://localhost:8000',
+                    changeOrigin: true,
+                },
+            },
+        },
+        test: { environment: 'jsdom', globals: true, setupFiles: './tests/setup.ts' },
+    };
 });

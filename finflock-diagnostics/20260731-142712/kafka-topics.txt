@@ -1,0 +1,17 @@
+__consumer_offsets
+dead-letter.v1
+executions.events.v1
+instrument.registry.v1
+market.bars.v1
+market.canonical.v1
+market.indicators.v1
+market.quality.v1
+market.raw.v1
+orders.events.v1
+portfolio.flow.allocated.v1
+portfolio.rebalance.planned.v1
+reconciliation.events.v1
+risk.decisions.v1
+strategy.inputs.v1
+strategy.targets.v1
+system.health.v1

@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from runtime_config import RuntimeConfigurationError, validate_environment
+from runtime_config import (
+    RuntimeConfigurationError,
+    main,
+    normalize_vnc_password,
+    validate_environment,
+)
 
 
 def valid_real_environment(**updates):
@@ -62,6 +67,37 @@ def test_mock_mode_needs_explicit_security_but_not_ibkr_credentials():
 
     assert configuration["BROKER_ADAPTER"] == "mock"
     assert configuration["IBC_TRADING_MODE"] == "paper"
+
+
+@pytest.mark.parametrize(
+    "value", ["", "short", "bad\nvalue", "bad\rvalue", "password-\N{SNOWMAN}"]
+)
+def test_vnc_password_rejects_ambiguous_or_short_values_without_echoing(value):
+    with pytest.raises(ValueError) as error:
+        normalize_vnc_password(value)
+
+    if value:
+        assert value not in str(error.value)
+
+
+def test_vnc_password_normalization_uses_exactly_eight_ascii_bytes():
+    assert normalize_vnc_password("vnc-unit-extra") == "vnc-unit"
+
+
+def test_runtime_writes_normalized_vnc_password_without_printing_it(
+    monkeypatch, tmp_path, capsys
+):
+    environment = valid_real_environment(NOVNC_PASSWORD="vnc-unit-extra")
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    target = tmp_path / "normalized-vnc-password"
+
+    assert main(["--write-normalized-vnc-password", str(target)]) == 0
+
+    output = capsys.readouterr()
+    assert target.read_text(encoding="ascii") == "vnc-unit\n"
+    assert "vnc-unit" not in output.out
+    assert "vnc-unit" not in output.err
 
 
 @pytest.mark.parametrize("adapter", ["MOCK", "demo", "", "ib-sync"])

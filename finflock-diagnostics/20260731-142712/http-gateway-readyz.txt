@@ -1,0 +1,11 @@
+HTTP/1.1 200 OK
+Server: nginx
+Date: Fri, 31 Jul 2026 05:27:21 GMT
+Content-Type: application/json
+Content-Length: 68
+Connection: keep-alive
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Cross-Origin-Opener-Policy: same-origin
+
+{"ok": true, "data": {"status": "ready"}, "error": null, "meta": {}}

@@ -1,0 +1,2 @@
+Error: .ini file does not include supervisorctl section
+For help, use /usr/bin/supervisorctl -h

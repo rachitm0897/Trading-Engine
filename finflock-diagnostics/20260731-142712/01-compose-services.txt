@@ -1,0 +1,9 @@
+redis
+kafka
+postgres
+backend
+kafka-init
+flink-jobmanager
+flink-taskmanager
+paper-ibkr-gateway
+frontend

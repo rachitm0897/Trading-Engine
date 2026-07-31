@@ -1,0 +1,10 @@
+CONTAINER                                       REPOSITORY                                    TAG                 PLATFORM            IMAGE ID            SIZE                CREATED
+finflock-real-paper-test-backend-1              finflock-real-paper-test-backend              latest              linux/amd64         4c38ee3d28ac        230MB               18 hours ago
+finflock-real-paper-test-flink-jobmanager-1     finflock-real-paper-test-flink-jobmanager     latest              linux/amd64         3289ce262675        948MB               22 hours ago
+finflock-real-paper-test-flink-taskmanager-1    finflock-real-paper-test-flink-taskmanager    latest              linux/amd64         a281762054be        948MB               22 hours ago
+finflock-real-paper-test-frontend-1             finflock-real-paper-test-frontend             latest              linux/amd64         76ae62e88271        21.2MB              18 hours ago
+finflock-real-paper-test-kafka-1                apache/kafka                                  3.9.0               linux/amd64         fbc7d7c428e3        218MB               21 months ago
+finflock-real-paper-test-kafka-init-1           apache/kafka                                  3.9.0               linux/amd64         fbc7d7c428e3        218MB               21 months ago
+finflock-real-paper-test-paper-ibkr-gateway-1   finflock-real-paper-test-paper-ibkr-gateway   latest              linux/amd64         3d82513982f7        696MB               20 hours ago
+finflock-real-paper-test-postgres-1             postgres                                      16-alpine           linux/amd64         57c72fd2a128        116MB               3 weeks ago
+finflock-real-paper-test-redis-1                redis                                         7-alpine            linux/amd64         e7723ff73d96        16.3MB              5 days ago

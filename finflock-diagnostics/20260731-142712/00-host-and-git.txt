@@ -1,0 +1,19 @@
+CapturedAt=Fri 07/31/2026 14:27:12.66
+WorkingDirectory=D:\Finflock\Trading Engine
+ComposeProject=finflock-real-paper-test
+==== GIT HEAD ====
+fatal: ambiguous argument '2>&1': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+88c40f214984ea812ec4cbfeac0b70a9d66221f7
+2>&1
+==== GIT BRANCH ====
+main
+==== GIT STATUS ====
+==== DOCKER ====
+docker: 'docker version' accepts no arguments
+
+Usage:  docker version [OPTIONS]
+
+Run 'docker version --help' for more information
+unknown command "2>&1" for "docker compose version"

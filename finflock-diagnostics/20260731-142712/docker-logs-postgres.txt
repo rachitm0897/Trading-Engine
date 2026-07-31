@@ -1,0 +1,68 @@
+postgres-1  | 2026-07-31T04:53:25.612663377Z The files belonging to this database system will be owned by user "postgres".
+postgres-1  | 2026-07-31T04:53:25.612768451Z This user must also own the server process.
+postgres-1  | 2026-07-31T04:53:25.612776273Z 
+postgres-1  | 2026-07-31T04:53:25.615904500Z The database cluster will be initialized with locale "en_US.utf8".
+postgres-1  | 2026-07-31T04:53:25.615924942Z The default database encoding has accordingly been set to "UTF8".
+postgres-1  | 2026-07-31T04:53:25.615927501Z The default text search configuration will be set to "english".
+postgres-1  | 2026-07-31T04:53:25.615929443Z 
+postgres-1  | 2026-07-31T04:53:25.615931154Z Data page checksums are disabled.
+postgres-1  | 2026-07-31T04:53:25.615932886Z 
+postgres-1  | 2026-07-31T04:53:25.615934547Z fixing permissions on existing directory /var/lib/postgresql/data ... ok
+postgres-1  | 2026-07-31T04:53:25.620686508Z creating subdirectories ... ok
+postgres-1  | 2026-07-31T04:53:25.620704895Z selecting dynamic shared memory implementation ... posix
+postgres-1  | 2026-07-31T04:53:25.640934778Z selecting default max_connections ... 100
+postgres-1  | 2026-07-31T04:53:25.661504811Z selecting default shared_buffers ... 128MB
+postgres-1  | 2026-07-31T04:53:25.824853709Z selecting default time zone ... UTC
+postgres-1  | 2026-07-31T04:53:25.826544539Z creating configuration files ... ok
+postgres-1  | 2026-07-31T04:53:26.001839433Z running bootstrap script ... ok
+postgres-1  | 2026-07-31T04:53:26.205826692Z sh: locale: not found
+postgres-1  | 2026-07-31T04:53:26.205863202Z 2026-07-31 04:53:26.205 UTC [35] WARNING:  no usable system locales were found
+postgres-1  | 2026-07-31T04:53:26.576743024Z performing post-bootstrap initialization ... ok
+postgres-1  | 2026-07-31T04:53:27.169425785Z syncing data to disk ... ok
+postgres-1  | 2026-07-31T04:53:27.169459931Z 
+postgres-1  | 2026-07-31T04:53:27.169463186Z 
+postgres-1  | 2026-07-31T04:53:27.169465741Z Success. You can now start the database server using:
+postgres-1  | 2026-07-31T04:53:27.169468191Z 
+postgres-1  | 2026-07-31T04:53:27.169470427Z     pg_ctl -D /var/lib/postgresql/data -l logfile start
+postgres-1  | 2026-07-31T04:53:27.169472819Z 
+postgres-1  | 2026-07-31T04:53:27.169488224Z initdb: warning: enabling "trust" authentication for local connections
+postgres-1  | 2026-07-31T04:53:27.169516214Z initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+postgres-1  | 2026-07-31T04:53:27.228736664Z waiting for server to start....2026-07-31 04:53:27.228 UTC [47] LOG:  starting PostgreSQL 16.14 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+postgres-1  | 2026-07-31T04:53:27.236081482Z 2026-07-31 04:53:27.235 UTC [47] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+postgres-1  | 2026-07-31T04:53:27.258502232Z 2026-07-31 04:53:27.258 UTC [50] LOG:  database system was shut down at 2026-07-31 04:53:26 UTC
+postgres-1  | 2026-07-31T04:53:27.271451225Z 2026-07-31 04:53:27.271 UTC [47] LOG:  database system is ready to accept connections
+postgres-1  | 2026-07-31T04:53:27.295036504Z  done
+postgres-1  | 2026-07-31T04:53:27.295070535Z server started
+postgres-1  | 2026-07-31T04:53:27.385665819Z CREATE DATABASE
+postgres-1  | 2026-07-31T04:53:27.386556078Z 
+postgres-1  | 2026-07-31T04:53:27.386580312Z 
+postgres-1  | 2026-07-31T04:53:27.386585502Z /usr/local/bin/docker-entrypoint.sh: ignoring /docker-entrypoint-initdb.d/*
+postgres-1  | 2026-07-31T04:53:27.386590201Z 
+postgres-1  | 2026-07-31T04:53:27.387521788Z waiting for server to shut down...2026-07-31 04:53:27.387 UTC [47] LOG:  received fast shutdown request
+postgres-1  | 2026-07-31T04:53:27.395747034Z .2026-07-31 04:53:27.395 UTC [47] LOG:  aborting any active transactions
+postgres-1  | 2026-07-31T04:53:27.398272786Z 2026-07-31 04:53:27.398 UTC [47] LOG:  background worker "logical replication launcher" (PID 53) exited with exit code 1
+postgres-1  | 2026-07-31T04:53:27.399095119Z 2026-07-31 04:53:27.398 UTC [48] LOG:  shutting down
+postgres-1  | 2026-07-31T04:53:27.407339577Z 2026-07-31 04:53:27.407 UTC [48] LOG:  checkpoint starting: shutdown immediate
+postgres-1  | 2026-07-31T04:53:27.628418462Z 2026-07-31 04:53:27.628 UTC [48] LOG:  checkpoint complete: wrote 926 buffers (5.7%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.028 s, sync=0.168 s, total=0.230 s; sync files=301, longest=0.011 s, average=0.001 s; distance=4283 kB, estimate=4283 kB; lsn=0/1925D60, redo lsn=0/1925D60
+postgres-1  | 2026-07-31T04:53:27.633271250Z 2026-07-31 04:53:27.633 UTC [47] LOG:  database system is shut down
+postgres-1  | 2026-07-31T04:53:27.689056635Z  done
+postgres-1  | 2026-07-31T04:53:27.689103693Z server stopped
+postgres-1  | 2026-07-31T04:53:27.691445337Z 
+postgres-1  | 2026-07-31T04:53:27.691475741Z PostgreSQL init process complete; ready for start up.
+postgres-1  | 2026-07-31T04:53:27.691482512Z 
+postgres-1  | 2026-07-31T04:53:27.723291189Z 2026-07-31 04:53:27.723 UTC [1] LOG:  starting PostgreSQL 16.14 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+postgres-1  | 2026-07-31T04:53:27.723313042Z 2026-07-31 04:53:27.723 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+postgres-1  | 2026-07-31T04:53:27.723315271Z 2026-07-31 04:53:27.723 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+postgres-1  | 2026-07-31T04:53:27.738752958Z 2026-07-31 04:53:27.738 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+postgres-1  | 2026-07-31T04:53:27.755916166Z 2026-07-31 04:53:27.755 UTC [63] LOG:  database system was shut down at 2026-07-31 04:53:27 UTC
+postgres-1  | 2026-07-31T04:53:27.766964954Z 2026-07-31 04:53:27.766 UTC [1] LOG:  database system is ready to accept connections
+postgres-1  | 2026-07-31T04:58:27.799942068Z 2026-07-31 04:58:27.799 UTC [61] LOG:  checkpoint starting: time
+postgres-1  | 2026-07-31T04:58:32.091362583Z 2026-07-31 04:58:32.091 UTC [61] LOG:  checkpoint complete: wrote 45 buffers (0.3%); 0 WAL file(s) added, 0 removed, 0 recycled; write=4.227 s, sync=0.017 s, total=4.292 s; sync files=12, longest=0.007 s, average=0.002 s; distance=261 kB, estimate=261 kB; lsn=0/19671D0, redo lsn=0/1967198
+postgres-1  | 2026-07-31T05:08:27.159204086Z 2026-07-31 05:08:27.158 UTC [61] LOG:  checkpoint starting: time
+postgres-1  | 2026-07-31T05:10:36.377198079Z 2026-07-31 05:10:36.376 UTC [61] LOG:  checkpoint complete: wrote 1285 buffers (7.8%); 0 WAL file(s) added, 0 removed, 1 recycled; write=128.400 s, sync=0.780 s, total=129.219 s; sync files=1100, longest=0.007 s, average=0.001 s; distance=11469 kB, estimate=11469 kB; lsn=0/258A220, redo lsn=0/249A788
+postgres-1  | 2026-07-31T05:13:27.461434062Z 2026-07-31 05:13:27.461 UTC [61] LOG:  checkpoint starting: time
+postgres-1  | 2026-07-31T05:14:00.588519236Z 2026-07-31 05:14:00.588 UTC [61] LOG:  checkpoint complete: wrote 331 buffers (2.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=32.812 s, sync=0.257 s, total=33.128 s; sync files=172, longest=0.012 s, average=0.002 s; distance=2415 kB, estimate=10564 kB; lsn=0/2787658, redo lsn=0/26F6518
+postgres-1  | 2026-07-31T05:18:27.654807313Z 2026-07-31 05:18:27.654 UTC [61] LOG:  checkpoint starting: time
+postgres-1  | 2026-07-31T05:18:45.265477989Z 2026-07-31 05:18:45.265 UTC [61] LOG:  checkpoint complete: wrote 179 buffers (1.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=17.467 s, sync=0.101 s, total=17.611 s; sync files=84, longest=0.010 s, average=0.002 s; distance=2907 kB, estimate=9798 kB; lsn=0/2A16438, redo lsn=0/29CD228
+postgres-1  | 2026-07-31T05:23:27.323212480Z 2026-07-31 05:23:27.322 UTC [61] LOG:  checkpoint starting: time
+postgres-1  | 2026-07-31T05:23:48.695118662Z 2026-07-31 05:23:48.694 UTC [61] LOG:  checkpoint complete: wrote 217 buffers (1.3%); 0 WAL file(s) added, 0 removed, 0 recycled; write=21.282 s, sync=0.067 s, total=21.372 s; sync files=80, longest=0.007 s, average=0.001 s; distance=3028 kB, estimate=9121 kB; lsn=0/2D13190, redo lsn=0/2CC2400

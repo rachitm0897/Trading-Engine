@@ -1,0 +1,9 @@
+bar-aggregation-v2
+stream-health-v1
+indicator-registry-v1
+finflock-backend-market-persistence-v2
+indicator-computation-v2
+bar-registry-v1
+market-normalization-v2
+instrument-registry-v2
+stale-price-detection-v1

@@ -51,7 +51,7 @@ npm run build
 
 `npm test` runs Vitest and React Testing Library coverage for routes, workflows, responsive shell state, persisted panels, chart normalization, and safety controls. `npm run build` runs TypeScript project compilation before creating the Vite production bundle.
 
-The production Docker build defaults to the normalized Vite base `/trading_eng_frontend/`; React Router reads Vite's resulting `BASE_URL`, so router and asset paths cannot diverge. A real process-level `VITE_APP_BASE_PATH` build override is supported for non-QFS builds. Local Vite may set `VITE_API_BASE_URL`.
+The production Docker build defaults to the normalized Vite base `/trading_eng_frontend/`; React Router reads Vite's resulting `BASE_URL`, so router and asset paths cannot diverge. A real process-level `VITE_APP_BASE_PATH` build override is supported for non-QFS builds. Local Vite uses the relative `/api/v1` client path and proxies it to `http://localhost:8000`.
 
 Run `docker build -t trading-engine-frontend .` from this directory. The image builds from `Frontend` alone and contains no `.env`. At container start, the validated single-line HTTP(S) `BACKEND_API_URL` generates uncached `runtime-config.js`; production uses `https://qfsplatform.com/trading_eng_backend/api/v1`. Values containing whitespace, line breaks, quotes, or other unsafe JavaScript characters stop container startup.
 

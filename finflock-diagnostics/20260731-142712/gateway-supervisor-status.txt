@@ -1,0 +1,8 @@
+broker                           RUNNING   pid 31, uptime 0:25:37
+fluxbox                          RUNNING   pid 23, uptime 0:25:37
+ibgateway                        RUNNING   pid 27, uptime 0:25:37
+nginx                            RUNNING   pid 35, uptime 0:25:36
+novnc                            RUNNING   pid 25, uptime 0:25:37
+web                              RUNNING   pid 29, uptime 0:25:37
+x11vnc                           RUNNING   pid 24, uptime 0:25:37
+xvfb                             RUNNING   pid 22, uptime 0:25:37

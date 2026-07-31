@@ -3,7 +3,7 @@ from http.cookies import SimpleCookie
 import json
 import re
 import struct
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 import httpx
 from asgiref.sync import sync_to_async
@@ -15,6 +15,7 @@ from websockets.asyncio.client import connect as websocket_connect
 from .crypto import decrypt_secret, validate_novnc_access_token
 from .models import BrokerGatewaySession
 from .services import CONTAINER_NAME_RE
+from .vnc import normalize_vnc_password
 import logging
 
 logger = logging.getLogger(__name__)
@@ -121,8 +122,18 @@ async def _send_response(send, status, body=b"", headers=None):
 def _connect_page(base_path):
     authorize_url = f"{base_path}/authorize/"
     vnc_url = f"{base_path}/vnc.html"
-    websocket_path = f"{base_path.lstrip('/')}/websockify"
-    values = json.dumps({"authorize": authorize_url, "vnc": vnc_url, "websockify": websocket_path})
+    websocket_path = "websockify"
+    vnc_query = urlencode(
+        {"autoconnect": "1", "resize": "scale", "path": websocket_path}
+    )
+    values = json.dumps(
+        {
+            "authorize": authorize_url,
+            "vnc": vnc_url,
+            "websockify": websocket_path,
+            "vncQuery": vnc_query,
+        }
+    )
     return f"""<!doctype html><meta charset=utf-8><title>Opening noVNC</title>
 <body><p>Authorizing the private noVNC session&hellip;</p><script>
 const routes={values};
@@ -130,8 +141,7 @@ const routes={values};
 if(!token)throw new Error('Missing access token');
 const r=await fetch(routes.authorize,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{token}})}});
 if(!r.ok)throw new Error('noVNC authorization failed');
-const q=new URLSearchParams({{autoconnect:'1',resize:'scale',path:routes.websockify}});
-location.replace(routes.vnc+'?'+q.toString());
+location.replace(routes.vnc+'?'+routes.vncQuery);
 }})().catch(e=>{{document.body.textContent=e.message}});</script></body>""".encode("utf-8")
 
 
@@ -192,7 +202,6 @@ async def proxy_http(scope, receive, send, route):
                 return await _send_response(send,400,b"Client-supplied upstream routing is not allowed")
             safe_query = [(key, value) for key, values in parsed_query.items() if key != "token" for value in values]
             if safe_query:
-                from urllib.parse import urlencode
                 upstream += "?" + urlencode(safe_query)
         forwarded_headers = {
             key.decode("latin-1"): value.decode("latin-1")
@@ -237,7 +246,7 @@ def _reverse_bits(value):
 
 def _vnc_auth_response(password, challenge):
     # RFB VNCAuth uses DES with the bit order of each password byte reversed.
-    raw = password.encode("latin-1", "ignore")[:8].ljust(8, b"\0")
+    raw = normalize_vnc_password(password).encode("ascii")
     key = bytes(_reverse_bits(value) for value in raw)
     encryptor = Cipher(TripleDES(key * 3), modes.ECB()).encryptor()
     return encryptor.update(challenge) + encryptor.finalize()

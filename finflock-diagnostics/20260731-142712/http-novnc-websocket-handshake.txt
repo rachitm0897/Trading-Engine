@@ -1,0 +1,12 @@
+  % Total    % Received % Xferd  Average Speed  Time    Time    Time   Current
+                                 Dload  Upload  Total   Spent   Left   Speed
+  0      0   0      0   0      0      0      0                              0HTTP/1.1 101 Switching Protocols
+Server: nginx
+Date: Fri, 31 Jul 2026 05:27:21 GMT
+Connection: upgrade
+Upgrade: websocket
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+
+‚RFB 003.008
+100     14   0     14   0      0      8      0           00:01              9100     14   0     14   0      0      5      0           00:02              5100     14   0     14   0      0      3      0           00:03              4100     14   0     14   0      0      3      0           00:04              3
+curl: (28) Operation timed out after 5002 milliseconds with 14 bytes received

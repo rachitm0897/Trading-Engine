@@ -154,7 +154,7 @@ Static/configuration checks:
 ```powershell
 docker compose --profile paper-ibkr config --quiet
 python -m compileall -q Backend IB_gateway streaming
-docker compose run --rm -e USE_SQLITE=true backend python manage.py makemigrations --check --dry-run
+docker compose run --rm -e DJANGO_SETTINGS_MODULE=config.test_settings backend python manage.py makemigrations --check --dry-run
 git diff --check
 npm run build
 ```

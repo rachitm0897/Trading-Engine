@@ -6,6 +6,8 @@ def test_entrypoint_stores_the_configured_novnc_password():
 
     assert 'x11vnc -storepasswd "$novnc_password"' in entrypoint
     assert "| x11vnc -storepasswd -" not in entrypoint
+    assert "--write-normalized-vnc-password" in entrypoint
+    assert 'novnc_password="$NOVNC_PASSWORD"' not in entrypoint
 
 
 def test_entrypoint_validates_before_writes_migrations_or_supervisor():
@@ -16,6 +18,11 @@ def test_entrypoint_validates_before_writes_migrations_or_supervisor():
     assert validation < entrypoint.index("manage.py migrate")
     assert validation < entrypoint.index("supervisord")
     assert 'GATEWAY_DB_PATH="${GATEWAY_DB_PATH:-/data/gateway.sqlite3}"' in entrypoint
+    validate_only = entrypoint.split(
+        'if [ "${1:-}" = "--validate-only" ]', 1
+    )[1].split("\nfi", 1)[0]
+    assert 'rm -f "$normalized_vnc_password_file"' in validate_only
+    assert "unset NOVNC_PASSWORD" in validate_only
 
 
 def test_entrypoint_only_creates_ibc_config_for_real_adapter():

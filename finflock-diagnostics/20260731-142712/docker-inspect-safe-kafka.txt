@@ -1,0 +1,1 @@
+Name=/finflock-real-paper-test-kafka-1 Image=apache/kafka:3.9.0 State=running Running=true ExitCode=0 StartedAt=2026-07-31T04:53:49.343907041Z Health=healthy Ports={"9092/tcp":null} Networks=finflock-real-paper-test_private=172.18.0.4 

@@ -1,0 +1,138 @@
+backend-1  | 2026-07-31T05:04:56.701620868Z Operations to perform:
+backend-1  | 2026-07-31T05:04:56.701681139Z   Apply all migrations: accounts, allocation, audit, auth, broker_gateway, contenttypes, event_bus, execution, instruments, market_data, market_streams, oms, portfolio_construction, portfolio_optimization, portfolios, position_sizing, reconciliation, research, risk, sessions, strategies
+backend-1  | 2026-07-31T05:04:56.702831927Z Running migrations:
+backend-1  | 2026-07-31T05:04:56.775600274Z   Applying accounts.0001_initial... OK
+backend-1  | 2026-07-31T05:04:56.833444478Z   Applying instruments.0001_initial... OK
+backend-1  | 2026-07-31T05:04:56.991374940Z   Applying portfolios.0001_initial... OK
+backend-1  | 2026-07-31T05:04:57.253938228Z   Applying strategies.0001_initial... OK
+backend-1  | 2026-07-31T05:04:58.201267731Z   Applying strategies.0002_orderpolicy_strategydefinition_strategyriskpolicy_and_more... OK
+backend-1  | 2026-07-31T05:04:58.238288248Z   Applying strategies.0003_warmup_runtime_timestamps... OK
+backend-1  | 2026-07-31T05:04:58.322284268Z   Applying strategies.0004_strategyaction... OK
+backend-1  | 2026-07-31T05:04:58.422357366Z   Applying strategies.0005_prepare_instance_only... OK
+backend-1  | 2026-07-31T05:04:58.622272434Z   Applying allocation.0001_initial... OK
+backend-1  | 2026-07-31T05:04:58.838722253Z   Applying oms.0001_initial... OK
+backend-1  | 2026-07-31T05:04:58.910597580Z   Applying oms.0002_orderintent_strategy_instance_and_more... OK
+backend-1  | 2026-07-31T05:04:58.945140009Z   Applying oms.0003_orderintent_strategy_version_snapshot... OK
+backend-1  | 2026-07-31T05:04:59.008192526Z   Applying oms.0004_orderstatushistory_broker_diagnostics... OK
+backend-1  | 2026-07-31T05:04:59.092917190Z   Applying oms.0005_orderintent_strategy_snapshot_and_more... OK
+backend-1  | 2026-07-31T05:04:59.297963741Z   Applying oms.0006_orderintent_idempotency_state... OK
+backend-1  | 2026-07-31T05:04:59.353823682Z   Applying oms.0007_instance_only... OK
+backend-1  | 2026-07-31T05:04:59.406586855Z   Applying instruments.0002_instrument_active_instrument_fractional_support_and_more... OK
+backend-1  | 2026-07-31T05:04:59.468624799Z   Applying instruments.0003_exact_contract_identity... OK
+backend-1  | 2026-07-31T05:04:59.792363165Z   Applying portfolio_optimization.0001_initial... OK
+backend-1  | 2026-07-31T05:05:00.393062834Z   Applying allocation.0002_initial... OK
+backend-1  | 2026-07-31T05:05:00.492111288Z   Applying allocation.0003_orderintentattribution_strategy_instance_and_more... OK
+backend-1  | 2026-07-31T05:05:00.504906556Z   Applying allocation.0004_allocationrun_allocation_mode... OK
+backend-1  | 2026-07-31T05:05:00.637859554Z   Applying allocation.0005_allocationrun_optimization_run_and_more... OK
+backend-1  | 2026-07-31T05:05:00.974679464Z   Applying allocation.0006_allocationdecision_strategy_snapshot_and_more... OK
+backend-1  | 2026-07-31T05:05:01.205390296Z   Applying allocation.0007_operation_idempotency_state... OK
+backend-1  | 2026-07-31T05:05:01.551122633Z   Applying allocation.0008_instance_only... OK
+backend-1  | 2026-07-31T05:05:01.898318801Z   Applying strategies.0006_remove_legacy_strategy... OK
+backend-1  | 2026-07-31T05:05:01.942767647Z   Applying portfolios.0002_position_realized_pnl... OK
+backend-1  | 2026-07-31T05:05:01.973972269Z   Applying portfolios.0003_portfolioposition_portfolio_position_time_idx... OK
+backend-1  | 2026-07-31T05:05:02.156417626Z   Applying strategies.0007_strategyallocation_strategy_alloc_priority_idx_and_more... OK
+backend-1  | 2026-07-31T05:05:02.245634063Z   Applying audit.0001_initial... OK
+backend-1  | 2026-07-31T05:05:02.260822454Z   Applying audit.0002_alter_outboxevent_available_at_and_more... OK
+backend-1  | 2026-07-31T05:05:02.317606724Z   Applying audit.0003_remove_legacy_attempts_column... OK
+backend-1  | 2026-07-31T05:05:02.366937744Z   Applying audit.0004_operationattempt... OK
+backend-1  | 2026-07-31T05:05:02.392093850Z   Applying audit.0005_auditevent_audit_aggregate_time_idx_and_more... OK
+backend-1  | 2026-07-31T05:05:02.659041081Z   Applying strategies.0008_full_input_identity_and_market_cursor... OK
+backend-1  | 2026-07-31T05:05:02.693363229Z   Applying strategies.0009_strategy_lifecycle_states... OK
+backend-1  | 2026-07-31T05:05:02.742058556Z   Applying broker_gateway.0001_initial... OK
+backend-1  | 2026-07-31T05:05:02.854236520Z   Applying broker_gateway.0002_brokerpositionsnapshot... OK
+backend-1  | 2026-07-31T05:05:03.289867243Z   Applying broker_gateway.0003_brokergatewaysessionsecret_brokersessionaccount_and_more... OK
+backend-1  | 2026-07-31T05:05:03.352606026Z   Applying portfolios.0004_tradingportfolio_gateway_session... OK
+backend-1  | 2026-07-31T05:05:03.544655518Z   Applying strategies.0010_paper_live_execution_modes... OK
+backend-1  | 2026-07-31T05:05:03.738057451Z   Applying portfolio_optimization.0002_portfoliooptimizationrun_application_idempotency_key_and_more... OK
+backend-1  | 2026-07-31T05:05:03.857436441Z   Applying portfolio_optimization.0003_operation_idempotency_state... OK
+backend-1  | 2026-07-31T05:05:03.932812289Z   Applying allocation.0009_rebalancerun_rebalance_port_status_idx_and_more... OK
+backend-1  | 2026-07-31T05:05:04.649079451Z   Applying portfolio_construction.0001_initial... OK
+backend-1  | 2026-07-31T05:05:04.706363819Z   Applying allocation.0010_rebalancerun_construction_run... OK
+backend-1  | 2026-07-31T05:05:05.094844445Z   Applying allocation.0011_portfolio_target_coordination... OK
+backend-1  | 2026-07-31T05:05:05.465189891Z   Applying allocation.0012_paper_live_and_rebalance_run_type... OK
+backend-1  | 2026-07-31T05:05:05.656464485Z   Applying allocation.0013_target_coordination_retry_queue... OK
+backend-1  | 2026-07-31T05:05:05.683981499Z   Applying contenttypes.0001_initial... OK
+backend-1  | 2026-07-31T05:05:05.753573878Z   Applying contenttypes.0002_remove_content_type_name... OK
+backend-1  | 2026-07-31T05:05:05.999317339Z   Applying auth.0001_initial... OK
+backend-1  | 2026-07-31T05:05:06.012864646Z   Applying auth.0002_alter_permission_name_max_length... OK
+backend-1  | 2026-07-31T05:05:06.026393108Z   Applying auth.0003_alter_user_email_max_length... OK
+backend-1  | 2026-07-31T05:05:06.037723559Z   Applying auth.0004_alter_user_username_opts... OK
+backend-1  | 2026-07-31T05:05:06.050943050Z   Applying auth.0005_alter_user_last_login_null... OK
+backend-1  | 2026-07-31T05:05:06.055958412Z   Applying auth.0006_require_contenttypes_0002... OK
+backend-1  | 2026-07-31T05:05:06.067636794Z   Applying auth.0007_alter_validators_add_error_messages... OK
+backend-1  | 2026-07-31T05:05:06.093671931Z   Applying auth.0008_alter_user_username_max_length... OK
+backend-1  | 2026-07-31T05:05:06.108420005Z   Applying auth.0009_alter_user_last_name_max_length... OK
+backend-1  | 2026-07-31T05:05:06.123289296Z   Applying auth.0010_alter_group_name_max_length... OK
+backend-1  | 2026-07-31T05:05:06.201376566Z   Applying auth.0011_update_proxy_permissions... OK
+backend-1  | 2026-07-31T05:05:06.224830456Z   Applying auth.0012_alter_user_first_name_max_length... OK
+backend-1  | 2026-07-31T05:05:06.251025110Z   Applying broker_gateway.0004_brokersynccursor_connection_generation... OK
+backend-1  | 2026-07-31T05:05:06.377055969Z   Applying event_bus.0001_initial... OK
+backend-1  | 2026-07-31T05:05:06.394771391Z   Applying event_bus.0002_deadletterevent_dead_letter_replay_idx... OK
+backend-1  | 2026-07-31T05:05:06.696681465Z   Applying oms.0008_order_order_status_updated_idx_and_more... OK
+backend-1  | 2026-07-31T05:05:06.898416023Z   Applying oms.0009_orderintent_origin... OK
+backend-1  | 2026-07-31T05:05:07.030468518Z   Applying oms.0010_paper_live_intents... OK
+backend-1  | 2026-07-31T05:05:07.126431833Z   Applying execution.0001_initial... OK
+backend-1  | 2026-07-31T05:05:07.300688306Z   Applying execution.0002_brokercommand... OK
+backend-1  | 2026-07-31T05:05:07.421939930Z   Applying execution.0003_brokercommand_execution_mode... OK
+backend-1  | 2026-07-31T05:05:07.610137619Z   Applying instruments.0004_instrument_provider_mapping... OK
+backend-1  | 2026-07-31T05:05:07.707324272Z   Applying instruments.0005_issuer_instrument_issuer... OK
+backend-1  | 2026-07-31T05:05:07.717410230Z   Applying instruments.0006_alter_issuer_founded... OK
+backend-1  | 2026-07-31T05:05:08.027914476Z   Applying market_data.0001_initial... OK
+backend-1  | 2026-07-31T05:05:08.054578252Z   Applying market_data.0002_marketdatafetchrun_response_metadata... OK
+backend-1  | 2026-07-31T05:05:08.063407581Z   Applying market_data.0003_marketdataproviderconfiguration_last_test_success_at... OK
+backend-1  | 2026-07-31T05:05:08.379010215Z   Applying market_streams.0001_initial... OK
+backend-1  | 2026-07-31T05:05:08.573329022Z   Applying market_streams.0002_indicatorvalue_is_final_and_more... OK
+backend-1  | 2026-07-31T05:05:08.687260187Z   Applying market_streams.0003_market_data_subscription... OK
+backend-1  | 2026-07-31T05:05:09.283521616Z   Applying market_streams.0004_strategyevaluationreadiness_and_more... OK
+backend-1  | 2026-07-31T05:05:09.984231229Z   Applying market_streams.0005_provider_fallback_state... OK
+backend-1  | 2026-07-31T05:05:10.152960975Z   Applying market_streams.0006_remove_marketdatasubscription_unique_market_data_subscription_and_more... OK
+backend-1  | 2026-07-31T05:05:10.419418874Z   Applying market_streams.0007_strategyevaluationjob... OK
+backend-1  | 2026-07-31T05:05:11.083445003Z   Applying market_streams.0008_deterministic_market_identity... OK
+backend-1  | 2026-07-31T05:05:11.098754941Z   Applying market_streams.0009_remove_strategy_evaluation_readiness... OK
+backend-1  | 2026-07-31T05:05:11.172118938Z   Applying market_streams.0010_marketbar_provider_provenance... OK
+backend-1  | 2026-07-31T05:05:11.349988443Z   Applying portfolio_construction.0002_seed_strategy_construction_profiles... OK
+backend-1  | 2026-07-31T05:05:11.939711193Z   Applying portfolio_construction.0003_remove_portfolioconstructionrun_selection_snapshot_and_more... OK
+backend-1  | 2026-07-31T05:05:11.998739047Z   Applying portfolio_construction.0004_alter_goalstrategyassignment_created_strategy_instance... OK
+backend-1  | 2026-07-31T05:05:15.753403692Z   Applying research.0001_initial... OK
+backend-1  | 2026-07-31T05:05:15.878072753Z   Applying portfolio_construction.0005_portfoliogoalallocation_accepted_recommendation_run_and_more... OK
+backend-1  | 2026-07-31T05:05:16.008941120Z   Applying portfolio_construction.0006_application_activation_status... OK
+backend-1  | 2026-07-31T05:05:16.038598223Z   Applying portfolio_optimization.0004_alter_portfoliooptimizationrun_application_status... OK
+backend-1  | 2026-07-31T05:05:16.203266264Z   Applying portfolio_optimization.0005_paper_live_policy_mode... OK
+backend-1  | 2026-07-31T05:05:16.672100119Z   Applying position_sizing.0001_initial... OK
+backend-1  | 2026-07-31T05:05:16.725914509Z   Applying reconciliation.0001_initial... OK
+backend-1  | 2026-07-31T05:05:16.868561674Z   Applying reconciliation.0002_account_scope... OK
+backend-1  | 2026-07-31T05:05:16.980043401Z   Applying reconciliation.0003_reconciliationrun_gateway_session... OK
+backend-1  | 2026-07-31T05:05:17.668560449Z   Applying research.0002_recommendation_mvp... OK
+backend-1  | 2026-07-31T05:05:20.252359933Z   Applying research.0003_full_recommendation_system... OK
+backend-1  | 2026-07-31T05:05:20.599609795Z   Applying research.0004_nullable_recommendation_goal_audit... OK
+backend-1  | 2026-07-31T05:05:20.892754070Z   Applying research.0005_paper_validation_terminology... OK
+backend-1  | 2026-07-31T05:05:21.034729822Z   Applying risk.0001_initial... OK
+backend-1  | 2026-07-31T05:05:21.340921804Z   Applying risk.0002_policy_and_capital_reservations... OK
+backend-1  | 2026-07-31T05:05:21.386108542Z   Applying sessions.0001_initial... OK
+backend-1  | 2026-07-31T05:05:21.630567311Z   Applying strategies.0011_activation_lifecycle... OK
+backend-1  | 2026-07-31T05:05:22.197348110Z   Applying strategies.0012_strategy_runtime_stage_timestamps_and_warmup_audit... OK
+backend-1  | 2026-07-31T05:05:22.324622706Z   Applying strategies.0013_strategy_workflow_trace_id... OK
+backend-1  | 2026-07-31T05:05:23.299362406Z 2026-07-31 05:05:23,299 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+backend-1  | 2026-07-31T05:05:23.302607187Z 2026-07-31 05:05:23,302 INFO supervisord started with pid 1
+backend-1  | 2026-07-31T05:05:24.306595183Z 2026-07-31 05:05:24,305 INFO spawned: 'web' with pid 68
+backend-1  | 2026-07-31T05:05:24.308889497Z 2026-07-31 05:05:24,308 INFO spawned: 'celery-core' with pid 69
+backend-1  | 2026-07-31T05:05:24.311661808Z 2026-07-31 05:05:24,311 INFO spawned: 'celery-data' with pid 70
+backend-1  | 2026-07-31T05:05:24.314233521Z 2026-07-31 05:05:24,313 INFO spawned: 'celery-research' with pid 71
+backend-1  | 2026-07-31T05:05:24.316759752Z 2026-07-31 05:05:24,316 INFO spawned: 'celery-strategy-evaluation' with pid 72
+backend-1  | 2026-07-31T05:05:24.320430617Z 2026-07-31 05:05:24,319 INFO spawned: 'celery-target-coordination' with pid 73
+backend-1  | 2026-07-31T05:05:24.323451962Z 2026-07-31 05:05:24,322 INFO spawned: 'celery-intent-execution' with pid 74
+backend-1  | 2026-07-31T05:05:24.326118584Z 2026-07-31 05:05:24,325 INFO spawned: 'celery-broker-commands' with pid 75
+backend-1  | 2026-07-31T05:05:24.329762214Z 2026-07-31 05:05:24,329 INFO spawned: 'market-consumer' with pid 76
+backend-1  | 2026-07-31T05:05:24.333298592Z 2026-07-31 05:05:24,332 INFO spawned: 'finnhub-market-data' with pid 77
+backend-1  | 2026-07-31T05:05:24.337011322Z 2026-07-31 05:05:24,336 INFO spawned: 'beat' with pid 78
+backend-1  | 2026-07-31T05:05:25.339893569Z 2026-07-31 05:05:25,339 INFO success: web entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+backend-1  | 2026-07-31T05:05:25.340168752Z 2026-07-31 05:05:25,339 INFO success: celery-core entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+backend-1  | 2026-07-31T05:05:25.340386933Z 2026-07-31 05:05:25,340 INFO success: celery-data entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+backend-1  | 2026-07-31T05:05:25.340402517Z 2026-07-31 05:05:25,340 INFO success: celery-research entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+backend-1  | 2026-07-31T05:05:25.340415409Z 2026-07-31 05:05:25,340 INFO success: celery-strategy-evaluation entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+backend-1  | 2026-07-31T05:05:25.340419460Z 2026-07-31 05:05:25,340 INFO success: celery-target-coordination entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+backend-1  | 2026-07-31T05:05:25.340422694Z 2026-07-31 05:05:25,340 INFO success: celery-intent-execution entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+backend-1  | 2026-07-31T05:05:25.340612962Z 2026-07-31 05:05:25,340 INFO success: celery-broker-commands entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+backend-1  | 2026-07-31T05:05:25.340710467Z 2026-07-31 05:05:25,340 INFO success: market-consumer entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+backend-1  | 2026-07-31T05:05:25.340726957Z 2026-07-31 05:05:25,340 INFO success: finnhub-market-data entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+backend-1  | 2026-07-31T05:05:25.340731128Z 2026-07-31 05:05:25,340 INFO success: beat entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)

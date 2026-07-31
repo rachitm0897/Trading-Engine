@@ -8,6 +8,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
+from .vnc import normalize_vnc_password
+
 
 class BrokerCredentialError(RuntimeError):
     pass
@@ -55,8 +57,7 @@ def generate_service_token():
 
 
 def generate_novnc_password():
-    # x11vnc's classic VNC authentication uses only the first eight characters.
-    return secrets.token_urlsafe(6)[:8]
+    return normalize_vnc_password(secrets.token_urlsafe(12))
 
 
 def _novnc_signature(session_id, expires_at, nonce):

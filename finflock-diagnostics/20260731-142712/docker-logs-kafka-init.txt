@@ -1,0 +1,64 @@
+kafka-init-1  | 2026-07-31T04:54:08.734808236Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:09.116135076Z Created topic market.raw.v1.
+kafka-init-1  | 2026-07-31T04:54:10.309366937Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:10.677168178Z Created topic market.canonical.v1.
+kafka-init-1  | 2026-07-31T04:54:11.916189345Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:12.278004007Z Created topic market.bars.v1.
+kafka-init-1  | 2026-07-31T04:54:13.465721779Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:13.886909475Z Created topic market.indicators.v1.
+kafka-init-1  | 2026-07-31T04:54:15.159029610Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:15.586547377Z Created topic market.quality.v1.
+kafka-init-1  | 2026-07-31T04:54:16.936551083Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:17.343920265Z Created topic strategy.inputs.v1.
+kafka-init-1  | 2026-07-31T04:54:18.614467698Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:19.090092661Z Created topic strategy.targets.v1.
+kafka-init-1  | 2026-07-31T04:54:20.330504537Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:20.713673708Z Created topic portfolio.flow.allocated.v1.
+kafka-init-1  | 2026-07-31T04:54:21.909149905Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:22.292748628Z Created topic portfolio.rebalance.planned.v1.
+kafka-init-1  | 2026-07-31T04:54:23.483264814Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:23.848554250Z Created topic risk.decisions.v1.
+kafka-init-1  | 2026-07-31T04:54:25.070233196Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:25.437847917Z Created topic orders.events.v1.
+kafka-init-1  | 2026-07-31T04:54:26.675402125Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:27.095582598Z Created topic executions.events.v1.
+kafka-init-1  | 2026-07-31T04:54:28.306672842Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:28.684383616Z Created topic reconciliation.events.v1.
+kafka-init-1  | 2026-07-31T04:54:29.858043843Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:30.267271925Z Created topic system.health.v1.
+kafka-init-1  | 2026-07-31T04:54:31.561546125Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:31.943285984Z Created topic dead-letter.v1.
+kafka-init-1  | 2026-07-31T04:54:33.124580054Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:54:33.514151683Z Created topic instrument.registry.v1.
+kafka-init-1  | 2026-07-31T04:58:33.654259807Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:35.376003059Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:37.039621153Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:38.641720566Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:40.321105331Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:41.872146153Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:43.527773326Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:45.155954757Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:46.867462113Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:48.570385407Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:50.151491820Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:51.775999976Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:53.363243373Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:54.934541729Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:56.630975089Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T04:58:58.245526547Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:07.890126699Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:09.712422077Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:11.434163454Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:13.015291014Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:14.617430482Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:16.296082775Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:17.892733503Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:19.511233729Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:21.155419428Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:22.841186542Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:24.430584312Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:25.979931056Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:27.636589681Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:29.246859654Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:30.853253624Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+kafka-init-1  | 2026-07-31T05:00:32.460047483Z WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.

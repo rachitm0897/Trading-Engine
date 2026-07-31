@@ -1,0 +1,7 @@
+HTTP/1.1 200 OK
+content-type: application/json; charset=UTF-8
+access-control-allow-origin: *
+connection: keep-alive
+content-length: 877
+
+{"taskmanagers":[{"id":"172.18.0.6:34141-10bb12","path":"pekko.tcp://flink@172.18.0.6:34141/user/rpc/taskmanager_0","dataPort":41127,"jmxPort":-1,"timeSinceLastHeartbeat":1785475751147,"slotsNumber":8,"freeSlots":3,"totalResource":{"cpuCores":8.0,"taskHeapMemory":383,"taskOffHeapMemory":0,"managedMemory":512,"networkMemory":128,"extendedResources":{}},"freeResource":{"cpuCores":3.0,"taskHeapMemory":144,"taskOffHeapMemory":0,"managedMemory":192,"networkMemory":48,"extendedResources":{}},"hardware":{"cpuCores":16,"physicalMemory":12460912640,"freeMemory":536870912,"managedMemory":536870920},"memoryConfiguration":{"frameworkHeap":134217728,"taskHeap":402653174,"frameworkOffHeap":134217728,"taskOffHeap":0,"networkMemory":134217730,"managedMemory":536870920,"jvmMetaspace":268435456,"jvmOverhead":201326592,"totalFlinkMemory":1342177280,"totalProcessMemory":1811939328}}]}

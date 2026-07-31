@@ -1,0 +1,1 @@
+Name=/finflock-real-paper-test-flink-taskmanager-1 Image=finflock-real-paper-test-flink-taskmanager State=running Running=true ExitCode=0 StartedAt=2026-07-31T05:00:33.85743858Z Health=none Ports={"6123/tcp":null,"8081/tcp":null} Networks=finflock-real-paper-test_private=172.18.0.6 

@@ -1,0 +1,12 @@
+HTTP/1.1 200 OK
+date: Fri, 31 Jul 2026 05:27:19 GMT
+server: uvicorn
+Content-Type: application/json
+Vary: Cookie, origin
+Content-Length: 469
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Cross-Origin-Opener-Policy: same-origin
+Set-Cookie: csrftoken=Ne8gjAPrlV3LWekXq4zhBumdvddEv0Ga; expires=Fri, 30 Jul 2027 05:27:20 GMT; Max-Age=31449600; Path=/; SameSite=Lax
+
+{"ok": true, "data": {"mode": "MULTI_SESSION", "execution_modes": ["PAPER", "LIVE"], "execution_mode_source": "PORTFOLIO_GATEWAY_SESSION", "allow_live_trading": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "broker_deployment": {"available": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "ready": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "missing": ["IBKR_GATEWAY_IMAGE", "QCH_API_HOST", "QCH_APP_ID", "QCH_SERVICE_TOKEN"], "invalid": []}, "is_admin": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "global_kill_switch": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "material_breaks": 0, "time": "2026-07-31T05:27:20.129890+00:00"}, "error": null, "meta": {}}

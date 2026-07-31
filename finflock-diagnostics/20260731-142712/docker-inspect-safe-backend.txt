@@ -1,0 +1,1 @@
+Name=/finflock-real-paper-test-backend-1 Image=finflock-real-paper-test-backend State=running Running=true ExitCode=0 StartedAt=2026-07-31T05:04:53.013224757Z Health=healthy Ports={"8000/tcp":[{"HostIp":"0.0.0.0","HostPort":"8000"},{"HostIp":"::","HostPort":"8000"}]} Networks=finflock-real-paper-test_private=172.18.0.8 

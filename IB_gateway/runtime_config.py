@@ -8,6 +8,7 @@ import re
 import shlex
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 
 from gateway_service.modes import normalize_trading_mode
 
@@ -30,6 +31,7 @@ KNOWN_PLACEHOLDER_HASHES = {
     "b0060e76ae3488cac69d2e702fa366537fe241e19382ea731059e758fae07be1",
 }
 RESTART_TIME = re.compile(r"^(0?[1-9]|1[0-2]):[0-5][0-9] (AM|PM)$")
+VNC_PASSWORD_BYTES = 8
 
 
 class RuntimeConfigurationError(ValueError):
@@ -49,6 +51,22 @@ def normalize_broker_adapter(value: object) -> str:
     if adapter not in VALID_BROKER_ADAPTERS:
         raise ValueError("BROKER_ADAPTER")
     return adapter
+
+
+def normalize_vnc_password(value: object) -> str:
+    """Return the exact eight ASCII bytes used by classic VNC authentication."""
+    password = "" if value is None else str(value)
+    if not password:
+        raise ValueError("NOVNC_PASSWORD")
+    if "\r" in password or "\n" in password:
+        raise ValueError("NOVNC_PASSWORD")
+    try:
+        encoded = password.encode("ascii")
+    except UnicodeEncodeError:
+        raise ValueError("NOVNC_PASSWORD") from None
+    if len(encoded) < VNC_PASSWORD_BYTES:
+        raise ValueError("NOVNC_PASSWORD")
+    return encoded[:VNC_PASSWORD_BYTES].decode("ascii")
 
 
 def _is_missing(value: object) -> bool:
@@ -98,6 +116,11 @@ def validate_environment(environment: Mapping[str, str] | None = None) -> dict[s
             missing.append(name)
         elif _is_placeholder(value) or "\n" in str(value) or "\r" in str(value):
             invalid.append(name)
+    if "NOVNC_PASSWORD" not in missing and "NOVNC_PASSWORD" not in invalid:
+        try:
+            normalize_vnc_password(environment.get("NOVNC_PASSWORD"))
+        except ValueError:
+            invalid.append("NOVNC_PASSWORD")
 
     raw_mode = environment.get("IBC_TRADING_MODE", "paper" if adapter == "mock" else "")
     mode = ""
@@ -150,12 +173,29 @@ def shell_exports(configuration: Mapping[str, str]) -> str:
     )
 
 
-def main() -> int:
+def _write_normalized_vnc_password(path: str, password: str) -> None:
+    target = Path(path)
+    target.write_text(normalize_vnc_password(password) + "\n", encoding="ascii")
+    target.chmod(0o600)
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    password_path = None
+    if argv:
+        if len(argv) != 2 or argv[0] != "--write-normalized-vnc-password":
+            print("Gateway runtime configuration error; invalid command", file=sys.stderr)
+            return 64
+        password_path = argv[1]
     try:
         configuration = validate_environment()
     except RuntimeConfigurationError as exc:
         print(str(exc), file=sys.stderr)
         return 64
+    if password_path is not None:
+        _write_normalized_vnc_password(
+            password_path, os.environ.get("NOVNC_PASSWORD", "")
+        )
     print(shell_exports(configuration))
     return 0
 

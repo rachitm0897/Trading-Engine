@@ -1,0 +1,11 @@
+HTTP/1.1 200 OK
+date: Fri, 31 Jul 2026 05:27:20 GMT
+server: uvicorn
+Content-Type: application/json
+Content-Length: 782
+Vary: origin
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Cross-Origin-Opener-Policy: same-origin
+
+{"ok": true, "data": {"provider": "FINNHUB", "configured": true, "enabled": true, "effective_source": "ENVIRONMENT", "environment_configured": true, "database_configured": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "database_override_requested": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "database_override_allowed": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "database_override_active": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "masked_api_key": "\u2022\u2022\u2022\u2022ngfg", "last_success_at": "2026-07-31T05:09:42.233Z", "last_tested_at": null, "last_test_success_at": null, "last_error": "", "rate_limit_state": {"limit": "", "reset": "", "remaining": ""}, "updated_at": "2026-07-31T05:09:42.233Z", "fallback": {"enabled": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "historical_enabled": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "live_enabled": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "auto_failback_enabled": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "active_subscriptions": 0, "verified_mappings": 0, "transition_count": 62}}, "error": null, "meta": {}}

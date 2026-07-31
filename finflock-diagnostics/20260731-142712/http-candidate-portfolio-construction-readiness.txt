@@ -1,0 +1,11 @@
+HTTP/1.1 400 Bad Request
+date: Fri, 31 Jul 2026 05:27:20 GMT
+server: uvicorn
+Content-Type: application/json
+Content-Length: 154
+Vary: origin
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Cross-Origin-Opener-Policy: same-origin
+
+{"ok": [REDACTED_FINNHUB_API_KEY_OVERRIDE_ENABLED], "data": null, "error": {"code": "INVALID_BUILDER_PREFLIGHT", "message": "portfolio query parameter is required", "details": {}}, "meta": {}}

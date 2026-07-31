@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Server: nginx
+Date: Fri, 31 Jul 2026 05:27:20 GMT
+Content-Type: text/plain
+Content-Length: 2
+Connection: keep-alive
+
+ok

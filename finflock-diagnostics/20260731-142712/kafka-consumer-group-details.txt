@@ -1,0 +1,63 @@
+==== bar-aggregation-v2 ====
+
+Consumer group 'bar-aggregation-v2' has no active members.
+
+GROUP              TOPIC               PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+bar-aggregation-v2 market.canonical.v1 4          25              25              0               -               -               -==== stream-health-v1 ====
+
+Consumer group 'stream-health-v1' has no active members.
+
+GROUP            TOPIC             PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+stream-health-v1 market.quality.v1 5          25              25              0               -               -               -==== indicator-registry-v1 ====
+
+Consumer group 'indicator-registry-v1' has no active members.
+
+GROUP                 TOPIC              PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+indicator-registry-v1 strategy.inputs.v1 1          1               1               0               -               -               -==== finflock-backend-market-persistence-v2 ====
+
+GROUP                                  TOPIC                PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                  HOST            CLIENT-ID
+finflock-backend-market-persistence-v2 market.bars.v1       0          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.indicators.v1 5          4               4               0               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.quality.v1    0          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.bars.v1       4          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.quality.v1    1          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.bars.v1       3          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.bars.v1       2          6               6               0               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.bars.v1       1          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.quality.v1    4          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.quality.v1    5          25              25              0               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.quality.v1    2          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.quality.v1    3          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.bars.v1       5          19              19              0               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.indicators.v1 3          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.indicators.v1 4          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.indicators.v1 1          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.indicators.v1 2          -               0               -               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka
+finflock-backend-market-persistence-v2 market.indicators.v1 0          21              21              0               rdkafka-47880a9c-b831-421b-92ab-66c1900162da /172.18.0.8     rdkafka==== indicator-computation-v2 ====
+
+Consumer group 'indicator-computation-v2' has no active members.
+
+GROUP                    TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+indicator-computation-v2 market.bars.v1  2          6               6               0               -               -               -
+indicator-computation-v2 market.bars.v1  5          19              19              0               -               -               -==== bar-registry-v1 ====
+
+Consumer group 'bar-registry-v1' has no active members.
+
+GROUP           TOPIC              PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+bar-registry-v1 strategy.inputs.v1 1          1               1               0               -               -               -==== market-normalization-v2 ====
+
+Consumer group 'market-normalization-v2' has no active members.
+
+GROUP                   TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+market-normalization-v2 market.raw.v1   1          25              25              0               -               -               -==== instrument-registry-v2 ====
+
+Consumer group 'instrument-registry-v2' has no active members.
+
+GROUP                  TOPIC                  PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+instrument-registry-v2 instrument.registry.v1 3          1               1               0               -               -               -
+instrument-registry-v2 instrument.registry.v1 1          1               1               0               -               -               -==== stale-price-detection-v1 ====
+
+Consumer group 'stale-price-detection-v1' has no active members.
+
+GROUP                    TOPIC               PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+stale-price-detection-v1 market.canonical.v1 4          25              25              0               -               -               -
