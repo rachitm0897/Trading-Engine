@@ -18,15 +18,35 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 FORCE_SCRIPT_NAME = APP_BASE_PATH or None
 
 INSTALLED_APPS = [
-    "django.contrib.contenttypes", "django.contrib.auth", "django.contrib.sessions",
-    "corsheaders", "rest_framework",
-    "apps.core", "apps.instruments", "apps.broker_gateway", "apps.accounts",
-    "apps.portfolios", "apps.strategies", "apps.allocation", "apps.risk",
-    "apps.oms", "apps.execution", "apps.reconciliation", "apps.audit",
-    "apps.event_bus", "apps.market_streams", "apps.rebalancing", "apps.position_sizing",
-    "apps.market_data", "apps.portfolio_optimization", "apps.portfolio_construction",
+    "django.contrib.contenttypes",
+    "django.contrib.auth",
+    "django.contrib.sessions",
+    "corsheaders",
+    "rest_framework",
+    "django_celery_results",
+
+    "apps.core",
+    "apps.instruments",
+    "apps.broker_gateway",
+    "apps.accounts",
+    "apps.portfolios",
+    "apps.strategies",
+    "apps.allocation",
+    "apps.risk",
+    "apps.oms",
+    "apps.execution",
+    "apps.reconciliation",
+    "apps.audit",
+    "apps.event_bus",
+    "apps.market_streams",
+    "apps.rebalancing",
+    "apps.position_sizing",
+    "apps.market_data",
+    "apps.portfolio_optimization",
+    "apps.portfolio_construction",
     "apps.research",
 ]
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware", "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware", "django.middleware.common.CommonMiddleware",
