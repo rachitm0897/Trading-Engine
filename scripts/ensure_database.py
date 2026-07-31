@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
-
 import os
 import socket
 import sys
 import time
+from pathlib import Path
 
 import psycopg
+from dotenv import load_dotenv
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.errors import DuplicateDatabase
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# QCH has no deployment environment configuration, so the Docker image
+# copies .env.example to /app/.env. Load that file explicitly because this
+# script runs before Django settings are initialized.
+load_dotenv(BASE_DIR / ".env", override=False)
 
 
 def ensure_database() -> None:
