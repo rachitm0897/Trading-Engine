@@ -37,9 +37,11 @@ import type {
   PortfolioConstructionRun,
   PortfolioBuilderReadiness,
   RecommendationBatch,
+  ExecutionDiagnostics,
 } from './types'
 
 const POLL_INTERVAL = 15_000
+const IDLE_WORKFLOW_POLL_INTERVAL = 12_000
 
 export const queries = {
   brokerSessions: () => queryOptions({
@@ -146,6 +148,11 @@ export const queries = {
     queryFn: () => request<StreamingHealth>('streaming/health/'),
     refetchInterval: POLL_INTERVAL,
   }),
+  executionDiagnostics: () => queryOptions({
+    queryKey: ['execution-diagnostics'],
+    queryFn: () => request<ExecutionDiagnostics>('execution/diagnostics/'),
+    refetchInterval: IDLE_WORKFLOW_POLL_INTERVAL,
+  }),
   strategyDefinitions: () => queryOptions({
     queryKey: ['strategy-definitions'],
     queryFn: () => request<StrategyDefinition[]>('strategy-definitions/'),
@@ -169,13 +176,21 @@ export const queries = {
     queryKey: ['strategy-instance', strategyId],
     queryFn: () => request<StrategyInstance>(`strategy-instances/${strategyId}/`),
     enabled: strategyId > 0,
-    refetchInterval: POLL_INTERVAL,
+    refetchInterval: (query) => {
+      const workflow = query.state.data?.execution_workflow
+      if (workflow?.terminal) return false
+      return workflow?.active ? 1_000 : IDLE_WORKFLOW_POLL_INTERVAL
+    },
   }),
   strategyTimeline: (strategyId: number) => queryOptions({
     queryKey: ['strategy-timeline', strategyId],
     queryFn: () => request<StrategyTimelineItem[]>(`strategy-instances/${strategyId}/execution-timeline/`),
     enabled: strategyId > 0,
-    refetchInterval: POLL_INTERVAL,
+    refetchInterval: (query) => {
+      const workflow = query.state.data?.[0]
+      if (workflow?.workflow_terminal) return false
+      return workflow?.workflow_active ? 1_000 : IDLE_WORKFLOW_POLL_INTERVAL
+    },
   }),
   strategyChart: (strategyId: number, controls?: {range?: string; interval?: string}) => queryOptions({
     queryKey: controls ? ['strategy-chart', strategyId, controls] : ['strategy-chart', strategyId],
@@ -236,7 +251,10 @@ export const queries = {
     queryKey: ['construction-runs', portfolioId ?? 'none'],
     queryFn: () => request<PortfolioConstructionRun[]>(withQuery('portfolio-construction/runs/', {portfolio: portfolioId})),
     enabled: Boolean(portfolioId),
-    refetchInterval: POLL_INTERVAL,
+    refetchInterval: (query) => (query.state.data || []).some((run) =>
+      ['QUEUED', 'DISPATCHED', 'CALCULATING'].includes(run.status)
+      || ['QUEUED', 'APPLYING', 'ACTIVATING'].includes(run.application_status)
+    ) ? 1_000 : IDLE_WORKFLOW_POLL_INTERVAL,
   }),
   builderReadiness: (portfolioId?: number | null, planId?: number | null) => queryOptions({
     queryKey: ['portfolio-builder-readiness', portfolioId ?? 'none', planId ?? 'none'],

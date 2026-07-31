@@ -19,6 +19,11 @@
 .attention-list p, .healthy-callout p, .inline-warning p { margin: .2rem 0 0; color: var(--text-muted); font-size: .69rem; }
 .strategy-control-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .strategy-control-bar > div { display: flex; align-items: center; flex-wrap: wrap; gap: .45rem; }
+.wizard-create-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .5rem; }
+.workflow-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background: var(--border); }
+.workflow-summary > div { min-width: 0; padding: .7rem; background: var(--surface); }
+.workflow-summary span { display: block; margin-bottom: .28rem; color: var(--text-muted); font-size: .62rem; text-transform: uppercase; letter-spacing: .08em; }
+.workflow-summary strong, .workflow-summary code { display: block; overflow-wrap: anywhere; color: var(--text); font-size: .72rem; }
 .inline-warning { padding: .75rem; border: 1px solid var(--border-warning); border-radius: var(--radius); background: var(--warning-soft); }
 .tabs { display: flex; gap: .2rem; overflow-x: auto; border-bottom: 1px solid var(--border); }
 .tabs button { min-width: max-content; padding: .68rem .85rem; border: 0; border-bottom: 2px solid transparent; color: var(--text-muted); background: transparent; font-size: .75rem; font-weight: 650; }

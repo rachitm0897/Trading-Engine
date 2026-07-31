@@ -420,6 +420,14 @@ def _record_failure(job_id, raw_error):
         job.strategy_instance.__class__.objects.filter(pk=job.strategy_instance_id).update(
             state="ERROR", block_reason=message[:255],
         )
+    if job.status == "FAILED":
+        from apps.strategies.framework import fail_activation_workflow
+        instance=StrategyInstance.objects.get(pk=job.strategy_instance_id)
+        fail_activation_workflow(
+            instance,
+            message,
+            retryable=bool(error.retryable),
+        )
     return job
 
 

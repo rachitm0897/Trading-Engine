@@ -35,10 +35,11 @@ const initialDraft: Draft = {
 export function CreateStrategyPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const {selectedPortfolioId, portfolio, session} = useSelection()
-  const executionMode = portfolio?.gateway_session_id === session?.id
-    ? executionModeForSession(session)
-    : null
+  const {selectedPortfolioId, portfolio, sessions} = useSelection()
+  const executionSession = sessions.find(
+    (candidate) => candidate.id === portfolio?.gateway_session_id,
+  ) || null
+  const executionMode = executionModeForSession(executionSession)
   const definitions = useQuery(queries.strategyDefinitions())
   const instruments = useQuery(queries.instruments())
   const policies = useQuery(queries.strategyPolicies())
@@ -47,16 +48,17 @@ export function CreateStrategyPage() {
   const [validation, setValidation] = useState<string | null>(null)
   const [resolution, setResolution] = useState<InstrumentResolution | null>(null)
   const definition = definitions.data?.find((item) => item.key === draft.definitionKey) || null
-  const create = useMutation({
-    mutationFn: () => {
-      if (!executionMode) throw new Error('The selected portfolio must have a matching Paper or Live Gateway session')
+  const create = useMutation<StrategyInstance, Error, boolean | void>({
+    mutationFn: (activateRequested) => {
+      const activate = activateRequested === true
+      if (!executionMode || !executionSession) throw new Error('The selected portfolio must have an assigned Paper or Live Gateway session')
       return request<StrategyInstance>('strategy-instances/', mutationOptions('POST', {
         name: draft.name.trim(), definition_key: draft.definitionKey, instrument_id: resolution?.instrument_id,
         portfolio_id: selectedPortfolioId, timeframe: draft.timeframe, parameters: draft.parameters,
         target_configuration: {target_weight: Number(draft.targetWeight), capital_share: Number(draft.capitalShare), priority: Number(draft.priority)},
         risk_policy_id: draft.riskPolicyId ? Number(draft.riskPolicyId) : null,
         order_policy_id: draft.orderPolicyId ? Number(draft.orderPolicyId) : null,
-        execution_mode: executionMode, qualify: false,
+        execution_mode: executionMode, qualify: false, activate,
       }, true))
     },
     onSuccess: async (data) => {
@@ -91,13 +93,22 @@ export function CreateStrategyPage() {
     <PageHeader eyebrow="Strategies / New" title="Create a strategy" description={`Build for ${portfolio?.name || 'the selected portfolio'}. Execution mode comes from its assigned Gateway session${executionMode ? ` (${executionModeLabel(executionMode)})` : ''}.`} actions={<Link className="button-secondary" to="/strategies"><ArrowLeft />Back to strategies</Link>} />
     <ol className="wizard-steps" aria-label="Create strategy progress">{steps.map((label, index) => <li key={label} className={index === step ? 'active' : index < step ? 'complete' : ''}><span>{index < step ? <Check /> : index + 1}</span><strong>{label}</strong></li>)}</ol>
     <TerminalPanel id="create-strategy-wizard" className="wizard-panel" collapsible={false}>
-      {step === 0 && <div className="wizard-content"><div className="wizard-heading"><span>1</span><div><h2>Choose the instrument</h2><p>Search IBKR by ticker or company name, then select and qualify the exact broker contract.</p></div></div><BrokerInstrumentSearch value={draft.ticker} suggestions={instruments.data || []} autoFocus onValueChange={(ticker) => setDraft((current) => ({...current, ticker}))} onContractSelected={(contract) => setDraft((current) => ({...current, exchange: contract.exchange}))} onResolved={(value) => {setResolution(value); setValidation(null)}} /></div>}
+      {step === 0 && <div className="wizard-content"><div className="wizard-heading"><span>1</span><div><h2>Choose the instrument</h2><p>Search IBKR by ticker or company name, then select and qualify the exact broker contract through this portfolio&apos;s assigned Gateway.</p></div></div><BrokerInstrumentSearch value={draft.ticker} suggestions={instruments.data || []} autoFocus portfolioId={selectedPortfolioId} gatewaySessionId={executionSession?.id} onValueChange={(ticker) => setDraft((current) => ({...current, ticker}))} onContractSelected={(contract) => setDraft((current) => ({...current, exchange: contract.exchange}))} onResolved={(value) => {setResolution(value); setValidation(null)}} /></div>}
       {step === 1 && <WizardDefinition draft={draft} setDraft={setDraft} definitions={definitions.data || []} definition={definition} onDefinition={selectDefinition} />}
       {step === 2 && <WizardParameters draft={draft} setDraft={setDraft} definition={definition} />}
-      {step === 3 && <WizardExecution draft={draft} setDraft={setDraft} policies={policies.data} executionMode={executionMode} gatewayName={session?.display_name} />}
-      {step === 4 && <WizardReview draft={draft} definition={definition} resolution={resolution} portfolioName={portfolio?.name} executionMode={executionMode} gatewayName={session?.display_name} />}
+      {step === 3 && <WizardExecution draft={draft} setDraft={setDraft} policies={policies.data} executionMode={executionMode} gatewayName={executionSession?.display_name} />}
+      {step === 4 && <WizardReview draft={draft} definition={definition} resolution={resolution} portfolioName={portfolio?.name} executionMode={executionMode} gatewayName={executionSession?.display_name} />}
       {(validation || create.isError) && <ErrorState title={validation ? 'Complete this step' : 'Strategy validation failed'} error={validation ? new Error(validation) : create.error} compact />}
-      <div className="wizard-footer"><button className="button-secondary" disabled={step === 0 || create.isPending} onClick={() => {setValidation(null); setStep((value) => Math.max(0, value - 1))}}><ArrowLeft />Back</button><span>Step {step + 1} of {steps.length}</span>{step < 4 ? <button className="button-primary" onClick={next}>Continue<ArrowRight /></button> : <button className="button-primary" disabled={create.isPending || !selectedPortfolioId || !executionMode} onClick={() => {if (validateStep()) create.mutate()}}><ShieldCheck />{create.isPending ? 'Validating…' : 'Validate & create'}</button>}</div>
+      <div className="wizard-footer">
+        <button className="button-secondary" disabled={step === 0 || create.isPending} onClick={() => {setValidation(null); setStep((value) => Math.max(0, value - 1))}}><ArrowLeft />Back</button>
+        <span>{step < 4 ? `Step ${step + 1} of ${steps.length}` : 'Choose the initial strategy state'}</span>
+        {step < 4
+          ? <button className="button-primary" onClick={next}>Continue<ArrowRight /></button>
+          : <div className="wizard-create-actions">
+              <button className="button-secondary" disabled={create.isPending || !selectedPortfolioId || !executionMode} onClick={() => {if (validateStep()) create.mutate(false)}}><Check />{create.isPending && create.variables === false ? 'Creating…' : 'Create as disabled'}</button>
+              <button className="button-primary" disabled={create.isPending || !selectedPortfolioId || !executionMode} onClick={() => {if (validateStep()) create.mutate(true)}}><ShieldCheck />{create.isPending && create.variables === true ? 'Creating & queuing…' : 'Create and activate'}</button>
+            </div>}
+      </div>
     </TerminalPanel>
   </div>
 }

@@ -34,6 +34,12 @@ def annotate_stream_health(queryset):
         _stream_provider_generation=scoped("provider_generation"),
         _stream_last_canonical_event=Subquery(canonical.values("produced_at")[:1]),
         _stream_last_final_bar=Subquery(final_bar.values("window_end")[:1]),
+        _stream_last_final_bar_close=Subquery(final_bar.values("close")[:1]),
+        _stream_last_final_bar_provider=Subquery(final_bar.values("provider")[:1]),
+        _stream_last_final_bar_source=Subquery(final_bar.values("source")[:1]),
+        _stream_last_final_bar_processing_mode=Subquery(
+            final_bar.values("processing_mode")[:1]
+        ),
         _stream_last_indicator=Subquery(indicator.values("event_time")[:1]),
         _stream_last_strategy_run=Subquery(run.values("started_at")[:1]),
         _stream_requires_indicator=Exists(indicator_binding),

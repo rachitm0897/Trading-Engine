@@ -3,7 +3,7 @@ import {EmptyState, StatusBadge, formatDateTime} from './ui'
 
 export interface ActivityItem {
   id: string | number
-  time: string
+  time?: string | null
   type: string
   title: string
   detail?: string
@@ -20,6 +20,6 @@ function icon(type: string) {
 
 export function ActivityTimeline({items, emptyDescription = 'Operational events will appear here as they are persisted.'}: {items: ActivityItem[]; emptyDescription?: string}) {
   if (!items.length) return <EmptyState title="No recent activity" description={emptyDescription} />
-  return <ol className="activity-timeline">{items.map((item) => <li key={`${item.type}-${item.id}`}><div className="timeline-icon">{icon(item.type.toUpperCase())}</div><div className="timeline-copy"><div><strong>{item.title}</strong>{item.status && <StatusBadge status={item.status} />}</div>{item.detail && <p>{item.detail}</p>}<time dateTime={item.time}>{formatDateTime(item.time)}</time></div></li>)}</ol>
+  return <ol className="activity-timeline">{items.map((item) => <li key={`${item.type}-${item.id}`}><div className="timeline-icon">{icon(item.type.toUpperCase())}</div><div className="timeline-copy"><div><strong>{item.title}</strong>{item.status && <StatusBadge status={item.status} />}</div>{item.detail && <p>{item.detail}</p>}{item.time ? <time dateTime={item.time}>{formatDateTime(item.time)}</time> : <time>Not reached</time>}</div></li>)}</ol>
 }
 

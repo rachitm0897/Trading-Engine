@@ -44,13 +44,13 @@ const MAXIMUM_RISK: Record<GoalTimeframe, number> = {
   COMPOUND: 5,
 }
 
-async function pollConstruction(initial: PortfolioConstructionRun, applying = false) {
+export async function pollConstruction(initial: PortfolioConstructionRun, applying = false, pollIntervalMs = 1_000) {
   let value = initial
   const complete = (run: PortfolioConstructionRun) => applying
     ? ['APPLIED', 'PARTIALLY_APPLIED', 'FAILED'].includes(run.application_status)
     : !['QUEUED', 'DISPATCHED', 'CALCULATING'].includes(run.status)
-  for (let attempt = 0; attempt < 120 && !complete(value); attempt += 1) {
-    await new Promise((resolve) => window.setTimeout(resolve, 500))
+  while (!complete(value)) {
+    await new Promise((resolve) => window.setTimeout(resolve, pollIntervalMs))
     value = await request<PortfolioConstructionRun>(`portfolio-construction/runs/${value.id}/`)
   }
   if (applying && value.application_status === 'FAILED') {
@@ -70,10 +70,11 @@ function asDraft(goal: PortfolioGoalAllocation): GoalDraft {
 
 export function PortfolioBuilderPage() {
   const queryClient = useQueryClient()
-  const {portfolio, selectedPortfolioId, session} = useSelection()
-  const executionMode = portfolio?.gateway_session_id === session?.id
-    ? executionModeForSession(session)
-    : null
+  const {portfolio, selectedPortfolioId, sessions} = useSelection()
+  const executionSession = sessions.find(
+    (candidate) => candidate.id === portfolio?.gateway_session_id,
+  ) || null
+  const executionMode = executionModeForSession(executionSession)
   const plans = useQuery(queries.constructionPlans(selectedPortfolioId))
   const runs = useQuery(queries.constructionRuns(selectedPortfolioId))
   const plan = plans.data?.[0]
@@ -246,7 +247,7 @@ export function PortfolioBuilderPage() {
         pending={applyMutation.isPending} error={applyMutation.error} onBack={() => setStep(2)} onConfirm={() => setConfirmOpen(true)} />}
 
       <ConfirmActionDialog open={confirmOpen} title={executionMode ? `Apply to ${executionModeLabel(executionMode)}?` : 'Gateway mode unavailable'}
-        description={executionMode ? `Preview creates no orders. Applying routes one ${executionMode} execution rebalance through ${session?.display_name}, sizing, risk, OMS, and the matching Gateway.` : 'The selected portfolio must have a matching Paper or Live Gateway session.'}
+        description={executionMode ? `Preview creates no orders. Applying routes one ${executionMode} execution rebalance through ${executionSession?.display_name}, sizing, risk, OMS, and the portfolio-assigned Gateway.` : 'The selected portfolio must have an assigned Paper or Live Gateway session.'}
         confirmLabel={executionMode ? `Apply to ${executionModeLabel(executionMode)}` : 'Apply unavailable'} requireReason={false} danger={executionMode === 'LIVE'} pending={applyMutation.isPending}
         onClose={() => setConfirmOpen(false)} onConfirm={async () => { await applyMutation.mutateAsync() }} />
     </>}

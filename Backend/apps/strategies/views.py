@@ -1,4 +1,6 @@
 import json
+import hashlib
+import uuid
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import OuterRef, Prefetch, Subquery
@@ -22,11 +24,23 @@ from .deletion import (
     audit_strategy_deletion_rejection,
     delete_strategy_instance,
 )
-from .framework import create_instance, enable_instance, flatten_instance, pause_instance, update_instance
+from .framework import (
+    StrategyActivationError,
+    create_instance,
+    enable_instance,
+    flatten_instance,
+    pause_instance,
+    update_instance,
+)
 from .models import (OrderPolicy, StrategyAction, StrategyAttributedPosition, StrategyDefinition,
     StrategyInputBinding, StrategyInstance, StrategyRiskPolicy, StrategyRun)
 from .models import StrategyVersion
 from .plugins import get_plugin
+from .workflow import execution_workflow
+
+
+class BrokerSessionRequired(ValueError):
+    pass
 
 
 def _definition(item):
@@ -52,23 +66,53 @@ def _strategy_queryset(detail=False):
     from apps.allocation.models import OrderIntentAttribution
     from apps.execution.models import Fill
     from apps.market_streams.health import annotate_stream_health
+    from apps.oms.models import Order, OrderIntent
     from .models import StrategySignal, StrategyTarget
     latest_signal=StrategySignal.objects.filter(strategy_instance_id=OuterRef("pk")).order_by("-signal_time","-id")
     latest_target=StrategyTarget.objects.filter(strategy_instance_id=OuterRef("pk"),status="ACTIVE").order_by("-created_at","-id")
+    any_target=StrategyTarget.objects.filter(
+        strategy_instance_id=OuterRef("pk")
+    ).order_by("-created_at","-id")
     attributed=StrategyAttributedPosition.objects.filter(strategy_instance_id=OuterRef("pk"),
         instrument_id=OuterRef("instrument_id"),portfolio_id=OuterRef("portfolio_id"))
     active_attribution=OrderIntentAttribution.objects.filter(strategy_instance_id=OuterRef("pk"),
         order_intent__order__status__in=["CREATED","RISK_APPROVED","QUEUED","SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED"]
         ).order_by("-order_intent__order__created_at")
     last_fill=Fill.objects.filter(order__intent__attributions__strategy_instance_id=OuterRef("pk")).order_by("-executed_at","-id")
+    latest_order=Order.objects.filter(
+        intent__attributions__strategy_instance_id=OuterRef("pk")
+    ).order_by("-created_at","-id")
+    latest_intent=OrderIntent.objects.filter(
+        attributions__strategy_instance_id=OuterRef("pk")
+    ).order_by("-created_at","-id")
+    latest_action=StrategyAction.objects.filter(
+        strategy_instance_id=OuterRef("pk"),action="enable"
+    ).order_by("-created_at","-pk")
     query=StrategyInstance.objects.select_related(
-        "definition","portfolio","instrument__broker_contract","risk_policy","order_policy"
+        "definition","portfolio__gateway_session","portfolio__account",
+        "instrument__broker_contract","instrument__market_state",
+        "risk_policy","order_policy"
     ).annotate(
         _latest_signal=Subquery(latest_signal.values("signal_type")[:1]),
         _current_target=Subquery(latest_target.values("target_weight")[:1]),
+        _latest_target_id=Subquery(any_target.values("pk")[:1]),
         _attributed_quantity=Subquery(attributed.values("quantity")[:1]),
         _active_order=Subquery(active_attribution.values("order_intent__order__internal_id")[:1]),
         _last_fill=Subquery(last_fill.values("execution_id")[:1]),
+        _latest_order_status=Subquery(latest_order.values("status")[:1]),
+        _latest_intent_id=Subquery(latest_intent.values("pk")[:1]),
+        _latest_intent_operation_status=Subquery(
+            latest_intent.values("operation_status")[:1]
+        ),
+        _latest_rebalance_id=Subquery(latest_intent.values("rebalance_id")[:1]),
+        _activation_action_id=Subquery(latest_action.values("pk")[:1]),
+        _activation_action_status=Subquery(latest_action.values("status")[:1]),
+        _activation_action_retryable=Subquery(latest_action.values("retryable")[:1]),
+        _activation_action_error=Subquery(latest_action.values("last_error")[:1]),
+        _activation_action_attempt_count=Subquery(latest_action.values("attempt_count")[:1]),
+        _activation_action_idempotency_key=Subquery(latest_action.values("idempotency_key")[:1]),
+        _activation_action_created_at=Subquery(latest_action.values("created_at")[:1]),
+        _activation_action_completed_at=Subquery(latest_action.values("completed_at")[:1]),
     )
     if detail:
         query=query.prefetch_related(
@@ -78,15 +122,148 @@ def _strategy_queryset(detail=False):
     return annotate_stream_health(query)
 
 
+def _annotated_activation_operation(item):
+    if item._activation_action_id is None:
+        return None
+    return {
+        "id":item._activation_action_id,
+        "status":item._activation_action_status,
+        "retryable":bool(item._activation_action_retryable),
+        "message":item._activation_action_error or "",
+        "attempt_count":item._activation_action_attempt_count,
+        "idempotency_key":item._activation_action_idempotency_key,
+        "created_at":item._activation_action_created_at,
+        "completed_at":item._activation_action_completed_at,
+    }
+
+
+def _annotated_workflow_summary(item):
+    action_status=item._activation_action_status
+    order_status=item._latest_order_status
+    order_terminal=order_status in {"FILLED","REJECTED","CANCELLED","EXPIRED"}
+    terminal=bool(
+        (item.state in {"DISABLED","PAUSED","KILLED"} and not action_status)
+        or action_status=="FAILED"
+        or order_terminal
+        or item.state=="ERROR"
+    )
+    active=bool(
+        not terminal and (
+            action_status=="PROCESSING"
+            or item.state in {
+                "ACTIVATING","SUBSCRIBING","WARMING_UP",
+                "READY_WAITING_FOR_LIVE_BAR",
+            }
+            or item._latest_intent_operation_status in {"PENDING","CLAIMED"}
+            or order_status in {
+                "CREATED","RISK_APPROVED","QUEUED","BROKER_BLOCKED",
+                "SUBMITTED","ACKNOWLEDGED","PARTIALLY_FILLED",
+                "CANCEL_PENDING","UNKNOWN",
+            }
+            or (item._latest_target_id and not item._latest_intent_id)
+        )
+    )
+    if not action_status:
+        current_stage="CREATED"
+    elif action_status=="FAILED":
+        current_stage={
+            "ACTIVATING":"CONTRACT_QUALIFIED",
+            "SUBSCRIBING":"SUBSCRIPTION_ACTIVE",
+            "WARMING_UP":"WARMUP_IN_PROGRESS",
+            "READY_WAITING_FOR_LIVE_BAR":"WAITING_FOR_LIVE_BAR",
+        }.get(item.state,"ACTIVATION_QUEUED")
+    elif not getattr(item.instrument,"broker_contract",None):
+        current_stage="CONTRACT_QUALIFIED"
+    elif not item.subscription_ready_at:
+        current_stage="SUBSCRIPTION_ACTIVE"
+    elif not item.warmup_completed_at:
+        current_stage="WARMUP_IN_PROGRESS"
+    elif not item.first_evaluation_completed_at:
+        current_stage="WAITING_FOR_LIVE_BAR"
+    elif not item._latest_target_id:
+        current_stage="TARGET_GENERATED"
+    elif not item._latest_rebalance_id:
+        current_stage="REBALANCE_CREATED"
+    elif not item._latest_intent_id:
+        current_stage="ORDER_INTENT_CREATED"
+    elif not order_status or order_status=="CREATED":
+        current_stage="RISK_DECISION"
+    elif order_status in {"RISK_APPROVED","QUEUED","BROKER_BLOCKED"}:
+        current_stage="BROKER_COMMAND_SENT"
+    elif order_status=="SUBMITTED":
+        current_stage="ORDER_ACKNOWLEDGED"
+    else:
+        current_stage="FILL_PROGRESS"
+    if action_status=="FAILED" or item.state=="ERROR" or order_status=="REJECTED":
+        status="FAILED"
+    elif order_status=="FILLED":
+        status="COMPLETED"
+    elif item.state=="DISABLED" and not action_status:
+        status="DISABLED"
+    elif active:
+        status="ACTIVE"
+    else:
+        status="IDLE"
+    return {
+        "trace_id":str(item.workflow_trace_id),
+        "status":status,
+        "active":active,
+        "terminal":terminal,
+        "current_stage":current_stage,
+        "poll_after_ms":0 if terminal else (1000 if active else 12000),
+        "observed_at":timezone.now(),
+    }
+
+
 def _instance(item, detail=False):
-    from apps.market_streams.models import IndicatorValue, MarketBar
+    from apps.market_streams.models import IndicatorValue
     contract=getattr(item.instrument,"broker_contract",None)
     plugin=get_plugin(item.definition)
     annotated=hasattr(item,"_current_target")
     latest_bar_at=getattr(item,"_stream_last_final_bar",None)
     if not getattr(item,"_stream_annotated",False):
+        from apps.market_streams.models import MarketBar
         latest_bar=MarketBar.objects.filter(instrument=item.instrument,interval=item.timeframe,is_final=True).order_by("-window_end","-version").first()
         latest_bar_at=latest_bar.window_end if latest_bar else None
+    else:
+        latest_bar=None
+    market_state=(
+        getattr(item.instrument,"market_state",None)
+        if detail else None
+    )
+    price_timestamp=market_state.latest_event_at if market_state else (
+        latest_bar.window_end if latest_bar else latest_bar_at
+    )
+    price_provider=(market_state.reference_price_provider if market_state else "") or (
+        latest_bar.provider if latest_bar else getattr(
+            item,"_stream_last_final_bar_provider",""
+        )
+    )
+    price_source=(market_state.reference_price_source if market_state else "") or (
+        latest_bar.source if latest_bar else getattr(
+            item,"_stream_last_final_bar_source",""
+        )
+    )
+    price_value=market_state.reference_price if market_state and market_state.reference_price is not None else (
+        latest_bar.close if latest_bar else getattr(
+            item,"_stream_last_final_bar_close",None
+        )
+    )
+    price_processing_mode=(
+        latest_bar.processing_mode if latest_bar else
+        getattr(item,"_stream_last_final_bar_processing_mode",None)
+    )
+    price_data_kind=(
+        "WARM_UP"
+        if price_processing_mode=="WARMUP"
+        and not (market_state and market_state.is_execution_usable())
+        else "LIVE"
+    )
+    price_fresh=bool(market_state and market_state.is_execution_usable())
+    price_age=(
+        max(0,(timezone.now()-price_timestamp).total_seconds())
+        if price_timestamp else None
+    )
     latest_signal=getattr(item,"_latest_signal",None) if annotated else item.signals.order_by("-signal_time").values_list("signal_type",flat=True).first()
     latest_target=getattr(item,"_current_target",None) if annotated else item.targets.order_by("-created_at").values_list("target_weight",flat=True).first()
     attributed=getattr(item,"_attributed_quantity",None) if annotated else item.attributed_positions.filter(
@@ -116,7 +293,13 @@ def _instance(item, detail=False):
         } else ("ACTIVE" if item.enabled else "DISABLED")
     )
     row={"id":item.pk,"name":item.name,"definition_key":item.definition.key,"definition_name":item.definition.name,
-        "portfolio_id":item.portfolio_id,"portfolio":item.portfolio.name,"instrument_id":item.instrument_id,
+        "portfolio_id":item.portfolio_id,"portfolio":item.portfolio.name,
+        "gateway_session_id":str(item.portfolio.gateway_session_id) if item.portfolio.gateway_session_id else None,
+        "gateway_session_name":(
+            item.portfolio.gateway_session.display_name
+            if item.portfolio.gateway_session_id else None
+        ),
+        "instrument_id":item.instrument_id,
         "symbol":item.instrument.symbol,"asset_class":item.instrument.asset_class,"exchange":item.instrument.exchange,
         "currency":item.instrument.currency,"conid":contract.conid if contract else None,
         "primary_exchange":contract.primary_exchange if contract else None,"timeframe":item.timeframe,
@@ -152,6 +335,18 @@ def _instance(item, detail=False):
         "last_fill":last_fill,"cooldown":item.state_data.get("cooldown_until"),
         "streaming":strategy_stream_status(item),"created_at":item.created_at,"updated_at":item.updated_at}
     if detail:
+        row["activation_operation"]=_annotated_activation_operation(item)
+        row["execution_workflow"]=_annotated_workflow_summary(item)
+        row["current_price"]={
+            "value":price_value,
+            "provider":price_provider or "UNKNOWN",
+            "source":price_source or "UNKNOWN",
+            "data_kind":price_data_kind,
+            "timestamp":price_timestamp,
+            "age_seconds":round(price_age,3) if price_age is not None else None,
+            "stale_after_seconds":market_state.stale_after_seconds if market_state else None,
+            "fresh_for_execution":price_fresh,
+        }
         row["versions"]=[{"id":x.pk,"version":x.version,"parameter_hash":x.parameter_hash,"configuration_snapshot":x.configuration_snapshot,
             "created_at":x.created_at,"activated_at":x.activated_at,"retired_at":x.retired_at} for x in item.versions.all()]
         row["requirements"]=[{"identity_hash":b.requirement.identity_hash,"input_type":b.requirement.input_type,
@@ -159,6 +354,12 @@ def _instance(item, detail=False):
             "implementation_version":b.requirement.implementation_version,
             "warmup_bars":b.requirement.warmup_bars,"shared_by":b.requirement.active_ref_count,"active":b.active}
             for b in item.input_bindings.all() if b.strategy_version.version==item.version]
+        readiness=(
+            item.warmup_readiness_records.select_related(
+                "strategy_version"
+            ).order_by("-completed_at")[:10]
+            if item.warmup_completed_at else []
+        )
         row["warmup_readiness"]=[{
             "id":evidence.pk,
             "strategy_version":evidence.strategy_version.version,
@@ -171,9 +372,7 @@ def _instance(item, detail=False):
             "evidence_hash":evidence.evidence_hash,
             "is_current":evidence.is_current,
             "completed_at":evidence.completed_at,
-        } for evidence in item.warmup_readiness_records.select_related(
-            "strategy_version"
-        ).order_by("-completed_at")[:10]]
+        } for evidence in readiness]
     return row
 
 
@@ -221,7 +420,36 @@ def instances(request, instance_id=None):
                 instrument_id=payload.get("instrument_id"),ticker=payload.get("ticker"),risk_policy=risk,order_policy=order,
                 execution_mode=payload.get("execution_mode"),exchange=payload.get("exchange","SMART"),
                 currency=payload.get("currency","USD"),primary_exchange=payload.get("primary_exchange"),qualify=payload.get("qualify",True))
+            activate_requested=payload.get("activate",False)
+            if not isinstance(activate_requested,bool):
+                raise ValueError("activate must be a boolean")
+            if activate_requested:
+                request_key=request.headers.get("Idempotency-Key") or str(uuid.uuid4())
+                activation_key=(
+                    "create-activate:"
+                    + hashlib.sha256(request_key.encode("utf-8")).hexdigest()
+                )[:128]
+                action_hash=canonical_request_hash("strategy_action",{
+                    "strategy_instance_id":item.pk,
+                    "action":"enable",
+                    "payload":{},
+                })
+                operation=StrategyAction.objects.create(
+                    strategy_instance=item,
+                    action="enable",
+                    idempotency_key=activation_key,
+                    request_hash=action_hash,
+                )
+                try:
+                    item=enable_instance(item,action=operation)
+                except StrategyActivationError:
+                    # Creation succeeded but the durable activation attempt
+                    # reached a truthful failed terminal state. Return the
+                    # created resource with its exact blocker and retryability.
+                    pass
             row=_instance(_get(item.pk),True);row["qualification_command"]=qualification
+            if activate_requested and row["activation_operation"]["status"]=="PROCESSING":
+                return response(row,status=202)
             return response(row,status=201)
         if request.method == "PATCH" and instance_id:
             item=_get(instance_id);changes={}
@@ -329,24 +557,7 @@ def related(request, instance_id, resource):
         "direction":x.direction,"signal_type":x.signal_type,"signal_time":x.signal_time,"source_event_id":x.source_event_id,
         "reason":x.reason,"status":x.status} for x in item.targets.order_by("-created_at")[:100]])
     if resource=="execution-timeline":
-        rows=[]
-        for run in item.runs.order_by("-started_at")[:100]:rows.append({"time":run.started_at,"type":"RUN","id":run.pk,"status":run.status,"version":run.strategy_version.version if run.strategy_version else None})
-        for signal in item.signals.order_by("-signal_time")[:100]:rows.append({"time":signal.signal_time,"type":"SIGNAL","id":signal.pk,"status":signal.signal_type,"version":signal.strategy_version.version})
-        for target in item.targets.order_by("-created_at")[:100]:rows.append({"time":target.created_at,"type":"TARGET","id":target.pk,"status":target.status,"version":target.strategy_version.version if target.strategy_version else None})
-        for attribution in item.orderintentattribution_set.select_related("order_intent__order").all():
-            intent=attribution.order_intent
-            rows.append({"time":intent.created_at,"type":"ORDER_INTENT","id":intent.pk,
-                "status":"ELIGIBLE" if intent.eligible else "HELD","version":attribution.strategy_version.version if attribution.strategy_version else None,
-                "detail":f"{intent.side} {intent.quantity} {item.instrument.symbol}"})
-            order=getattr(intent,"order",None)
-            if order:
-                rows.append({"time":order.created_at,"type":"ORDER","id":order.pk,"status":order.status,
-                    "version":attribution.strategy_version.version if attribution.strategy_version else None,"detail":order.internal_id})
-                for fill in order.fills.all():
-                    rows.append({"time":fill.executed_at,"type":"FILL","id":fill.pk,"status":"FILLED",
-                        "version":attribution.strategy_version.version if attribution.strategy_version else None,
-                        "detail":f"{fill.quantity} @ {fill.price}"})
-        return response(sorted(rows,key=lambda x:x["time"],reverse=True))
+        return response(execution_workflow(item)["stages"])
     return response(status=404,error={"code":"NOT_FOUND","message":"Unknown resource","details":{}})
 
 
@@ -419,6 +630,21 @@ def _gateway_failure(exc, *, operation):
     return response(status=status,error={"code":code,"message":str(exc),"details":details})
 
 
+def _authoritative_gateway_session(payload):
+    portfolio_id=payload.get("portfolio_id")
+    if portfolio_id:
+        portfolio=TradingPortfolio.objects.select_related("gateway_session").get(pk=portfolio_id)
+        if portfolio.gateway_session is None:
+            raise ValueError("The portfolio is not assigned to a broker Gateway session")
+        return portfolio.gateway_session
+    session_id=payload.get("session_id")
+    if not session_id:
+        raise BrokerSessionRequired(
+            "A portfolio-assigned broker Gateway session is required"
+        )
+    return BrokerGatewaySession.objects.get(pk=session_id)
+
+
 @csrf_exempt
 def resolve(request):
     invalid=method_guard(request,"GET","POST")
@@ -426,13 +652,10 @@ def resolve(request):
     try:
         payload=json.loads(request.body or b"{}") if request.method=="POST" else request.GET
         qualification_requested=bool(payload.get("qualify",request.method=="POST"))
-        if qualification_requested and not payload.get("session_id"):
-            return response(status=400,error={
-                "code":"BROKER_SESSION_REQUIRED",
-                "message":"Select a connected broker session before qualifying an IBKR instrument",
-                "details":{"retryable":False},
-            })
-        gateway_session=BrokerGatewaySession.objects.get(pk=payload.get("session_id")) if payload.get("session_id") else None
+        gateway_session=(
+            _authoritative_gateway_session(payload)
+            if qualification_requested else None
+        )
         instrument,contract,command=resolve_instrument(instrument_id=payload.get("instrument_id"),ticker=payload.get("ticker"),
             asset_class=payload.get("asset_class","STK"),exchange=payload.get("exchange","SMART"),currency=payload.get("currency","USD"),
             primary_exchange=payload.get("primary_exchange"),conid=payload.get("conid"),local_symbol=payload.get("local_symbol"),
@@ -442,8 +665,13 @@ def resolve(request):
             "primary_exchange":contract.primary_exchange if contract else None,"qualification_command":command})
     except GatewayError as exc:
         return _gateway_failure(exc,operation="QUALIFY")
-    except BrokerGatewaySession.DoesNotExist:
+    except (BrokerGatewaySession.DoesNotExist,TradingPortfolio.DoesNotExist):
         return response(status=404,error={"code":"BROKER_SESSION_NOT_FOUND","message":"Broker session not found","details":{}})
+    except BrokerSessionRequired as exc:
+        return response(status=400,error={
+            "code":"BROKER_SESSION_REQUIRED","message":str(exc),
+            "details":{"retryable":False},
+        })
     except ValueError as exc:
         return response(status=400,error={"code":"INSTRUMENT_RESOLUTION_FAILED","message":str(exc),"details":{}})
     except Exception as exc:
@@ -458,17 +686,15 @@ def search_instruments(request):
     invalid=method_guard(request,"GET")
     if invalid:return invalid
     try:
-        raw_session=request.GET.get("session_id")
-        if not raw_session:
-            return response(status=400,error={
-                "code":"BROKER_SESSION_REQUIRED",
-                "message":"Select a connected broker session before searching IBKR instruments",
-                "details":{"retryable":False},
-            })
-        session=BrokerGatewaySession.objects.get(pk=raw_session)
+        session=_authoritative_gateway_session(request.GET)
         return response(search_broker_instruments(request.GET.get("query"),gateway_session=session))
-    except BrokerGatewaySession.DoesNotExist:
+    except (BrokerGatewaySession.DoesNotExist,TradingPortfolio.DoesNotExist):
         return response(status=404,error={"code":"BROKER_SESSION_NOT_FOUND","message":"Broker session not found","details":{}})
+    except BrokerSessionRequired as exc:
+        return response(status=400,error={
+            "code":"BROKER_SESSION_REQUIRED","message":str(exc),
+            "details":{"retryable":False},
+        })
     except GatewayError as exc:
         return _gateway_failure(exc,operation="SEARCH_CONTRACTS")
     except ValueError as exc:

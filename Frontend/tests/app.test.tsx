@@ -19,6 +19,11 @@ const strategy = {
   conid: 4815747, primary_exchange: 'NASDAQ', timeframe: '15m', parameters: definition.default_parameters,
   target_configuration: {target_weight: 0.1, capital_share: 1, priority: 100}, risk_policy_id: null, order_policy_id: null,
   execution_mode: 'PAPER', state: 'LONG', enabled: true, version: 2, warmup_progress: 22, warmup_required: 22,
+  gateway_session_id: 'session-1', gateway_session_name: 'Primary paper gateway',
+  activation_stages: {subscription_ready: true, warmup_complete: true, waiting_for_live_bar: false, first_evaluation_complete: true, execution_active: true},
+  execution_workflow: {trace_id: '8d57bc42-0ee4-4314-b2a3-3d693e62a111', status: 'ACTIVE', active: false, terminal: false, current_stage: 'ORDER_INTENT_CREATED', poll_after_ms: 12000, observed_at: '2026-07-13T01:00:05Z'},
+  activation_operation: {id: 71, status: 'COMPLETED', retryable: false, message: '', attempt_count: 1, idempotency_key: 'activate-71', created_at: '2026-07-13T00:00:00Z', completed_at: '2026-07-13T01:00:04Z'},
+  current_price: {value: 125, provider: 'IBKR', source: 'ibkr_live', data_kind: 'LIVE', timestamp: '2026-07-13T01:00:00Z', age_seconds: 4, stale_after_seconds: 1800, fresh_for_execution: true},
   block_reason: '', effective_from: '2026-07-13T00:00:00Z', effective_to: null, last_final_bar: '2026-07-13T01:00:00Z',
   latest_indicators: {channel: 123}, latest_signal: 'ENTER_LONG', current_target: 0.1, attributed_quantity: 4,
   active_order: 'order-active', last_fill: 'fill-1', cooldown: null, created_at: '2026-07-12T00:00:00Z', updated_at: '2026-07-13T01:00:00Z',
@@ -128,7 +133,16 @@ const data: Record<string, unknown> = {
   'strategy-policies': {risk_policies: [{id: 1, name: 'Long only', allow_short: false}], order_policies: [{id: 1, name: 'Patient limit'}]},
   'strategy-instances': [strategy],
   'strategy-instances/7': strategy,
-  'strategy-instances/7/execution-timeline': [{id: 1, time: '2026-07-13T01:00:00Z', type: 'SIGNAL', status: 'ENTER_LONG', version: 2}],
+  'strategy-instances/7/execution-timeline': [
+    ['CREATED', 'Created', 'COMPLETED'], ['ACTIVATION_QUEUED', 'Activation queued', 'COMPLETED'],
+    ['CONTRACT_QUALIFIED', 'Contract qualified', 'COMPLETED'], ['SUBSCRIPTION_PENDING', 'Subscription pending', 'COMPLETED'],
+    ['SUBSCRIPTION_ACTIVE', 'Subscription active', 'COMPLETED'], ['WARMUP_IN_PROGRESS', 'Warm-up in progress', 'COMPLETED'],
+    ['WARMUP_COMPLETE', 'Warm-up complete', 'COMPLETED'], ['WAITING_FOR_LIVE_BAR', 'Waiting for live bar', 'COMPLETED'],
+    ['FIRST_EVALUATION_COMPLETED', 'First evaluation completed', 'COMPLETED'], ['TARGET_GENERATED', 'Target generated', 'COMPLETED'],
+    ['REBALANCE_CREATED', 'Rebalance created', 'COMPLETED'], ['ORDER_INTENT_CREATED', 'Order intent created', 'COMPLETED'],
+    ['RISK_DECISION', 'Risk approved or blocked', 'COMPLETED'], ['BROKER_COMMAND_SENT', 'Broker command sent', 'COMPLETED'],
+    ['ORDER_ACKNOWLEDGED', 'Order acknowledged', 'COMPLETED'], ['FILL_PROGRESS', 'Partially filled or filled', 'PENDING'],
+  ].map(([stage, label, status], index) => ({stage, label, status, entity_id: String(index + 1), occurred_at: status === 'COMPLETED' ? `2026-07-13T01:00:${String(index).padStart(2, '0')}Z` : null, trace_id: '8d57bc42-0ee4-4314-b2a3-3d693e62a111', workflow_active: false, workflow_terminal: false})),
   'strategy-instances/7/chart': {source: 'POSTGRES_MARKET_AND_EXECUTION_FACTS', bars: [{time: '2026-07-13T01:00:00Z', open: 121, high: 126, low: 120, close: 125, volume: 1000, version: 1}], indicators: [{time: '2026-07-13T01:00:00Z', name: 'channel', value: 123}], markers: [{time: '2026-07-13T01:00:00Z', type: 'SIGNAL', label: 'Signal ENTER_LONG'}]},
   'instruments/search': [{symbol: 'NVDA', local_symbol: 'NVDA', conid: 4815747, asset_class: 'STK', exchange: 'SMART', primary_exchange: 'NASDAQ', currency: 'USD', description: 'NVIDIA Corporation', instrument_id: null}],
   orders: [
@@ -282,6 +296,9 @@ test('System reports Paper and Live readiness separately', async () => {
   expect(screen.getByText('Live readiness')).toBeInTheDocument()
   expect(await screen.findByText('1 command-ready Paper Gateway session')).toBeInTheDocument()
   expect(await screen.findByText('No Live Gateway session is configured')).toBeInTheDocument()
+  expect(screen.getByText('Local automatic-execution diagnostics')).toBeInTheDocument()
+  expect(screen.getByText('Strategy worker')).toBeInTheDocument()
+  expect(screen.getAllByText('Reconciliation').length).toBeGreaterThan(0)
 })
 
 test('derives strategy execution mode from the selected portfolio Gateway session', async () => {
@@ -308,10 +325,41 @@ test('derives strategy execution mode from the selected portfolio Gateway sessio
   expect(screen.getByRole('button', {name: /Advanced policy settings/})).toHaveAttribute('aria-expanded', 'false')
   await user.click(screen.getByRole('button', {name: 'Continue'}))
   expect(screen.getByText('Execution boundary preserved')).toBeInTheDocument()
-  await user.click(screen.getByRole('button', {name: 'Validate & create'}))
+  expect(screen.getByRole('button', {name: 'Create as disabled'})).toBeEnabled()
+  expect(screen.getByRole('button', {name: 'Create and activate'})).toBeEnabled()
+  await user.click(screen.getByRole('button', {name: 'Create as disabled'}))
   await waitFor(() => {
     const call = vi.mocked(fetch).mock.calls.find(([input, init]) => apiPath(String(input)) === 'strategy-instances' && init?.method === 'POST')
-    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({portfolio_id: 10, execution_mode: 'PAPER'})
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({portfolio_id: 10, execution_mode: 'PAPER', activate: false})
+  })
+})
+
+test('creates and durably activates from the strategy wizard', async () => {
+  const user = userEvent.setup()
+  window.history.replaceState({}, '', '/strategies/new')
+  render(<App />)
+  await screen.findByRole('heading', {name: 'Create a strategy'})
+  await user.type(screen.getByLabelText('Ticker'), 'nvda')
+  await user.click(await screen.findByRole('button', {name: 'Select NVDA NASDAQ USD'}))
+  await user.click(screen.getByRole('button', {name: 'Qualify selected contract'}))
+  await screen.findByText('QUALIFIED')
+  await user.click(screen.getByRole('button', {name: 'Continue'})
+  )
+  await user.type(screen.getByLabelText('Instance name'), 'NVDA activated')
+  await user.selectOptions(screen.getByLabelText('Strategy definition'), 'CUSTOM_BREAKOUT')
+  await user.click(screen.getByRole('button', {name: 'Continue'}))
+  await user.click(screen.getByRole('button', {name: 'Continue'}))
+  await user.click(screen.getByRole('button', {name: 'Continue'}))
+  await user.click(screen.getByRole('button', {name: 'Create and activate'}))
+  await waitFor(() => {
+    const calls = vi.mocked(fetch).mock.calls.filter(([input, init]) =>
+      apiPath(String(input)) === 'strategy-instances' && init?.method === 'POST',
+    )
+    expect(JSON.parse(String(calls.at(-1)?.[1]?.body))).toMatchObject({
+      portfolio_id: 10,
+      execution_mode: 'PAPER',
+      activate: true,
+    })
   })
 })
 
@@ -436,7 +484,7 @@ test('portfolio builder generates one-click recommendations, previews merged goa
   await user.click(screen.getByRole('button', {name: 'Apply to Paper'}))
   const dialog = screen.getByRole('dialog', {name: 'Apply to Paper?'})
   await user.click(within(dialog).getByRole('button', {name: 'Apply to Paper'}))
-  expect(await screen.findByText(/Applied through rebalance 602/)).toBeInTheDocument()
+  expect(await screen.findByText(/Initial allocation preview 602 created/)).toBeInTheDocument()
   const applyCalls = vi.mocked(fetch).mock.calls.filter(([input, init]) => String(input).includes('/portfolio-construction/runs/501/apply/') && init?.method === 'POST')
   expect(applyCalls).toHaveLength(1)
 })
@@ -617,6 +665,77 @@ test('strategy detail maps backend chart data with no placeholder series', async
   await user.click(screen.getByRole('tab', {name: 'Chart'}))
   expect(await screen.findByText(/POSTGRES_MARKET_AND_EXECUTION_FACTS/)).toBeInTheDocument()
   expect(screen.getByRole('img', {name: /Strategy price, indicator, signal, target, order, and fill chart/})).toBeInTheDocument()
+})
+
+test('strategy detail displays the exact durable workflow, trace, and execution-price provenance', async () => {
+  window.history.replaceState({}, '', '/strategies/7')
+  render(<App />)
+  expect(await screen.findByRole('heading', {name: 'Portable breakout'})).toBeInTheDocument()
+  expect(screen.getByText('8d57bc42-0ee4-4314-b2a3-3d693e62a111')).toBeInTheDocument()
+  expect(screen.getByText('Activation queued')).toBeInTheDocument()
+  expect(screen.getByText('Warm-up complete')).toBeInTheDocument()
+  expect(screen.getByText('Waiting for live bar')).toBeInTheDocument()
+  expect(screen.getByText('Order acknowledged')).toBeInTheDocument()
+  expect(screen.getByText('Partially filled or filled')).toBeInTheDocument()
+  expect(screen.getAllByText('IBKR').length).toBeGreaterThan(0)
+  expect(screen.getByText('ibkr_live')).toBeInTheDocument()
+  expect(screen.getByText('Fresh for execution')).toBeInTheDocument()
+})
+
+test('shows activation retry only when the backend marks the failed operation retryable', async () => {
+  const user = userEvent.setup()
+  const original = {
+    state: strategy.state,
+    enabled: strategy.enabled,
+    block_reason: strategy.block_reason,
+    activation_operation: strategy.activation_operation,
+  }
+  strategy.state = 'BLOCKED'
+  strategy.enabled = false
+  strategy.block_reason = 'Portfolio Gateway connectivity proof is stale'
+  strategy.activation_operation = {
+    ...strategy.activation_operation,
+    status: 'FAILED',
+    retryable: true,
+    message: strategy.block_reason,
+    idempotency_key: 'retry-activation-71',
+  }
+  window.history.replaceState({}, '', '/strategies/7')
+  render(<App />)
+  const retry = await screen.findByRole('button', {name: 'Retry activation'})
+  expect(screen.getByText('Backend retryable: Yes')).toBeInTheDocument()
+  await user.click(retry)
+  const call = vi.mocked(fetch).mock.calls.find(([input, init]) =>
+    String(input).includes('/strategy-instances/7/enable/') && init?.method === 'POST',
+  )
+  const headers = new Headers(call?.[1]?.headers)
+  expect(headers.get('Idempotency-Key')).toBe('retry-activation-71')
+  expect(headers.get('Idempotency-Retry')).toBe('true')
+  Object.assign(strategy, original)
+})
+
+test('does not offer activation retry for a non-retryable backend blocker', async () => {
+  const original = {
+    state: strategy.state,
+    enabled: strategy.enabled,
+    block_reason: strategy.block_reason,
+    activation_operation: strategy.activation_operation,
+  }
+  strategy.state = 'BLOCKED'
+  strategy.enabled = false
+  strategy.block_reason = 'Strategy definition is disabled'
+  strategy.activation_operation = {
+    ...strategy.activation_operation,
+    status: 'FAILED',
+    retryable: false,
+    message: strategy.block_reason,
+  }
+  window.history.replaceState({}, '', '/strategies/7')
+  render(<App />)
+  await screen.findByRole('heading', {name: 'Portable breakout'})
+  expect(screen.queryByRole('button', {name: 'Retry activation'})).not.toBeInTheDocument()
+  expect(screen.getByText('Backend retryable: No')).toBeInTheDocument()
+  Object.assign(strategy, original)
 })
 
 test('order drawer displays the exact broker rejection reason and explicit empty fallback', async () => {

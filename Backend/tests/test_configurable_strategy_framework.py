@@ -258,13 +258,19 @@ def test_real_final_bar_advances_strategy_warmup(portfolio):
     activate_strategy(instance,ready=False)
     persist_bar({"produced_at":"2026-07-13T00:01:01+00:00","payload":{"bar_id":"warm-1","instrument_id":item.pk,
         "interval":"5m","window_start":"2026-07-13T00:00:00+00:00","window_end":"2026-07-13T00:05:00+00:00",
-        "open":"10","high":"11","low":"9","close":"10.5","volume":"100","is_final":True,"version":1}})
+        "open":"10","high":"11","low":"9","close":"10.5","volume":"100","is_final":True,"version":1,
+        "processing_mode":"WARMUP"}})
     persist_bar({"produced_at":"2026-07-13T00:01:02+00:00","payload":{"bar_id":"warm-1","instrument_id":item.pk,
         "interval":"5m","window_start":"2026-07-13T00:00:00+00:00","window_end":"2026-07-13T00:05:00+00:00",
-        "open":"10","high":"11","low":"9","close":"10.5","volume":"100","is_final":True,"version":1}})
+        "open":"10","high":"11","low":"9","close":"10.5","volume":"100","is_final":True,"version":1,
+        "processing_mode":"WARMUP"}})
     instance.refresh_from_db()
     assert instance.warmup_progress==1 and instance.warmup_last_progress_at is not None
     assert instance.state=="READY_WAITING_FOR_LIVE_BAR" and instance.runs.count()==0
+    persist_bar({"produced_at":"2026-07-13T00:06:01+00:00","payload":{"bar_id":"live-1","instrument_id":item.pk,
+        "interval":"5m","window_start":"2026-07-13T00:05:00+00:00","window_end":"2026-07-13T00:10:00+00:00",
+        "open":"10.5","high":"11","low":"10","close":"10.75","volume":"100","is_final":True,"version":1,
+        "processing_mode":"LIVE"}})
     assert process_strategy_evaluation_jobs()["completed"]==1
     instance.refresh_from_db()
     assert instance.state!="WARMING_UP"

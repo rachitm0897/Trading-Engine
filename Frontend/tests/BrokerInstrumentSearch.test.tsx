@@ -33,14 +33,14 @@ function envelope(data: unknown) {
   return {ok: true, status: 200, json: async () => ({ok: true, data, error: null, meta: {}})} as Response
 }
 
-function Harness() {
+function Harness({portfolioId, gatewaySessionId}: {portfolioId?: number; gatewaySessionId?: string} = {}) {
   const [value,setValue]=useState('')
-  return <BrokerInstrumentSearch value={value} onValueChange={setValue} onResolved={() => undefined} />
+  return <BrokerInstrumentSearch value={value} onValueChange={setValue} onResolved={() => undefined} portfolioId={portfolioId} gatewaySessionId={gatewaySessionId} />
 }
 
-function renderSearch() {
+function renderSearch(props: {portfolioId?: number; gatewaySessionId?: string} = {}) {
   const client=new QueryClient({defaultOptions:{queries:{retry:false},mutations:{retry:false}}})
-  return render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><Harness {...props} /></QueryClientProvider>)
 }
 
 beforeEach(() => {
@@ -113,4 +113,40 @@ test('aborts a stale frontend search when the ticker changes', async () => {
   expect(await screen.findByRole('button',{name:'Select AAP NYSE USD'})).toBeInTheDocument()
   await waitFor(() => expect(firstSignal?.aborted).toBe(true))
   expect(screen.queryByRole('button',{name:/Select AA /})).not.toBeInTheDocument()
+})
+
+test('routes qualification through the portfolio-assigned Gateway instead of the global selection', async () => {
+  const assigned = {...session, id: 'portfolio-session', display_name: 'Portfolio Gateway'}
+  usePreferencesStore.setState({selectedSessionId: 'different-global-session'})
+  const urls:string[]=[]
+  vi.stubGlobal('fetch',vi.fn(async (input:string) => {
+    const url=String(input)
+    if (url.includes('/broker-sessions/')) return envelope([assigned])
+    if (url.includes('/instruments/search/')) {
+      urls.push(url)
+      return envelope([{
+        symbol:'NVDA',local_symbol:'NVDA',conid:4815747,asset_class:'STK',exchange:'SMART',
+        primary_exchange:'NASDAQ',currency:'USD',description:'NVIDIA',instrument_id:5,
+      }])
+    }
+    if (url.includes('/instruments/resolve/')) return envelope({
+      instrument_id:5,symbol:'NVDA',asset_class:'STK',exchange:'SMART',currency:'USD',
+      conid:4815747,primary_exchange:'NASDAQ',qualification_command:{},
+    })
+    return envelope([])
+  }))
+  const user=userEvent.setup()
+  renderSearch({portfolioId: 10, gatewaySessionId: assigned.id})
+  await user.type(screen.getByLabelText('Ticker'),'NV')
+  await user.click(await screen.findByRole('button',{name:'Select NVDA NASDAQ USD'}))
+  await user.click(screen.getByRole('button',{name:'Qualify selected contract'}))
+  await screen.findByText('QUALIFIED')
+  expect(urls[0]).toContain(`session_id=${assigned.id}`)
+  expect(urls[0]).toContain('portfolio_id=10')
+  expect(urls[0]).not.toContain('different-global-session')
+  const resolveCall=vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/instruments/resolve/'))
+  expect(JSON.parse(String(resolveCall?.[1]?.body))).toMatchObject({
+    portfolio_id:10,
+    session_id:assigned.id,
+  })
 })

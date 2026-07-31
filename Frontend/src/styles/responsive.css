@@ -50,6 +50,7 @@
   .filter-count { margin-left: 0; align-self: center; }
   .operating-strip > div { border-right: 0 !important; padding-right: 0 !important; }
   .strategy-control-bar { align-items: flex-start; flex-direction: column; }
+  .workflow-summary { grid-template-columns: 1fr 1fr; }
   .detail-list.columns { grid-template-columns: 1fr; }
   .sizing-result { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .builder-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }

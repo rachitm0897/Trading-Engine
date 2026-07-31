@@ -394,6 +394,8 @@ export interface StrategyInstance {
   definition_name: string
   portfolio_id: number
   portfolio: string
+  gateway_session_id?: string | null
+  gateway_session_name?: string | null
   instrument_id: number
   symbol: string
   asset_class: string
@@ -427,6 +429,25 @@ export interface StrategyInstance {
     first_evaluation_complete: boolean
     execution_active: boolean
   }
+  activation_operation?: {
+    id: number
+    status: 'PROCESSING' | 'COMPLETED' | 'FAILED'
+    retryable: boolean
+    message: string
+    attempt_count: number
+    idempotency_key: string
+    created_at: string
+    completed_at: string | null
+  } | null
+  execution_workflow?: {
+    trace_id: string
+    status: string
+    active: boolean
+    terminal: boolean
+    current_stage: string
+    poll_after_ms: number
+    observed_at: string
+  }
   block_reason: string
   effective_from: string | null
   effective_to: string | null
@@ -438,6 +459,16 @@ export interface StrategyInstance {
   active_order: string | null
   last_fill: string | null
   cooldown: string | null
+  current_price?: {
+    value: DecimalValue
+    provider: string
+    source: string
+    data_kind: 'LIVE' | 'WARM_UP'
+    timestamp: string | null
+    age_seconds: number | null
+    stale_after_seconds: number | null
+    fresh_for_execution: boolean
+  }
   streaming?: StrategyStreamStatus
   created_at: string
   updated_at: string
@@ -447,12 +478,48 @@ export interface StrategyInstance {
 }
 
 export interface StrategyTimelineItem {
-  time: string
-  type: string
-  id: number
+  time?: string | null
+  type?: string
+  id?: number
   status: string
-  version: number | null
+  version?: number | null
   detail?: string
+  stage?: string
+  label?: string
+  occurred_at?: string | null
+  blocker?: string
+  retryable?: boolean
+  entity_type?: string
+  entity_id?: string | null
+  trace_id?: string
+  workflow_status?: string
+  workflow_active?: boolean
+  workflow_terminal?: boolean
+}
+
+export interface ExecutionReadinessSignal {
+  status: string
+  healthy?: boolean
+  last_heartbeat?: string | null
+  age_seconds?: number | null
+  [key: string]: unknown
+}
+
+export interface ExecutionDiagnostics {
+  ready: boolean
+  automatic_execution_ready: boolean
+  status: string
+  observed_at: string | null
+  blockers: {code: string; message: string; details: JsonRecord}[]
+  signals: {
+    kafka?: ExecutionReadinessSignal
+    flink?: ExecutionReadinessSignal
+    kafka_consumer?: ExecutionReadinessSignal
+    workers?: Record<string, ExecutionReadinessSignal>
+    gateway?: ExecutionReadinessSignal
+    broker_reconciliation?: ExecutionReadinessSignal
+    [key: string]: unknown
+  }
 }
 
 export interface StrategyChartBar {

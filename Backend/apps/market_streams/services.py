@@ -329,6 +329,8 @@ def sync_subscription_strategy_lifecycle(subscription):
         reason=(subscription.last_error or "Market-data subscription failed")[:255]
         updated=instances.update(state="BLOCKED",block_reason=reason)
         for instance in instances:
+            from apps.strategies.framework import fail_activation_workflow
+            fail_activation_workflow(instance,reason,retryable=True)
             construction_run_id=instance.target_configuration.get("construction_run_id")
             if construction_run_id:
                 from apps.portfolio_construction.services import record_strategy_activation_result

@@ -145,7 +145,9 @@ def deactivate_inputs(instance):
         cycle=(instance.effective_to or timezone.now()).isoformat()
         OutboxEvent.objects.get_or_create(idempotency_key=f"strategy-inputs:{instance.pk}:v{instance.version}:deactivate:{cycle}",defaults={
             "topic":"strategy.inputs.v1","event_type":"strategy.inputs.changed","aggregate_type":"strategy_instance",
-            "aggregate_id":str(instance.pk),"partition_key":str(instance.instrument_id),"payload":{"strategy_instance_id":instance.pk,
+            "aggregate_id":str(instance.pk),"partition_key":str(instance.instrument_id),
+            "correlation_id":instance.workflow_trace_id,
+            "payload":{"strategy_instance_id":instance.pk,"trace_id":str(instance.workflow_trace_id),
             "strategy_version":instance.version,"instrument_id":instance.instrument_id,"timeframe":instance.timeframe,
             "requirements":[],"removed_requirement_hashes":removed}})
 
@@ -189,7 +191,9 @@ def register_inputs(instance, version=None):
         cycle=instance.effective_from.isoformat() if instance.effective_from else "active"
         OutboxEvent.objects.get_or_create(idempotency_key=f"strategy-inputs:{instance.pk}:v{version.version}:{cycle}",defaults={
             "topic":"strategy.inputs.v1","event_type":"strategy.inputs.changed","aggregate_type":"strategy_instance",
-            "aggregate_id":str(instance.pk),"partition_key":str(instance.instrument_id),"payload":{"strategy_instance_id":instance.pk,
+            "aggregate_id":str(instance.pk),"partition_key":str(instance.instrument_id),
+            "correlation_id":instance.workflow_trace_id,
+            "payload":{"strategy_instance_id":instance.pk,"trace_id":str(instance.workflow_trace_id),
             "strategy_version":version.version,"instrument_id":instance.instrument_id,"timeframe":instance.timeframe,
             "requirements":[{"identity_hash":x.identity_hash,"input_type":x.input_type,"name":x.name,"role":x.role,
             "parameters":x.parameters,"implementation_version":x.implementation_version,
@@ -280,12 +284,57 @@ def _validate_activation(instance):
 def _complete_action(action_id, *, status, instance, subscription=None, error="", retryable=False):
     if not action_id:return
     from .models import StrategyAction
-    result={"strategy_instance_id":instance.pk,"activation_status":instance.state}
+    result={"strategy_instance_id":instance.pk,"activation_status":instance.state,
+        "trace_id":str(instance.workflow_trace_id)}
     if subscription is not None:
         result.update({"market_subscription_id":subscription.pk,"subscription_state":subscription.state})
     StrategyAction.objects.filter(pk=action_id).update(
         status=status,result=result,last_error=str(error)[:1000],retryable=retryable,
         completed_at=timezone.now() if status!="PROCESSING" else None)
+
+
+def complete_activation_workflow(instance):
+    """Complete durable activation only after the first live evaluation is persisted."""
+    from .models import StrategyAction
+
+    result={
+        "strategy_instance_id":instance.pk,
+        "activation_status":"ACTIVE",
+        "trace_id":str(instance.workflow_trace_id),
+        "first_evaluation_completed_at":str(instance.first_evaluation_completed_at),
+    }
+    StrategyAction.objects.filter(
+        strategy_instance=instance,
+        action="enable",
+        status="PROCESSING",
+    ).update(
+        status="COMPLETED",
+        result=result,
+        last_error="",
+        retryable=False,
+        completed_at=timezone.now(),
+    )
+
+
+def fail_activation_workflow(instance, reason, *, retryable=False):
+    """Attach a concrete terminal blocker to an in-flight activation attempt."""
+    from .models import StrategyAction
+
+    StrategyAction.objects.filter(
+        strategy_instance=instance,
+        action="enable",
+        status="PROCESSING",
+    ).update(
+        status="FAILED",
+        result={
+            "strategy_instance_id":instance.pk,
+            "activation_status":instance.state,
+            "trace_id":str(instance.workflow_trace_id),
+        },
+        last_error=str(reason)[:1000],
+        retryable=bool(retryable),
+        completed_at=timezone.now(),
+    )
 
 
 def enable_instance(instance,gateway=None, *, action=None, construction_run_id=None):
@@ -383,7 +432,10 @@ def activate_instance(instance_id, *, gateway=None, action_id=None, construction
         else:
             StrategyInstance.objects.filter(pk=instance_id).update(state="SUBSCRIBING",block_reason="")
         instance=StrategyInstance.objects.get(pk=instance_id)
-        _complete_action(action_id,status="COMPLETED",instance=instance,subscription=subscription)
+        # Subscription setup is not activation completion. The durable action
+        # remains PROCESSING through warm-up and the first persisted live
+        # evaluation so API clients cannot report an early success.
+        _complete_action(action_id,status="PROCESSING",instance=instance,subscription=subscription)
         if construction_run_id:
             from apps.portfolio_construction.services import record_strategy_activation_result
             record_strategy_activation_result(construction_run_id,instance.pk)
@@ -478,11 +530,14 @@ def evaluate_instance(instance, *, bar, indicators, previous_indicators=None, ev
                 "state","state_data","first_evaluation_completed_at",
                 "execution_active_at","updated_at",
             ])
+            complete_activation_workflow(instance)
             run.status="COMPLETED";run.completed_at=timezone.now();run.save(update_fields=["status","completed_at"])
             OutboxEvent.objects.create(topic="strategy.targets.v1",event_type="strategy.evaluated",aggregate_type="strategy_instance",
                 aggregate_id=str(instance.pk),partition_key=str(instance.instrument_id),payload={"strategy_run_id":run.pk,
                 "strategy_instance_id":instance.pk,"strategy_version":version.version,"signal_type":decision.signal_type,
-                "target_ids":list(run.targets.values_list("pk",flat=True)),"execution_mode":instance.execution_mode},
+                "target_ids":list(run.targets.values_list("pk",flat=True)),"execution_mode":instance.execution_mode,
+                "trace_id":str(instance.workflow_trace_id)},
+                correlation_id=instance.workflow_trace_id,
                 idempotency_key=f"strategy-run:{run.pk}:completed")
             from apps.rebalancing.coordinator import mark_portfolio_for_target_coordination
             mark_portfolio_for_target_coordination(instance.portfolio_id, logical_event_time=when)
@@ -498,6 +553,7 @@ def evaluate_instance(instance, *, bar, indicators, previous_indicators=None, ev
         instance=StrategyInstance.objects.get(pk=instance.pk)
         run.status="ERROR";run.error=str(exc);run.completed_at=timezone.now();run.save(update_fields=["status","error","completed_at"])
         instance.state="ERROR";instance.block_reason=str(exc)[:255];instance.save(update_fields=["state","block_reason","updated_at"])
+        fail_activation_workflow(instance,exc,retryable=False)
         return run
 
 
@@ -524,7 +580,9 @@ def flatten_instance(instance, *, event_id=None, event_time=None):
     OutboxEvent.objects.create(topic="strategy.targets.v1",event_type="strategy.flattened",aggregate_type="strategy_instance",
         aggregate_id=str(instance.pk),partition_key=str(instance.instrument_id),payload={"strategy_run_id":run.pk,
         "strategy_instance_id":instance.pk,"strategy_version":version.version,"target_ids":list(run.targets.values_list("pk",flat=True)),
-        "execution_mode":instance.execution_mode},idempotency_key=f"strategy-run:{run.pk}:completed")
+        "execution_mode":instance.execution_mode,"trace_id":str(instance.workflow_trace_id)},
+        correlation_id=instance.workflow_trace_id,
+        idempotency_key=f"strategy-run:{run.pk}:completed")
     from apps.rebalancing.coordinator import mark_portfolio_for_target_coordination
     mark_portfolio_for_target_coordination(instance.portfolio_id, logical_event_time=when)
     return run

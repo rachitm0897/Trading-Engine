@@ -529,6 +529,25 @@ def test_synthetic_live_market_sequence_creates_one_idempotent_paper_order(
     assert order.status == "FILLED"
     assert rebalance.status == "COMPLETED"
 
+    from apps.strategies.workflow import execution_workflow
+    workflow = execution_workflow(domain.strategy)
+    by_stage = {row["stage"]: row for row in workflow["stages"]}
+    assert workflow["status"] == "COMPLETED"
+    assert workflow["terminal"] is True
+    assert by_stage["TARGET_GENERATED"]["entity_id"] == str(
+        StrategyTarget.objects.get().pk
+    )
+    assert by_stage["REBALANCE_CREATED"]["entity_id"] == str(rebalance.pk)
+    assert by_stage["ORDER_INTENT_CREATED"]["entity_id"] == str(intent.pk)
+    assert by_stage["RISK_DECISION"]["status"] == "COMPLETED"
+    assert by_stage["BROKER_COMMAND_SENT"]["entity_id"] == str(command.pk)
+    assert by_stage["ORDER_ACKNOWLEDGED"]["status"] == "COMPLETED"
+    assert by_stage["FILL_PROGRESS"]["status"] == "COMPLETED"
+    assert by_stage["FILL_PROGRESS"]["entity_id"] == str(fill.pk)
+    assert {row["trace_id"] for row in workflow["stages"]} == {
+        str(domain.strategy.workflow_trace_id)
+    }
+
     broker = ReconciledBroker(
         position=_broker_row(
             domain,

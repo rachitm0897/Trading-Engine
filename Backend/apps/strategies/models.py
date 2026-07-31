@@ -1,3 +1,5 @@
+import uuid
+
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
@@ -65,6 +67,7 @@ class StrategyInstance(models.Model):
     target_configuration = models.JSONField(default=dict)
     risk_policy = models.ForeignKey(StrategyRiskPolicy, on_delete=models.PROTECT, null=True, blank=True)
     order_policy = models.ForeignKey(OrderPolicy, on_delete=models.PROTECT, null=True, blank=True)
+    workflow_trace_id = models.UUIDField(default=uuid.uuid4, editable=False, db_index=True)
     execution_mode = models.CharField(
         max_length=16, choices=MODES, default=ExecutionMode.PAPER
     )
