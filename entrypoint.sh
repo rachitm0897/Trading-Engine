@@ -12,5 +12,8 @@ python scripts/ensure_database.py
 echo "Running Django migrations..."
 python manage.py migrate --noinput
 
+echo "Checking required Kafka topics..."
+python scripts/ensure_kafka_topics.py
+
 echo "Starting Backend services..."
 exec supervisord -c /app/supervisord.conf
