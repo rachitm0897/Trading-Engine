@@ -5,6 +5,7 @@ ENV VITE_APP_BASE_PATH=$VITE_APP_BASE_PATH
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
+COPY .env.example .env
 RUN npm run build
 
 FROM nginx:1.27-alpine
