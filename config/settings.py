@@ -48,8 +48,13 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    "django.middleware.security.SecurityMiddleware", "corsheaders.middleware.CorsMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware", "django.middleware.common.CommonMiddleware",
+    "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+
+    "apps.core.middleware.ApiSlashCompatibilityMiddleware",
+
+    "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
 ]
@@ -225,6 +230,7 @@ EXECUTION_REQUIRED_KAFKA_TOPICS = tuple(
 EXECUTION_ACTIVATION_PREFLIGHT_ENABLED = (
     os.getenv("EXECUTION_ACTIVATION_PREFLIGHT_ENABLED", "true").lower() == "true"
 )
+APPEND_SLASH = False
 FLINK_REST_URL = os.getenv("FLINK_REST_URL", "http://localhost:8081")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 FINNHUB_BASE_URL = os.getenv("FINNHUB_BASE_URL", "https://finnhub.io/api/v1").rstrip("/")

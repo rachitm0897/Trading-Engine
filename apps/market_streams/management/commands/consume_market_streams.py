@@ -19,7 +19,7 @@ class Command(BaseCommand):
         if not settings.KAFKA_ENABLED:
             self.stdout.write("Kafka is disabled; market consumer exiting")
             return
-        from confluent_kafka import Consumer
+        from confluent_kafka import Consumer, KafkaError
         consumer=Consumer({"bootstrap.servers":settings.KAFKA_BOOTSTRAP_SERVERS,
             "group.id":"finflock-backend-market-persistence-v2","enable.auto.commit":False,
             "auto.offset.reset":"earliest"})
@@ -43,7 +43,34 @@ class Command(BaseCommand):
                     if options["once"]:break
                     continue
                 if message.error():
-                    raise RuntimeError(str(message.error()))
+                    kafka_error = message.error()
+
+                    if kafka_error.code() == KafkaError._PARTITION_EOF:
+                        continue
+
+                    error_message = str(kafka_error)
+
+                    heartbeat(
+                        "DEGRADED",
+                        kafka_error_code=kafka_error.code(),
+                        error=error_message[:255],
+                        retryable=not kafka_error.fatal(),
+                    )
+
+                    self.stderr.write(
+                        self.style.WARNING(
+                            f"Kafka consumer error: {error_message}"
+                        )
+                    )
+
+                    if kafka_error.fatal():
+                        raise RuntimeError(error_message)
+
+                    if options["once"]:
+                        raise RuntimeError(error_message)
+
+                    time.sleep(2)
+                    continue
                 envelope=None
                 processing_error=None
                 dead_letter=None
