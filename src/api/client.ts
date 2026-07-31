@@ -26,29 +26,87 @@ export function withQuery(path: string, parameters: Record<string, string | numb
   return suffix ? `${path}${path.includes('?') ? '&' : '?'}${suffix}` : path
 }
 
-export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+function normalizeApiPath(path: string): string {
+  const queryIndex = path.indexOf('?')
+
+  const pathname =
+    queryIndex >= 0
+      ? path.slice(0, queryIndex)
+      : path
+
+  const query =
+    queryIndex >= 0
+      ? path.slice(queryIndex)
+      : ''
+
+  const normalizedPath = pathname
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+
+  return `${normalizedPath}${query}`
+}
+
+export async function request<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
   let response: Response
+
   try {
-    const csrfToken = document.cookie.split(';').map((item) => item.trim()).find((item) => item.startsWith('csrftoken='))?.slice('csrftoken='.length)
+    const csrfToken = document.cookie
+      .split(';')
+      .map((item) => item.trim())
+      .find((item) => item.startsWith('csrftoken='))
+      ?.slice('csrftoken='.length)
+
     const headers = new Headers(options.headers)
     headers.set('Content-Type', 'application/json')
-    if (options.method && options.method !== 'GET' && csrfToken) headers.set('X-CSRFToken', decodeURIComponent(csrfToken))
-    response = await fetch(`${API_BASE_URL}/${path.replace(/^\//, '')}`, {
-      ...options,
-      credentials: 'include',
-      headers,
-    })
+
+    if (
+      options.method &&
+      options.method !== 'GET' &&
+      csrfToken
+    ) {
+      headers.set(
+        'X-CSRFToken',
+        decodeURIComponent(csrfToken),
+      )
+    }
+
+    const normalizedPath = normalizeApiPath(path)
+
+    response = await fetch(
+      `${API_BASE_URL}/${normalizedPath}`,
+      {
+        ...options,
+        credentials: 'include',
+        headers,
+      },
+    )
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Network request failed'
-    throw new ApiError(`Backend API is unreachable at ${API_BASE_URL}. ${message}`, 0, 'NETWORK_ERROR')
+    const message =
+      error instanceof Error
+        ? error.message
+        : 'Network request failed'
+
+    throw new ApiError(
+      `Backend API is unreachable at ${API_BASE_URL}. ${message}`,
+      0,
+      'NETWORK_ERROR',
+    )
   }
 
   let body: ApiEnvelope<T>
+
   try {
     body = (await response.json()) as ApiEnvelope<T>
   } catch {
-    throw new ApiError(`Backend returned an unreadable response (${response.status})`, response.status)
+    throw new ApiError(
+      `Backend returned an unreadable response (${response.status})`,
+      response.status,
+    )
   }
+
   if (!response.ok || !body.ok || body.data === null) {
     throw new ApiError(
       body.error?.message || `Request failed (${response.status})`,
@@ -57,6 +115,7 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
       body.error?.details,
     )
   }
+
   return body.data
 }
 
