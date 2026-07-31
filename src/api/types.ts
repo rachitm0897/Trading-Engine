@@ -1,6 +1,8 @@
 export type Scalar = string | number | boolean | null
 export type JsonRecord = Record<string, unknown>
 export type DecimalValue = string | number | null
+export type ExecutionMode = 'PAPER' | 'LIVE'
+export type ExecutionRunType = 'PREVIEW' | 'EXECUTION'
 
 export interface ApiProblem {
   code: string
@@ -16,8 +18,10 @@ export interface ApiEnvelope<T> {
 }
 
 export interface SystemStatus {
-  mode: string
-  execution_mode?: string
+  mode: 'MULTI_SESSION'
+  execution_modes: ExecutionMode[]
+  execution_mode_source: 'PORTFOLIO_GATEWAY_SESSION'
+  allow_live_trading: boolean
   is_admin?: boolean
   broker_deployment: {
     available: boolean
@@ -33,7 +37,7 @@ export interface SystemStatus {
 export interface GatewayStatus {
   connected: boolean
   reconciled: boolean
-  mode: string
+  mode: BrokerSessionMode
   last_callback?: string | null
   worker?: string
 }
@@ -304,8 +308,15 @@ export interface StrategyStreamStatus {
   strategy: string
   symbol: string
   timeframe: string
+  enabled: boolean
+  lifecycle_state: string
+  activation_status: string
   status: string
   subscription_state: string
+  active_provider: string
+  fallback_state: string
+  fallback_reason: string
+  provider_generation: string | null
   conid: number | null
   last_raw_event: string | null
   last_canonical_event: string | null
@@ -383,6 +394,8 @@ export interface StrategyInstance {
   definition_name: string
   portfolio_id: number
   portfolio: string
+  gateway_session_id?: string | null
+  gateway_session_name?: string | null
   instrument_id: number
   symbol: string
   asset_class: string
@@ -395,14 +408,46 @@ export interface StrategyInstance {
   target_configuration: JsonRecord
   risk_policy_id: number | null
   order_policy_id: number | null
-  execution_mode: 'OBSERVE' | 'SHADOW' | 'PAPER'
+  execution_mode: ExecutionMode
   state: string
   enabled: boolean
+  activation_status: string
   version: number
   warmup_progress: number
   warmup_required: number
   warmup_started_at: string | null
   warmup_last_progress_at: string | null
+  subscription_ready_at: string | null
+  warmup_completed_at: string | null
+  ready_waiting_since: string | null
+  first_evaluation_completed_at: string | null
+  execution_active_at: string | null
+  activation_stages: {
+    subscription_ready: boolean
+    warmup_complete: boolean
+    waiting_for_live_bar: boolean
+    first_evaluation_complete: boolean
+    execution_active: boolean
+  }
+  activation_operation?: {
+    id: number
+    status: 'PROCESSING' | 'COMPLETED' | 'FAILED'
+    retryable: boolean
+    message: string
+    attempt_count: number
+    idempotency_key: string
+    created_at: string
+    completed_at: string | null
+  } | null
+  execution_workflow?: {
+    trace_id: string
+    status: string
+    active: boolean
+    terminal: boolean
+    current_stage: string
+    poll_after_ms: number
+    observed_at: string
+  }
   block_reason: string
   effective_from: string | null
   effective_to: string | null
@@ -414,6 +459,16 @@ export interface StrategyInstance {
   active_order: string | null
   last_fill: string | null
   cooldown: string | null
+  current_price?: {
+    value: DecimalValue
+    provider: string
+    source: string
+    data_kind: 'LIVE' | 'WARM_UP'
+    timestamp: string | null
+    age_seconds: number | null
+    stale_after_seconds: number | null
+    fresh_for_execution: boolean
+  }
   streaming?: StrategyStreamStatus
   created_at: string
   updated_at: string
@@ -423,12 +478,48 @@ export interface StrategyInstance {
 }
 
 export interface StrategyTimelineItem {
-  time: string
-  type: string
-  id: number
+  time?: string | null
+  type?: string
+  id?: number
   status: string
-  version: number | null
+  version?: number | null
   detail?: string
+  stage?: string
+  label?: string
+  occurred_at?: string | null
+  blocker?: string
+  retryable?: boolean
+  entity_type?: string
+  entity_id?: string | null
+  trace_id?: string
+  workflow_status?: string
+  workflow_active?: boolean
+  workflow_terminal?: boolean
+}
+
+export interface ExecutionReadinessSignal {
+  status: string
+  healthy?: boolean
+  last_heartbeat?: string | null
+  age_seconds?: number | null
+  [key: string]: unknown
+}
+
+export interface ExecutionDiagnostics {
+  ready: boolean
+  automatic_execution_ready: boolean
+  status: string
+  observed_at: string | null
+  blockers: {code: string; message: string; details: JsonRecord}[]
+  signals: {
+    kafka?: ExecutionReadinessSignal
+    flink?: ExecutionReadinessSignal
+    kafka_consumer?: ExecutionReadinessSignal
+    workers?: Record<string, ExecutionReadinessSignal>
+    gateway?: ExecutionReadinessSignal
+    broker_reconciliation?: ExecutionReadinessSignal
+    [key: string]: unknown
+  }
 }
 
 export interface StrategyChartBar {
@@ -610,7 +701,7 @@ export interface RebalancePolicy {
   sell_before_buy: boolean
   price_staleness_limit: number
   partial_fill_threshold: DecimalValue
-  mode: string
+  mode: ExecutionMode
   enabled: boolean
   updated_at: string
 }
@@ -635,7 +726,8 @@ export interface RebalanceRun {
   id: number
   portfolio_id: number
   trigger: string
-  mode: string
+  mode: ExecutionMode
+  run_type: ExecutionRunType
   status: string
   phase: string
   nav: DecimalValue
@@ -713,7 +805,7 @@ export interface PortfolioOptimizationPolicy {
   transaction_cost_penalty: DecimalValue
   long_only: boolean
   enabled: boolean
-  execution_mode: 'SHADOW' | 'PAPER'
+  execution_mode: ExecutionMode
   version: number
   updated_at: string
 }
@@ -769,8 +861,8 @@ export interface PortfolioOptimizationRun {
   completed_at: string | null
   targets?: OptimizedPortfolioTarget[]
   planned_trades?: PlannedOptimizationTrade[]
-  rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
-  applied_rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
+  rebalance?: {id: number; mode: ExecutionMode; run_type: ExecutionRunType; status: string; phase: string; planned_turnover: DecimalValue} | null
+  applied_rebalance?: {id: number; mode: ExecutionMode; run_type: ExecutionRunType; status: string; phase: string; planned_turnover: DecimalValue} | null
 }
 
 export type GoalTimeframe = 'NOW' | 'HURRY' | 'FAST' | 'BUILD' | 'GROW' | 'COMPOUND'
@@ -958,7 +1050,7 @@ export interface PortfolioConstructionRun {
   plan_id: number
   portfolio_id: number
   status: string
-  application_status: 'NOT_APPLIED' | 'QUEUED' | 'APPLYING' | 'APPLIED' | 'FAILED'
+  application_status: 'NOT_APPLIED' | 'QUEUED' | 'APPLYING' | 'ACTIVATING' | 'APPLIED' | 'PARTIALLY_APPLIED' | 'FAILED'
   retryable: boolean
   last_error: string
   attempt_count: number
@@ -978,14 +1070,40 @@ export interface PortfolioConstructionRun {
       target_weight: DecimalValue
       assignment_ids: number[]
     }[]
-    strategy_instances?: {assignment_id: number; strategy_instance_id: number; target_weight: DecimalValue}[]
+    application?: {
+      construction_application: string
+      rebalance_creation?: string
+      initial_allocation_preview?: string
+      strategy_execution_rebalance?: string
+      strategy_creation: string
+      strategy_activation: string
+      market_subscription: string
+    }
+    strategy_instances?: {
+      assignment_id: number
+      strategy_instance_id: number
+      target_weight: DecimalValue
+      strategy_creation: string
+      activation_status: string
+      market_subscription: string
+      enabled?: boolean
+      active_provider?: string
+      warmup_progress?: number
+      warmup_required?: number
+      subscription_ready?: boolean
+      warmup_complete?: boolean
+      waiting_for_live_bar?: boolean
+      first_evaluation_complete?: boolean
+      execution_active?: boolean
+      block_reason?: string
+    }[]
   }
   warnings: unknown[]
   goals?: GoalConstructionResult[]
   targets?: PortfolioConstructionTarget[]
   planned_trades?: PlannedConstructionTrade[]
-  rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
-  applied_rebalance?: {id: number; mode: string; status: string; phase: string; planned_turnover: DecimalValue} | null
+  rebalance?: {id: number; mode: ExecutionMode; run_type: ExecutionRunType; status: string; phase: string; planned_turnover: DecimalValue} | null
+  applied_rebalance?: {id: number; mode: ExecutionMode; run_type: ExecutionRunType; status: string; phase: string; planned_turnover: DecimalValue} | null
   applied_at: string | null
   created_at: string
   started_at: string | null

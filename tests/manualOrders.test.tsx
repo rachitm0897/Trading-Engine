@@ -127,6 +127,7 @@ function renderTicket(overrides: Partial<React.ComponentProps<typeof ManualOrder
     polling={false}
     pollTimedOut={false}
     error={null}
+    allowLiveTrading={true}
     onSubmit={onSubmit}
     {...overrides}
   />)
@@ -140,8 +141,8 @@ async function fillTicket(user: ReturnType<typeof userEvent.setup>, orderType: M
   if (orderType === 'STP' || orderType === 'STP_LMT') await user.type(screen.getByLabelText('Stop price'), '121.12500001')
   if (orderType === 'LMT' || orderType === 'STP_LMT') await user.type(screen.getByLabelText('Limit price'), '120.87500002')
   await user.click(screen.getByRole('button', {name: 'Review manual order'}))
-  const dialog = screen.getByRole('dialog', {name: 'Confirm manual order'})
-  await user.click(within(dialog).getByRole('button', {name: 'Confirm and queue'}))
+  const dialog = screen.getByRole('dialog', {name: 'Confirm PAPER manual order'})
+  await user.click(within(dialog).getByRole('button', {name: 'Confirm PAPER order'}))
 }
 
 describe.each([
@@ -228,14 +229,47 @@ test('preserves backend rejection status, code, message, and details', () => {
   expect(screen.getByText('Structured details')).toBeInTheDocument()
 })
 
-test('renders the LIVE-disabled backend response clearly', () => {
+test('blocks Live submission when the backend safety gate is disabled', () => {
   renderTicket({
     session: {...session, mode: 'live'},
+    allowLiveTrading: false,
     error: new ApiError('Live manual order routing is disabled by the current execution policy', 403, 'LIVE_MANUAL_TRADING_DISABLED', {allow_live_trading: false}),
   })
-  expect(screen.getAllByText(/LIVE manual order routing is disabled/).length).toBeGreaterThan(0)
+  expect(screen.getByText('LIVE routing blocked')).toBeInTheDocument()
+  expect(screen.getByText('Live manual order routing is blocked by ALLOW_LIVE_TRADING.')).toBeInTheDocument()
+  expect(screen.getByRole('button', {name: 'Review manual order'})).toBeDisabled()
   expect(screen.getByText('LIVE_MANUAL_TRADING_DISABLED')).toBeInTheDocument()
   expect(screen.getByText(/HTTP 403/)).toBeInTheDocument()
+})
+
+test('confirms every Live routing detail before submitting', async () => {
+  const user = userEvent.setup()
+  const onSubmit = renderTicket({
+    session: {...session, display_name: 'Live Gateway', mode: 'live'},
+    account: {...account, account_id: 'U-LIVE', alias: 'Live account'},
+    portfolio: {...portfolio, name: 'Primary live'},
+    allowLiveTrading: true,
+  })
+
+  await user.selectOptions(screen.getByLabelText('Instrument'), String(instrument.id))
+  await user.selectOptions(screen.getByLabelText('Side'), 'SELL')
+  await user.selectOptions(screen.getByLabelText('Order type'), 'LMT')
+  await user.type(screen.getByLabelText('Quantity'), '1.25')
+  await user.type(screen.getByLabelText('Limit price'), '120.50')
+  await user.click(screen.getByRole('button', {name: 'Review manual order'}))
+
+  const dialog = screen.getByRole('dialog', {name: 'Confirm LIVE manual order'})
+  expect(within(dialog).getByText('LIVE')).toBeInTheDocument()
+  expect(within(dialog).getByText('Live Gateway')).toBeInTheDocument()
+  expect(within(dialog).getByText('U-LIVE')).toBeInTheDocument()
+  expect(within(dialog).getByText('Primary live')).toBeInTheDocument()
+  expect(within(dialog).getByText(/NVDA/)).toBeInTheDocument()
+  expect(within(dialog).getByText('SELL')).toBeInTheDocument()
+  expect(within(dialog).getByText('1.25')).toBeInTheDocument()
+  expect(within(dialog).getByText('120.5')).toBeInTheDocument()
+  expect(within(dialog).getByText('Limit $120.50')).toBeInTheDocument()
+  await user.click(within(dialog).getByRole('button', {name: 'Confirm LIVE order'}))
+  expect(onSubmit).toHaveBeenCalledOnce()
 })
 
 type MockApiOptions = {
@@ -288,6 +322,16 @@ function installMockApi(options: MockApiOptions = {}) {
       if (value.internal_id) currentOrders = [orderRow(value.internal_id)]
       return envelope(value)
     }
+    if (path === 'system') return envelope({
+      mode: 'MULTI_SESSION',
+      execution_modes: ['PAPER', 'LIVE'],
+      execution_mode_source: 'PORTFOLIO_GATEWAY_SESSION',
+      allow_live_trading: true,
+      is_admin: true,
+      global_kill_switch: false,
+      material_breaks: 0,
+      time: now,
+    })
     if (path === 'broker-sessions') return envelope([session])
     if (path === `broker-sessions/${session.id}/accounts`) return envelope([account])
     if (path === 'accounts') return envelope([account])
@@ -322,7 +366,7 @@ async function openAndConfirmPageTicket(user: ReturnType<typeof userEvent.setup>
   await user.selectOptions(screen.getByLabelText('Instrument'), String(instrument.id))
   await user.type(screen.getByLabelText('Quantity'), '1.23456789')
   await user.click(screen.getByRole('button', {name: 'Review manual order'}))
-  const button = within(screen.getByRole('dialog', {name: 'Confirm manual order'})).getByRole('button', {name: 'Confirm and queue'})
+  const button = within(screen.getByRole('dialog', {name: 'Confirm PAPER manual order'})).getByRole('button', {name: 'Confirm PAPER order'})
   if (doubleClick) await user.dblClick(button)
   else await user.click(button)
 }

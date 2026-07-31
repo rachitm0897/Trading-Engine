@@ -1,6 +1,6 @@
 import {useMemo, useState} from 'react'
 import {useMutation, useQuery, useQueryClient, type UseQueryResult} from '@tanstack/react-query'
-import {ArrowLeft, CirclePause, Power, SlidersHorizontal, Trash2} from 'lucide-react'
+import {ArrowLeft, CirclePause, Power, RefreshCw, SlidersHorizontal, Trash2} from 'lucide-react'
 import {Link, useNavigate, useParams, useSearchParams} from 'react-router-dom'
 import {mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
@@ -27,7 +27,20 @@ export function StrategyDetailPage() {
   const timeline = useQuery({...queries.strategyTimeline(id), enabled: id > 0 && (tab === 'Overview' || tab === 'Activity')})
   const chart = useQuery({...queries.strategyChart(id), enabled: id > 0 && (tab === 'Overview' || tab === 'Chart')})
   const action = useMutation({
-    mutationFn: ({name, reason}: {name: 'enable' | 'pause' | 'flatten'; reason?: string}) => request<unknown>(`strategy-instances/${id}/${name}/`, mutationOptions('POST', reason ? {reason, event_id: `operator-${name}-${crypto.randomUUID()}`} : {}, true)),
+    mutationFn: ({name, reason, retryKey}: {name: 'enable' | 'pause' | 'flatten'; reason?: string; retryKey?: string}) => {
+      const options = mutationOptions(
+        'POST',
+        reason ? {reason, event_id: `operator-${name}-${crypto.randomUUID()}`} : {},
+        true,
+        retryKey,
+      )
+      if (retryKey) {
+        const headers = new Headers(options.headers)
+        headers.set('Idempotency-Retry', 'true')
+        options.headers = headers
+      }
+      return request<unknown>(`strategy-instances/${id}/${name}/`, options)
+    },
     onSuccess: async () => {
       setFlattenOpen(false)
       await Promise.all([
@@ -54,8 +67,8 @@ export function StrategyDetailPage() {
 
   return <div className="page-stack">
     <PageHeader eyebrow={`${item.portfolio} / ${item.symbol}`} title={item.name} description={`${item.definition_name} · ${item.timeframe} · version ${item.version}`} actions={<><Freshness updatedAt={strategy.dataUpdatedAt} stale={strategy.isStale} fetching={strategy.isFetching} onRefresh={() => void strategy.refetch()} /><Link className="button-secondary" to="/strategies"><ArrowLeft />All strategies</Link></>} />
-    <div className="strategy-control-bar"><div><StatusBadge status={item.execution_mode} /><StatusBadge status={item.state} />{item.conid ? <StatusBadge status="CONTRACT QUALIFIED" /> : <StatusBadge status="CONTRACT PENDING" />}</div><div><button className="button-secondary" disabled={!canEnable(item) || action.isPending || deleteAction.isPending} onClick={() => action.mutate({name: 'enable'})}><Power />Enable</button><button className="button-secondary" disabled={!canPause(item) || action.isPending || deleteAction.isPending} onClick={() => action.mutate({name: 'pause'})}><CirclePause />Pause</button><button className="button-danger-subtle" aria-label={`Delete ${item.name}`} disabled={action.isPending || deleteAction.isPending} onClick={() => setDeleteOpen(true)}><Trash2 />Delete</button><button className="button-danger-subtle" disabled={!canFlatten(item) || action.isPending || deleteAction.isPending} onClick={() => setFlattenOpen(true)}><SlidersHorizontal />Flatten target</button></div></div>
-    {item.block_reason && <div className="inline-warning"><StatusBadge status="BLOCKED" /><div><strong>Strategy is not ready</strong><p>{item.block_reason}</p></div></div>}
+    <div className="strategy-control-bar"><div><StatusBadge status={item.enabled ? 'ENABLED' : 'DISABLED'} /><StatusBadge status={item.execution_mode} /><StatusBadge status={item.state} /><StatusBadge status={item.execution_workflow?.status || 'UNKNOWN'} />{item.conid ? <StatusBadge status="CONTRACT QUALIFIED" /> : <StatusBadge status="CONTRACT PENDING" />}</div><div><button className="button-secondary" disabled={!canEnable(item) || item.activation_operation?.status === 'FAILED' || action.isPending || deleteAction.isPending} onClick={() => action.mutate({name: 'enable'})}><Power />Enable</button>{item.activation_operation?.status === 'FAILED' && item.activation_operation.retryable && <button className="button-secondary" disabled={action.isPending || deleteAction.isPending} onClick={() => action.mutate({name: 'enable', retryKey: item.activation_operation!.idempotency_key})}><RefreshCw />Retry activation</button>}<button className="button-secondary" disabled={!canPause(item) || action.isPending || deleteAction.isPending} onClick={() => action.mutate({name: 'pause'})}><CirclePause />Pause</button><button className="button-danger-subtle" aria-label={`Delete ${item.name}`} disabled={action.isPending || deleteAction.isPending} onClick={() => setDeleteOpen(true)}><Trash2 />Delete</button><button className="button-danger-subtle" disabled={!canFlatten(item) || action.isPending || deleteAction.isPending} onClick={() => setFlattenOpen(true)}><SlidersHorizontal />Flatten target</button></div></div>
+    {item.block_reason && <div className="inline-warning"><StatusBadge status="BLOCKED" /><div><strong>Strategy is not ready</strong><p>{item.block_reason}</p><p>Backend retryable: {item.activation_operation?.retryable ? 'Yes' : 'No'}</p></div></div>}
     {action.isError && <ErrorState title="Strategy action failed" error={action.error} compact />}
     {deleteAction.isError && <ErrorState title="Strategy deletion blocked" error={deleteAction.error} compact />}
     <div className="tabs" role="tablist" aria-label="Strategy details">{tabs.map((name) => <button key={name} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setSearchParams({tab: name.toLowerCase()})}>{name}</button>)}</div>
@@ -72,6 +85,12 @@ export function StrategyDetailPage() {
 function OverviewTab({strategy, timeline, timelineLoading, chart}: {strategy: StrategyInstance; timeline: StrategyTimelineItem[]; timelineLoading: boolean; chart: UseQueryResult<StrategyChartData, Error>}) {
   const warmup = strategy.warmup_required ? Math.min(1, strategy.warmup_progress / strategy.warmup_required) : 1
   return <div className="page-stack">
+    <section className="workflow-summary" aria-label="Automatic execution workflow">
+      <div><span>Workflow</span><StatusBadge status={strategy.execution_workflow?.status || 'UNKNOWN'} /></div>
+      <div><span>Current stage</span><strong>{strategy.execution_workflow?.current_stage?.replaceAll('_', ' ') || 'Created'}</strong></div>
+      <div><span>Trace ID</span><code>{strategy.execution_workflow?.trace_id || 'Not available'}</code></div>
+      <div><span>Polling</span><strong>{strategy.execution_workflow?.terminal ? 'Stopped at terminal state' : strategy.execution_workflow?.active ? 'Every second' : 'Every 12 seconds'}</strong></div>
+    </section>
     <section className="metric-grid compact">
       <TerminalMetric label="Latest signal" value={strategy.latest_signal || 'No signal'} helper={strategy.last_final_bar ? `Final bar ${formatDateTime(strategy.last_final_bar)}` : 'Awaiting a final bar'} />
       <TerminalMetric label="Current target" value={formatPercent(strategy.current_target)} helper="Strategy-attributed target" />
@@ -79,10 +98,11 @@ function OverviewTab({strategy, timeline, timelineLoading, chart}: {strategy: St
       <TerminalMetric label="Active order" value={strategy.active_order ? <code>{strategy.active_order.slice(0, 12)}</code> : 'None'} helper={strategy.last_fill ? `Last fill ${strategy.last_fill}` : 'No recent fill'} />
     </section>
     <div className="detail-grid">
-      <TerminalPanel id="readiness" title="Readiness" description="Contract, subscription, and persisted streaming progress"><dl className="detail-list"><div><dt>Data path</dt><dd><StatusBadge status={strategy.streaming?.status || 'UNKNOWN'} /></dd></div><div><dt>Contract</dt><dd>{strategy.conid ? <><StatusBadge status="QUALIFIED" /><code>{strategy.conid}</code></> : <StatusBadge status="PENDING" />}</dd></div><div><dt>Subscription</dt><dd><StatusBadge status={strategy.streaming?.subscription_state || 'MISSING'} /></dd></div><div><dt>Warm-up</dt><dd><div className="wide-progress"><span>{strategy.warmup_progress} / {strategy.warmup_required} bars</span><div><i style={{width: `${warmup * 100}%`}} /></div></div></dd></div><div><dt>Last raw event</dt><dd>{formatDateTime(strategy.streaming?.last_raw_event)}</dd></div><div><dt>Last canonical event</dt><dd>{formatDateTime(strategy.streaming?.last_canonical_event)}</dd></div><div><dt>Last final bar</dt><dd>{formatDateTime(strategy.last_final_bar)}</dd></div><div><dt>Last indicator</dt><dd>{formatDateTime(strategy.streaming?.last_indicator)}</dd></div><div><dt>Last strategy run</dt><dd>{formatDateTime(strategy.streaming?.last_strategy_run)}</dd></div><div><dt>State</dt><dd><StatusBadge status={strategy.state} /></dd></div><div><dt>Mode</dt><dd><StatusBadge status={strategy.execution_mode} /></dd></div>{strategy.streaming?.last_error && <div><dt>Last error</dt><dd>{strategy.streaming.last_error}</dd></div>}</dl></TerminalPanel>
+      <TerminalPanel id="execution-price" title="Execution price" description="Persisted price provenance and execution freshness"><dl className="detail-list"><div><dt>Price</dt><dd className="mono">{formatNumber(strategy.current_price?.value)}</dd></div><div><dt>Provider</dt><dd><StatusBadge status={strategy.current_price?.provider || 'UNKNOWN'} /></dd></div><div><dt>Data kind</dt><dd><StatusBadge status={strategy.current_price?.data_kind || 'UNKNOWN'} /></dd></div><div><dt>Source</dt><dd>{strategy.current_price?.source || 'Unknown'}</dd></div><div><dt>Timestamp</dt><dd>{formatDateTime(strategy.current_price?.timestamp)}</dd></div><div><dt>Fresh for execution</dt><dd><StatusBadge status={strategy.current_price?.fresh_for_execution ? 'FRESH' : 'NOT FRESH'} /></dd></div></dl></TerminalPanel>
+      <TerminalPanel id="readiness" title="Readiness" description="Contract, subscription, and persisted streaming progress"><dl className="detail-list"><div><dt>Enabled</dt><dd><StatusBadge status={strategy.enabled ? 'ENABLED' : 'DISABLED'} /></dd></div><div><dt>Activation</dt><dd><StatusBadge status={strategy.activation_status} /></dd></div><div><dt>Data path</dt><dd><StatusBadge status={strategy.streaming?.status || 'UNKNOWN'} /></dd></div><div><dt>Contract</dt><dd>{strategy.conid ? <><StatusBadge status="QUALIFIED" /><code>{strategy.conid}</code></> : <StatusBadge status="PENDING" />}</dd></div><div><dt>Subscription</dt><dd><StatusBadge status={strategy.streaming?.subscription_state || 'MISSING'} /></dd></div><div><dt>Active provider</dt><dd><StatusBadge status={strategy.streaming?.active_provider || 'NONE'} /></dd></div><div><dt>Warm-up</dt><dd>{!strategy.enabled && strategy.state === 'DISABLED' ? <StatusBadge status="DISABLED" /> : <div className="wide-progress"><span>{strategy.warmup_progress} / {strategy.warmup_required} bars</span><div><i style={{width: `${warmup * 100}%`}} /></div></div>}</dd></div><div><dt>Last raw event</dt><dd>{formatDateTime(strategy.streaming?.last_raw_event)}</dd></div><div><dt>Last canonical event</dt><dd>{formatDateTime(strategy.streaming?.last_canonical_event)}</dd></div><div><dt>Last final bar</dt><dd>{formatDateTime(strategy.last_final_bar)}</dd></div><div><dt>Last indicator</dt><dd>{formatDateTime(strategy.streaming?.last_indicator)}</dd></div><div><dt>Last strategy run</dt><dd>{formatDateTime(strategy.streaming?.last_strategy_run)}</dd></div><div><dt>State</dt><dd><StatusBadge status={strategy.state} /></dd></div><div><dt>Mode</dt><dd><StatusBadge status={strategy.execution_mode} /></dd></div>{strategy.block_reason && <div><dt>Block reason</dt><dd>{strategy.block_reason}</dd></div>}{strategy.streaming?.last_error && <div><dt>Last error</dt><dd>{strategy.streaming.last_error}</dd></div>}</dl></TerminalPanel>
       <TerminalPanel id="latest-indicators" title="Latest indicators" description="Values used by the strategy’s current input bindings">{Object.entries(strategy.latest_indicators).length ? <dl className="indicator-list">{Object.entries(strategy.latest_indicators).map(([name, value]) => <div key={name}><dt>{name.replaceAll('_', ' ')}</dt><dd className="mono">{formatNumber(value)}</dd></div>)}</dl> : <EmptyState title="Indicators are warming up" description="Persisted final indicator values will appear after the required inputs arrive." />}</TerminalPanel>
       <div className="detail-wide"><ChartTab query={chart} /></div>
-      <TerminalPanel id="execution-timeline" title="Execution timeline" description="Recent signal-to-target and order-intent trace" className="detail-wide">{timelineLoading ? <Skeleton lines={4} /> : <ActivityTimeline items={timeline.slice(0, 8).map(timelineItem)} />}</TerminalPanel>
+      <TerminalPanel id="execution-timeline" title="Execution timeline" description={`One trace across activation, market data, strategy, target, rebalance, intent, order, broker command, and fill: ${strategy.execution_workflow?.trace_id || 'pending'}`} className="detail-wide">{timelineLoading ? <Skeleton lines={4} /> : <ActivityTimeline items={timeline.map(timelineItem)} />}</TerminalPanel>
     </div>
   </div>
 }
@@ -103,10 +123,28 @@ function ChartTab({query}: {query: UseQueryResult<StrategyChartData, Error>}) {
 function ActivityTab({query}: {query: UseQueryResult<StrategyTimelineItem[], Error>}) {
   if (query.isLoading) return <Skeleton lines={6} />
   if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />
-  return <TerminalPanel id="complete-execution-timeline" title="Complete execution timeline" description="Runs, signals, targets, order intents, orders, and fills in reverse chronological order"><ActivityTimeline items={(query.data || []).map(timelineItem)} /></TerminalPanel>
+  return <TerminalPanel id="complete-execution-timeline" title="Complete execution timeline" description="All automatic paper-execution stages in workflow order, including pending stages and concrete blockers"><ActivityTimeline items={(query.data || []).map(timelineItem)} /></TerminalPanel>
 }
 
 function timelineItem(item: StrategyTimelineItem) {
+  if (item.stage) {
+    const detail = [
+      item.detail,
+      item.blocker ? `Blocker: ${item.blocker}` : '',
+      item.blocker ? `Retryable: ${item.retryable ? 'Yes' : 'No'}` : '',
+      item.entity_type && item.entity_id ? `${item.entity_type} ${item.entity_id}` : '',
+    ].filter(Boolean).join(' · ')
+    return {
+      id: item.entity_id || item.stage,
+      time: item.occurred_at,
+      type: item.stage,
+      title: item.label || item.stage.replaceAll('_', ' '),
+      detail,
+      status: item.status,
+    }
+  }
+  item.id ||= 0
+  item.type ||= 'EVENT'
   return {id: item.id, time: item.time, type: item.type, title: item.type.replaceAll('_', ' '), detail: `${item.detail || ''}${item.version ? `${item.detail ? ' · ' : ''}Version ${item.version}` : ''}`, status: item.status}
 }
 

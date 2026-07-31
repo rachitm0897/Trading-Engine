@@ -6,7 +6,7 @@ The React/TypeScript operator application is a dark, information-dense trading t
 
 - `/dashboard` — selected account and portfolio summary, real NAV/P&L and exposure charts, holdings, open orders, activity, and attention items.
 - `/strategies` — filterable strategy inventory with safe enable, pause, flatten, and delete controls.
-- `/strategies/new` — schema-driven strategy wizard; defaults to `SHADOW` and does not expose `LIVE`.
+- `/strategies/new` — schema-driven strategy wizard; execution mode is derived from the selected portfolio's assigned Paper or Live Gateway session.
 - `/strategies/:id` — strategy overview, price/indicator chart, execution activity, configuration, versions, and inputs.
 - `/portfolio-builder` — goal construction, instrument qualification, strategy assignment, combined preview, and guarded apply workflow.
 - `/portfolio` — holdings, cash, allocation, concentration, drift, and advanced flow/rebalance/optimization tools.
@@ -34,9 +34,9 @@ Theme and chart colors come from the semantic variables in `src/styles/tokens.cs
 
 ## Safety and data flow
 
-Strategies still emit signals and targets. Executable actions continue through allocation, sizing, pre-trade risk, OMS, Gateway, append-only ledgers, and reconciliation. Existing confirmation, reason, eligibility, paper/shadow, kill-switch, and idempotency controls are unchanged by the presentation layer.
+Strategies still emit signals and targets. Executable Paper and Live actions continue through allocation, sizing, pre-trade risk, OMS, the matching Gateway, append-only ledgers, and reconciliation. Preview is explicitly non-executing and creates no order intents or broker commands. Existing confirmation, reason, eligibility, Live safety-gate, kill-switch, and idempotency controls remain enforced.
 
-The current redesign required no Backend changes. Existing chart endpoints may accept optional `range` and `interval` query parameters; omitting them preserves the established response and query-cache contracts.
+The mode integration consumes the Backend's session-derived Paper/Live contracts and explicit preview run type. Existing chart endpoints may accept optional `range` and `interval` query parameters; omitting them preserves the established response and query-cache contracts.
 
 ## Development
 
@@ -51,7 +51,7 @@ npm run build
 
 `npm test` runs Vitest and React Testing Library coverage for routes, workflows, responsive shell state, persisted panels, chart normalization, and safety controls. `npm run build` runs TypeScript project compilation before creating the Vite production bundle.
 
-The production Docker build defaults to the normalized Vite base `/trading_eng_frontend/`; React Router reads Vite's resulting `BASE_URL`, so router and asset paths cannot diverge. A real process-level `VITE_APP_BASE_PATH` build override is supported for non-QFS builds. Local Vite may set `VITE_API_BASE_URL`.
+The production Docker build defaults to the normalized Vite base `/trading_eng_frontend/`; React Router reads Vite's resulting `BASE_URL`, so router and asset paths cannot diverge. A real process-level `VITE_APP_BASE_PATH` build override is supported for non-QFS builds. Local Vite uses the relative `/api/v1` client path and proxies it to `http://localhost:8000`.
 
 Run `docker build -t trading-engine-frontend .` from this directory. The image builds from `Frontend` alone and contains no `.env`. At container start, the validated single-line HTTP(S) `BACKEND_API_URL` generates uncached `runtime-config.js`; production uses `https://qfsplatform.com/trading_eng_backend/api/v1`. Values containing whitespace, line breaks, quotes, or other unsafe JavaScript characters stop container startup.
 

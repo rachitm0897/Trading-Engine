@@ -2,11 +2,13 @@ import {AlertTriangle, ShieldCheck, SlidersHorizontal, X} from 'lucide-react'
 import {useMemo, useState} from 'react'
 import {ApiError} from '../../api/client'
 import type {
+  ExecutionMode,
   Instrument,
   ManualOrderIntentStatus,
   Position,
 } from '../../api/types'
 import {StatusBadge, formatMoney, formatNumber} from '../../components/ui'
+import {executionModeForSession} from '../../executionMode'
 import {
   buildManualOrderPayload,
   estimateManualOrderNotional,
@@ -30,6 +32,7 @@ interface ManualOrderTicketProps extends ManualOrderSelection {
   pollTimedOut: boolean
   error: unknown
   result?: ManualOrderIntentStatus
+  allowLiveTrading: boolean
   onSubmit: (payload: ManualOrderPayload) => void
 }
 
@@ -44,6 +47,7 @@ export function ManualOrderTicket({
   pollTimedOut,
   error,
   result,
+  allowLiveTrading,
   onSubmit,
 }: ManualOrderTicketProps) {
   const [draft, setDraft] = useState<ManualOrderDraft>(initialManualOrderDraft)
@@ -51,7 +55,8 @@ export function ManualOrderTicket({
   const [confirmation, setConfirmation] = useState<ManualOrderDraft | null>(null)
   const instrument = instruments.find((item) => item.id === Number(draft.instrumentId)) || null
   const position = positions.find((item) => item.instrument_id === instrument?.id)
-  const blockers = manualOrderBlockingReasons({session, account, portfolio})
+  const executionMode = executionModeForSession(session)
+  const blockers = manualOrderBlockingReasons({session, account, portfolio}, allowLiveTrading)
   const estimatedNotional = estimateManualOrderNotional(draft, position?.market_price)
   const busy = pending || polling
 
@@ -93,7 +98,7 @@ export function ManualOrderTicket({
       <ContextValue label="Account" value={account?.account_id || 'Not selected'} detail={account?.alias} />
       <ContextValue label="Portfolio" value={portfolio?.name || 'Not selected'} />
     </div>
-    {session?.mode.toLowerCase() === 'live' && <div className="inline-warning manual-live-warning"><AlertTriangle /><div><strong>LIVE routing is disabled</strong><p>The backend policy rejects LIVE manual orders. Select a connected PAPER session.</p></div></div>}
+    {session?.mode === 'live' && <div className="inline-warning manual-live-warning"><AlertTriangle /><div><strong>{allowLiveTrading ? 'LIVE order warning' : 'LIVE routing blocked'}</strong><p>{allowLiveTrading ? `This order will route to the live IBKR account through ${session.display_name}. Review every confirmation detail.` : 'ALLOW_LIVE_TRADING is disabled. The backend will reject Live execution.'}</p></div></div>}
     {blockers.length > 0 && <div className="manual-order-blockers" role="status"><strong>Submission unavailable</strong><ul>{blockers.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
     <form className="form-grid four-columns manual-order-form" onSubmit={submit} noValidate>
       <label>Instrument
@@ -138,13 +143,14 @@ export function ManualOrderTicket({
     <ManualOrderError error={error} />
     {result && <ManualOrderResult result={result} polling={polling} pollTimedOut={pollTimedOut} />}
     {pollTimedOut && !result?.internal_id && <div className="inline-warning" role="status"><AlertTriangle /><div><strong>Status polling timed out</strong><p>The intent was not submitted again. Refresh Orders & Activity or check the intent ID below.</p></div></div>}
-    {confirmation && <ManualOrderConfirmation
+    {confirmation && executionMode && <ManualOrderConfirmation
       draft={confirmation}
       instrument={instruments.find((item) => item.id === Number(confirmation.instrumentId)) || null}
       sessionName={session?.display_name || 'Not selected'}
-      mode={session?.mode.toUpperCase() || '—'}
+      mode={executionMode}
       accountName={account?.account_id || 'Not selected'}
       portfolioName={portfolio?.name || 'Not selected'}
+      referencePrice={position?.market_price}
       estimatedNotional={estimateManualOrderNotional(confirmation, position?.market_price)}
       pending={pending}
       onClose={() => setConfirmation(null)}
@@ -164,6 +170,7 @@ function ManualOrderConfirmation({
   mode,
   accountName,
   portfolioName,
+  referencePrice,
   estimatedNotional,
   pending,
   onClose,
@@ -172,31 +179,40 @@ function ManualOrderConfirmation({
   draft: ManualOrderDraft
   instrument: Instrument | null
   sessionName: string
-  mode: string
+  mode: ExecutionMode
   accountName: string
   portfolioName: string
+  referencePrice?: string | number | null
   estimatedNotional: number | null
   pending: boolean
   onClose: () => void
   onConfirm: () => void
 }) {
   const rows = useMemo(() => [
-    ['Route', `${sessionName} · ${mode}`],
+    ['Mode', mode],
+    ['Gateway', sessionName],
     ['Account', accountName],
     ['Portfolio', portfolioName],
     ['Instrument', instrument ? `${instrument.symbol} · ${instrument.exchange}` : 'Not selected'],
-    ['Order', `${draft.side} ${draft.quantity} ${draft.orderType}`],
+    ['Side', draft.side],
+    ['Quantity', draft.quantity],
+    ['Order type', draft.orderType],
     ...(orderTypeNeedsStopPrice(draft.orderType) ? [['Stop price', draft.stopPrice]] : []),
     ...(orderTypeNeedsLimitPrice(draft.orderType) ? [['Limit price', draft.limitPrice]] : []),
+    ['Price details', draft.orderType === 'MKT'
+      ? `Market order · current reference ${formatMoney(referencePrice, instrument?.currency)}`
+      : draft.orderType === 'STP'
+        ? `Stop ${formatMoney(draft.stopPrice, instrument?.currency)}`
+        : `Limit ${formatMoney(draft.limitPrice, instrument?.currency)}${draft.orderType === 'STP_LMT' ? ` · stop ${formatMoney(draft.stopPrice, instrument?.currency)}` : ''}`],
     ['Time in force', draft.timeInForce],
     ['Estimated notional', estimatedNotional === null ? 'Not available' : formatMoney(estimatedNotional, instrument?.currency)],
-  ], [accountName, draft, estimatedNotional, instrument, mode, portfolioName, sessionName])
+  ], [accountName, draft, estimatedNotional, instrument, mode, portfolioName, referencePrice, sessionName])
   return <div className="dialog-layer" role="presentation">
     <div className="confirm-dialog manual-order-confirmation" role="dialog" aria-modal="true" aria-labelledby="manual-order-confirm-title">
-      <header><AlertTriangle /><div><h2 id="manual-order-confirm-title">Confirm manual order</h2><p>Review the exact order routed through risk, OMS, and the selected Gateway.</p></div><button type="button" className="icon-button" aria-label="Close manual order confirmation" onClick={onClose}><X /></button></header>
+      <header><AlertTriangle /><div><h2 id="manual-order-confirm-title">Confirm {mode} manual order</h2><p>Review the exact order routed through risk, OMS, and the selected Gateway.</p></div><button type="button" className="icon-button" aria-label="Close manual order confirmation" onClick={onClose}><X /></button></header>
       <dl className="detail-list">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
       <div className="inline-warning"><AlertTriangle /><div><strong>Risk may resize or reject this order</strong><p>Confirmation creates one durable manual OrderIntent; it does not bypass backend validation.</p></div></div>
-      <footer><button type="button" className="button-secondary" onClick={onClose}>Go back</button><button type="button" className="button-primary" disabled={pending} onClick={onConfirm}>{pending ? 'Submitting…' : 'Confirm and queue'}</button></footer>
+      <footer><button type="button" className="button-secondary" onClick={onClose}>Go back</button><button type="button" className="button-primary" disabled={pending} onClick={onConfirm}>{pending ? 'Submitting…' : `Confirm ${mode} order`}</button></footer>
     </div>
   </div>
 }
@@ -233,7 +249,7 @@ function ManualOrderError({error}: {error: unknown}) {
 function specificErrorExplanation(code: string, message: string) {
   const value = `${code} ${message}`.toLowerCase()
   if (code === 'IDEMPOTENCY_CONFLICT') return 'This idempotency key was already used for materially different order contents. Review the form and start a new submission.'
-  if (code === 'LIVE_MANUAL_TRADING_DISABLED' || value.includes('live manual')) return 'LIVE manual routing is disabled. Select an eligible PAPER session.'
+  if (code === 'LIVE_MANUAL_TRADING_DISABLED' || value.includes('live manual')) return 'Live manual routing is blocked by ALLOW_LIVE_TRADING. Enable the backend safety gate before retrying.'
   if (code === 'MARKET_PRICE_UNAVAILABLE' || value.includes('stale') || value.includes('market price')) return 'A sufficiently fresh trusted market price is unavailable; no client reference price will be substituted.'
   if (value.includes('reconcil')) return 'The selected account must complete reconciliation before commands can be dispatched.'
   if (value.includes('disconnected') || value.includes('not active') || value.includes('gateway')) return 'Reconnect the selected Gateway session and verify commands are enabled.'

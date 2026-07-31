@@ -6,6 +6,7 @@ import {Link} from 'react-router-dom'
 import {API_BASE_URL, mutationOptions, request, withQuery} from '../../api/client'
 import {queries} from '../../api/queries'
 import type {
+  ExecutionMode,
   GoalTimeframe,
   PortfolioBuilderReadiness,
   PortfolioBuilderReadinessBlocker,
@@ -31,6 +32,7 @@ import {
   formatPercent,
   toNumber,
 } from '../../components/ui'
+import {executionModeForSession, executionModeLabel} from '../../executionMode'
 import {useSelection} from '../../stores/useSelection'
 
 const MAXIMUM_RISK: Record<GoalTimeframe, number> = {
@@ -42,16 +44,16 @@ const MAXIMUM_RISK: Record<GoalTimeframe, number> = {
   COMPOUND: 5,
 }
 
-async function pollConstruction(initial: PortfolioConstructionRun, applying = false) {
+export async function pollConstruction(initial: PortfolioConstructionRun, applying = false, pollIntervalMs = 1_000) {
   let value = initial
   const complete = (run: PortfolioConstructionRun) => applying
-    ? !['QUEUED', 'APPLYING'].includes(run.application_status)
+    ? ['APPLIED', 'PARTIALLY_APPLIED', 'FAILED'].includes(run.application_status)
     : !['QUEUED', 'DISPATCHED', 'CALCULATING'].includes(run.status)
-  for (let attempt = 0; attempt < 120 && !complete(value); attempt += 1) {
-    await new Promise((resolve) => window.setTimeout(resolve, 500))
+  while (!complete(value)) {
+    await new Promise((resolve) => window.setTimeout(resolve, pollIntervalMs))
     value = await request<PortfolioConstructionRun>(`portfolio-construction/runs/${value.id}/`)
   }
-  if (applying && value.application_status !== 'APPLIED') {
+  if (applying && value.application_status === 'FAILED') {
     throw new Error(value.last_error || 'Portfolio construction apply did not complete')
   }
   if (!applying && value.status !== 'COMPLETED') {
@@ -68,10 +70,13 @@ function asDraft(goal: PortfolioGoalAllocation): GoalDraft {
 
 export function PortfolioBuilderPage() {
   const queryClient = useQueryClient()
-  const {portfolio, selectedPortfolioId} = useSelection()
+  const {portfolio, selectedPortfolioId, sessions} = useSelection()
+  const executionSession = sessions.find(
+    (candidate) => candidate.id === portfolio?.gateway_session_id,
+  ) || null
+  const executionMode = executionModeForSession(executionSession)
   const plans = useQuery(queries.constructionPlans(selectedPortfolioId))
   const runs = useQuery(queries.constructionRuns(selectedPortfolioId))
-  const system = useQuery(queries.system())
   const plan = plans.data?.[0]
   const [step, setStep] = useState(1)
   const [drafts, setDrafts] = useState<GoalDraft[]>([])
@@ -202,7 +207,7 @@ export function PortfolioBuilderPage() {
     <PageHeader
       eyebrow="Full-universe recommendations"
       title="Portfolio Builder"
-      description="Set your goals once. The recommendation system selects diversified stocks and one primary strategy per stock before the mandatory preview and SHADOW/PAPER apply gates."
+      description="Set your goals once. Recommendations produce one combined, non-executing preview before an explicit apply to the portfolio's Paper or Live Gateway."
     />
     {!plan ? <TerminalPanel id="create-construction-plan" title="Create a construction plan" description="One plan organizes up to ten virtual goals for this portfolio.">
       <button className="button-primary" disabled={createPlan.isPending} onClick={() => createPlan.mutate()}>{createPlan.isPending ? 'Creating…' : 'Start Portfolio Builder'}</button>
@@ -238,12 +243,12 @@ export function PortfolioBuilderPage() {
         error={generate.error || batchQuery.error || previewMutation.error} onBack={() => setStep(1)} onRegenerate={() => generate.mutate()}
         onPreview={() => previewMutation.mutate()} />}
 
-      {step === 3 && <PreviewApplyStep run={shownPreview} mode={system.data?.execution_mode || 'SHADOW'}
+      {step === 3 && <PreviewApplyStep run={shownPreview} mode={executionMode}
         pending={applyMutation.isPending} error={applyMutation.error} onBack={() => setStep(2)} onConfirm={() => setConfirmOpen(true)} />}
 
-      <ConfirmActionDialog open={confirmOpen} title="Apply the combined portfolio target?"
-        description={`This confirms one ${system.data?.execution_mode || 'SHADOW'} rebalance for the full portfolio. Generating recommendations created no orders, rebalances, or running strategies.`}
-        confirmLabel="Apply one combined target" requireReason={false} danger={false} pending={applyMutation.isPending}
+      <ConfirmActionDialog open={confirmOpen} title={executionMode ? `Apply to ${executionModeLabel(executionMode)}?` : 'Gateway mode unavailable'}
+        description={executionMode ? `Preview creates no orders. Applying routes one ${executionMode} execution rebalance through ${executionSession?.display_name}, sizing, risk, OMS, and the portfolio-assigned Gateway.` : 'The selected portfolio must have an assigned Paper or Live Gateway session.'}
+        confirmLabel={executionMode ? `Apply to ${executionModeLabel(executionMode)}` : 'Apply unavailable'} requireReason={false} danger={executionMode === 'LIVE'} pending={applyMutation.isPending}
         onClose={() => setConfirmOpen(false)} onConfirm={async () => { await applyMutation.mutateAsync() }} />
     </>}
   </div>
@@ -301,7 +306,7 @@ function RecommendationStep({batch, pending, error, onBack, onRegenerate, onPrev
     <div className="system-actions">
       <button className="button-secondary" disabled={pending} onClick={onBack}>Back to goals</button>
       <button className="button-secondary" disabled={pending} onClick={onRegenerate}>{pending ? 'Working…' : 'Regenerate recommendations'}</button>
-      <button className="button-primary" disabled={pending || batch?.status !== 'COMPLETED'} onClick={onPreview}>{pending ? 'Building preview…' : 'Preview portfolio'}</button>
+      <button className="button-primary" disabled={pending || batch?.status !== 'COMPLETED'} onClick={onPreview}>{pending ? 'Building preview…' : 'Preview rebalance'}</button>
     </div>
   </TerminalPanel>
 }
@@ -323,7 +328,7 @@ function RecommendationGoalCard({goal}: {goal: RecommendationBatchGoal}) {
 
 function PreviewApplyStep({run, mode, pending, error, onBack, onConfirm}: {
   run: PortfolioConstructionRun | null
-  mode: string
+  mode: ExecutionMode | null
   pending: boolean
   error: unknown
   onBack: () => void
@@ -331,14 +336,16 @@ function PreviewApplyStep({run, mode, pending, error, onBack, onConfirm}: {
 }) {
   if (!run) return <TerminalPanel id="construction-preview-empty" title="3. Preview & Apply" description="A completed preview is required before apply." collapsible={false}><EmptyState title="No preview yet" /><button className="button-secondary" onClick={onBack}>Back to recommendations</button></TerminalPanel>
   const targets = run.targets || []
-  return <TerminalPanel id="construction-preview" title="3. Preview & Apply" description={`Review one combined target before it enters the existing ${mode} safety pipeline.`} collapsible={false}>
+  const modeLabel = mode ? executionModeLabel(mode) : 'Unavailable'
+  return <TerminalPanel id="construction-preview" title="3. Preview & Apply" description="Preview creates no orders. Review the combined target before explicitly applying it." collapsible={false}>
     <section className="metric-grid compact">
       <TerminalMetric label="Expected return" value={formatPercent(run.metrics.expected_return)} />
       <TerminalMetric label="Expected volatility" value={formatPercent(run.metrics.expected_volatility)} />
       <TerminalMetric label="Sharpe ratio" value={formatNumber(run.metrics.sharpe_ratio)} />
       <TerminalMetric label="Combined cash" value={formatPercent(run.final_target_weights.cash)} />
       <TerminalMetric label="Net turnover" value={formatPercent(run.rebalance?.planned_turnover)} />
-      <TerminalMetric label="Mode" value={<StatusBadge status={run.rebalance?.mode || mode} />} />
+      <TerminalMetric label="Preview" value={<StatusBadge status={run.rebalance?.run_type || 'PREVIEW'} />} />
+      <TerminalMetric label="Apply route" value={<StatusBadge status={mode || 'UNAVAILABLE'} />} helper={mode ? `Derived from the selected ${modeLabel} Gateway session` : 'Assign a Gateway session'} />
     </section>
     <DataTable rows={targets} columns={[
       {id: 'stock', header: 'Stock', cell: (item) => <div className="primary-cell"><strong className="mono">{item.symbol}</strong>{item.shared_across_goals && <span>Shared by {item.goal_contributions.length} goals</span>}</div>},
@@ -354,7 +361,21 @@ function PreviewApplyStep({run, mode, pending, error, onBack, onConfirm}: {
       {id: 'quantity', header: 'Quantity', align: 'right' as const, cell: (item) => formatNumber(item.quantity)},
       {id: 'state', header: 'State', cell: (item) => <StatusBadge status={item.suppressed ? item.suppression_reason || 'SUPPRESSED' : 'PLANNED'} />},
     ]} getRowKey={(item) => item.instrument_id} emptyTitle="No net trades required" />
-    {run.applied_rebalance ? <div className="inline-success"><StatusBadge status={run.applied_rebalance.status} /><div><strong>Applied through rebalance {run.applied_rebalance.id}</strong><p>The recommendation batch itself created no orders. Execution remains governed by {mode} controls.</p><div className="inline-links"><a href={`${API_BASE_URL}/portfolio-construction/runs/${run.id}/`} target="_blank" rel="noreferrer">Construction run {run.id}</a><Link to="/portfolio">View portfolio</Link><Link to="/activity">Orders & activity</Link></div></div></div> : <div className="system-actions"><button className="button-secondary" onClick={onBack}>Back to recommendations</button><button className="button-primary" disabled={pending} onClick={onConfirm}>{pending ? 'Applying…' : `Confirm ${mode} apply`}</button></div>}
+    {(run.metrics.strategy_instances || []).length > 0 && <DataTable rows={run.metrics.strategy_instances || []} columns={[
+      {id: 'instance', header: 'Strategy', cell: (item) => <Link to={`/strategies/${item.strategy_instance_id}`}>Strategy {item.strategy_instance_id}</Link>},
+      {id: 'creation', header: 'Creation', cell: (item) => <StatusBadge status={item.strategy_creation} />},
+      {id: 'enabled', header: 'Enabled', cell: (item) => <StatusBadge status={item.enabled ? 'ENABLED' : 'DISABLED'} />},
+      {id: 'activation', header: 'Activation', cell: (item) => <StatusBadge status={item.activation_status} />},
+      {id: 'subscription', header: 'Subscription', cell: (item) => <StatusBadge status={item.market_subscription} />},
+      {id: 'provider', header: 'Provider', cell: (item) => <StatusBadge status={item.active_provider || 'NONE'} />},
+      {id: 'warmup', header: 'Warm-up', cell: (item) => `${item.warmup_progress ?? 0} / ${item.warmup_required ?? 0}`},
+      {id: 'live', header: 'Live bar', cell: (item) => <StatusBadge status={item.waiting_for_live_bar ? 'WAITING' : item.first_evaluation_complete ? 'RECEIVED' : 'PENDING'} />},
+      {id: 'evaluation', header: 'First evaluation', cell: (item) => <StatusBadge status={item.first_evaluation_complete ? 'COMPLETE' : 'PENDING'} />},
+      {id: 'execution', header: 'Execution', cell: (item) => <StatusBadge status={item.execution_active ? 'ACTIVE' : 'INACTIVE'} />},
+      {id: 'reason', header: 'Block reason', cell: (item) => item.block_reason || '—'},
+    ]} getRowKey={(item) => `${item.assignment_id}-${item.strategy_instance_id}`} emptyTitle="No generated strategies" />}
+    {run.application_status === 'PARTIALLY_APPLIED' && <div className="inline-warning"><StatusBadge status={run.application_status} /><div><strong>Construction applied with activation failures</strong><p>{run.last_error || 'Review each generated strategy and subscription status.'}</p></div></div>}
+    {run.applied_rebalance ? <div className="inline-success"><StatusBadge status={run.applied_rebalance.status} /><div><strong>Initial allocation preview {run.applied_rebalance.id} created</strong><p>No strategy order is created until activation, warm-up, and a valid first live target complete. Strategy execution uses a separate automatic rebalance.</p><div className="inline-links"><a href={`${API_BASE_URL}/portfolio-construction/runs/${run.id}/`} target="_blank" rel="noreferrer">Construction run {run.id}</a><Link to="/portfolio">View portfolio</Link><Link to="/activity">Orders & activity</Link></div></div></div> : <div className="system-actions"><button className="button-secondary" onClick={onBack}>Back to recommendations</button><button className="button-primary" disabled={pending || !mode} onClick={onConfirm}>{pending ? 'Applying…' : `Apply to ${modeLabel}`}</button></div>}
     {error ? <ErrorState title="Construction application was blocked" error={error} compact /> : null}
   </TerminalPanel>
 }

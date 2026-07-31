@@ -1,12 +1,10 @@
 FROM node:22-alpine AS build
 WORKDIR /app
-ARG VITE_API_BASE_URL=https://qfsplatform.com/trading_eng_backend/api/v1
 ARG VITE_APP_BASE_PATH=/trading_eng_frontend/
-ENV VITE_API_BASE_URL=$VITE_API_BASE_URL VITE_APP_BASE_PATH=$VITE_APP_BASE_PATH
+ENV VITE_APP_BASE_PATH=$VITE_APP_BASE_PATH
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-COPY .env.example .env
 RUN npm run build
 
 FROM nginx:1.27-alpine

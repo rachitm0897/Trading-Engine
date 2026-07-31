@@ -2,7 +2,7 @@ import type {QueryClient} from '@tanstack/react-query'
 import type {StrategyInstance} from '../../api/types'
 
 export function canEnable(strategy: StrategyInstance) {
-  return !strategy.enabled && strategy.conid !== null && strategy.state !== 'ERROR'
+  return (!strategy.enabled || strategy.state === 'BLOCKED') && strategy.conid !== null && !['ERROR', 'ACTIVATING'].includes(strategy.state)
 }
 
 export function canPause(strategy: StrategyInstance) {

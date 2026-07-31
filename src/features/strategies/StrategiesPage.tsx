@@ -6,6 +6,7 @@ import {mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
 import type {StrategyInstance} from '../../api/types'
 import {ConfirmActionDialog, DataTable, DeleteStrategyDialog, ErrorState, Freshness, PageHeader, Skeleton, StatusBadge, TerminalPanel, formatDateTime, formatNumber} from '../../components/ui'
+import {EXECUTION_MODES} from '../../executionMode'
 import {useSelection} from '../../stores/useSelection'
 import {canEnable, canFlatten, canPause, refreshAfterStrategyDeletion} from './strategyActions'
 
@@ -48,8 +49,9 @@ export function StrategiesPage() {
     {id: 'strategy', header: 'Strategy', cell: (item: StrategyInstance) => <div className="primary-cell"><Link to={`/strategies/${item.id}`}>{item.name}</Link><span>{item.definition_name}</span></div>},
     {id: 'instrument', header: 'Instrument', cell: (item: StrategyInstance) => <div className="primary-cell mono"><strong>{item.symbol}</strong><span>{item.exchange} · {item.timeframe}</span></div>},
     {id: 'mode', header: 'Mode', cell: (item: StrategyInstance) => <StatusBadge status={item.execution_mode} />},
+    {id: 'enabled', header: 'Enabled', cell: (item: StrategyInstance) => <StatusBadge status={item.enabled ? 'ENABLED' : 'DISABLED'} />},
     {id: 'state', header: 'State', cell: (item: StrategyInstance) => <StatusBadge status={item.state} />},
-    {id: 'warmup', header: 'Warm-up', cell: (item: StrategyInstance) => <div className="compact-progress"><span>{Math.min(item.warmup_progress, item.warmup_required)} / {item.warmup_required}</span><div><i style={{width: `${item.warmup_required ? Math.min(100, item.warmup_progress / item.warmup_required * 100) : 100}%`}} /></div></div>},
+    {id: 'warmup', header: 'Warm-up', cell: (item: StrategyInstance) => !item.enabled && item.state === 'DISABLED' ? <StatusBadge status="DISABLED" /> : <div className="compact-progress"><span>{Math.min(item.warmup_progress, item.warmup_required)} / {item.warmup_required}</span><div><i style={{width: `${item.warmup_required ? Math.min(100, item.warmup_progress / item.warmup_required * 100) : 100}%`}} /></div></div>},
     {id: 'target', header: 'Target', align: 'right' as const, className: 'mono', cell: (item: StrategyInstance) => formatNumber(item.current_target)},
     {id: 'signal', header: 'Signal', cell: (item: StrategyInstance) => <span className="mono">{item.latest_signal || '—'}</span>},
     {id: 'stream', header: 'Stream', cell: (item: StrategyInstance) => <StatusBadge status={item.streaming?.status || 'UNKNOWN'} />},
@@ -69,7 +71,7 @@ export function StrategiesPage() {
       <div className="filter-bar">
         <label className="search-field"><Search /><span className="sr-only">Search strategies</span><input aria-label="Search strategies" placeholder="Search ticker, name, or definition" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
         <label><Filter /><span className="sr-only">Filter strategy state</span><select aria-label="Filter strategy state" value={state} onChange={(event) => setState(event.target.value)}><option value="">All states</option>{states.map((value) => <option key={value}>{value}</option>)}</select></label>
-        <label><span className="sr-only">Filter execution mode</span><select aria-label="Filter execution mode" value={mode} onChange={(event) => setMode(event.target.value)}><option value="">All modes</option><option>SHADOW</option><option>OBSERVE</option><option>PAPER</option></select></label>
+        <label><span className="sr-only">Filter execution mode</span><select aria-label="Filter execution mode" value={mode} onChange={(event) => setMode(event.target.value)}><option value="">All modes</option>{EXECUTION_MODES.map((value) => <option key={value}>{value}</option>)}</select></label>
         <label><span className="sr-only">Filter timeframe</span><select aria-label="Filter timeframe" value={timeframe} onChange={(event) => setTimeframe(event.target.value)}><option value="">All timeframes</option>{timeframes.map((value) => <option key={value}>{value}</option>)}</select></label>
         <label><span className="sr-only">Filter symbol</span><select aria-label="Filter symbol" value={symbol} onChange={(event) => setSymbol(event.target.value)}><option value="">All symbols</option>{symbols.map((value) => <option key={value}>{value}</option>)}</select></label>
         <span className="filter-count">{rows.length} of {(strategies.data || []).length}</span>

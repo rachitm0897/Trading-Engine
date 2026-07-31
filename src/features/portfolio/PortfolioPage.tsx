@@ -3,9 +3,10 @@ import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {Banknote, Layers3, PieChart, Scale, WalletCards} from 'lucide-react'
 import {mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
-import type {AllocationPolicy, Instrument, PortfolioOptimizationPolicy, PortfolioOptimizationRun, PortfolioUniverse, Position, PositionSizingDecision, RebalanceRun, RebalanceTarget} from '../../api/types'
+import type {AllocationPolicy, ExecutionMode, Instrument, PortfolioOptimizationPolicy, PortfolioOptimizationRun, PortfolioUniverse, Position, PositionSizingDecision, RebalanceRun, RebalanceTarget} from '../../api/types'
 import {TerminalChart} from '../../components/charts/TerminalChart'
 import {DataTable, ErrorState, Freshness, PageHeader, Skeleton, StatusBadge, TerminalMetric, TerminalPanel, formatCompact, formatMoney, formatNumber, formatPercent, toNumber} from '../../components/ui'
+import {executionModeForSession, executionModeLabel} from '../../executionMode'
 import {useSelection} from '../../stores/useSelection'
 
 async function pollRun<T>(initial: T, path: string, complete: (value: T) => boolean): Promise<T> {
@@ -19,7 +20,10 @@ async function pollRun<T>(initial: T, path: string, complete: (value: T) => bool
 
 export function PortfolioPage() {
   const queryClient = useQueryClient()
-  const {portfolio, account, selectedPortfolioId} = useSelection()
+  const {portfolio, account, session, selectedPortfolioId} = useSelection()
+  const executionMode = portfolio?.gateway_session_id === session?.id
+    ? executionModeForSession(session)
+    : null
   const positions = useQuery(queries.positions(selectedPortfolioId))
   const series = useQuery(queries.portfolioSeries(selectedPortfolioId))
   const allocationPolicies = useQuery(queries.allocationPolicies())
@@ -27,7 +31,6 @@ export function PortfolioPage() {
   const rebalancePolicies = useQuery(queries.rebalancePolicies())
   const rebalanceRuns = useQuery(queries.rebalanceRuns())
   const instruments = useQuery(queries.instruments())
-  const system = useQuery(queries.system())
   const universes = useQuery(queries.portfolioUniverse(selectedPortfolioId))
   const optimizationPolicies = useQuery(queries.optimizationPolicies(selectedPortfolioId))
   const optimizationRuns = useQuery(queries.optimizationRuns(selectedPortfolioId))
@@ -94,11 +97,11 @@ export function PortfolioPage() {
       <TerminalPanel id="strategy-allocation" title="Allocation by strategy" description="Configured capital shares; actual attribution remains ledger-backed"><AllocationBars rows={policyRows.map((item) => ({id: item.id, name: item.strategy, weight: toNumber(item.target_share), value: null}))} currency={account?.base_currency} /></TerminalPanel>
     </div>
     <TerminalPanel id="advanced-target-optimizer" title="Advanced target optimizer" description="Operator controls for a single-universe long-only Markowitz target. Everyday goal construction is available in Portfolio Builder." defaultOpen={false}>
-      <PortfolioConstruction portfolioId={selectedPortfolioId} instruments={instruments.data || []} universe={universes.data?.[0]} policy={optimizationPolicies.data?.[0]} preview={optimizationPreview} executionMode={system.data?.execution_mode || 'SHADOW'} onPreview={setOptimizationPreview} onChanged={async () => {await Promise.all([queryClient.invalidateQueries({queryKey: ['portfolio-universe']}), queryClient.invalidateQueries({queryKey: ['optimization-policies']}), queryClient.invalidateQueries({queryKey: ['optimization-runs']}), queryClient.invalidateQueries({queryKey: ['rebalance-runs']})])}} />
+      <PortfolioConstruction portfolioId={selectedPortfolioId} instruments={instruments.data || []} universe={universes.data?.[0]} policy={optimizationPolicies.data?.[0]} preview={optimizationPreview} executionMode={executionMode} onPreview={setOptimizationPreview} onChanged={async () => {await Promise.all([queryClient.invalidateQueries({queryKey: ['portfolio-universe']}), queryClient.invalidateQueries({queryKey: ['optimization-policies']}), queryClient.invalidateQueries({queryKey: ['optimization-runs']}), queryClient.invalidateQueries({queryKey: ['rebalance-runs']})])}} />
       {!optimizationPreview && (optimizationRuns.data || []).length > 0 && <p className="inline-note">Most recent optimization: run {(optimizationRuns.data || [])[0].id} · {(optimizationRuns.data || [])[0].status}.</p>}
     </TerminalPanel>
     <TerminalPanel id="holdings" title="Holdings" description={`${portfolioPositions.length} marked positions`}>{positions.isLoading ? <Skeleton lines={5} /> : positions.isError ? <ErrorState error={positions.error} onRetry={() => void positions.refetch()} /> : <DataTable rows={portfolioPositions} columns={holdingColumns} getRowKey={(item) => item.id} emptyTitle="No holdings" emptyDescription="Broker-synchronized positions for the selected portfolio will appear here." />}</TerminalPanel>
-    <TerminalPanel id="drift" title="Drift" description="Create a SHADOW preview to compare current and net strategy targets" actions={<button className="button-secondary" disabled={!selectedPortfolioId || rebalance.isPending} onClick={() => rebalance.mutate()}>{rebalance.isPending ? 'Calculating…' : 'Preview rebalance'}</button>}>{rebalance.isError && <ErrorState title="Rebalance preview was blocked" error={rebalance.error} compact />}<DataTable rows={preview?.targets || []} columns={driftColumns} getRowKey={(item) => item.id} emptyTitle="No drift preview" emptyDescription="A preview creates planning records only and never creates an order." /></TerminalPanel>
+    <TerminalPanel id="drift" title="Drift" description="Preview rebalance compares current and net strategy targets. Preview creates no orders." actions={<button className="button-secondary" disabled={!selectedPortfolioId || rebalance.isPending} onClick={() => rebalance.mutate()}>{rebalance.isPending ? 'Calculating…' : 'Preview rebalance'}</button>}>{rebalance.isError && <ErrorState title="Rebalance preview was blocked" error={rebalance.error} compact />}<DataTable rows={preview?.targets || []} columns={driftColumns} getRowKey={(item) => item.id} emptyTitle="No drift preview" emptyDescription="Preview creates no orders or broker commands." /></TerminalPanel>
     <section className="advanced-stack" aria-label="Advanced portfolio tools">
       <TerminalPanel id="portfolio-flow-allocation" title="Portfolio flow allocation" description="Deposit and withdrawal allocation, kept out of the everyday holdings view." defaultOpen={false}><FlowForm pending={flow.isPending} error={flow.error} result={flow.data} onSubmit={(payload) => flow.mutate(payload)} /><DataTable rows={(allocationRuns.data || []).filter((item) => !selectedPortfolioId || item.portfolio_id === selectedPortfolioId).slice(0, 10)} columns={allocationRunColumns} getRowKey={(item) => item.id} emptyTitle="No allocation runs" /></TerminalPanel>
       <TerminalPanel id="position-sizing" title="Position sizing details" description="Operator preview of the constraints applied before risk and OMS." defaultOpen={false}><SizingForm instruments={instruments.data || []} pending={size.isPending} error={size.error} result={sizing} onSubmit={(payload) => size.mutate(payload)} /></TerminalPanel>
@@ -142,7 +145,7 @@ function PortfolioConstruction({portfolioId, instruments, universe, policy, prev
   universe?: PortfolioUniverse
   policy?: PortfolioOptimizationPolicy
   preview: PortfolioOptimizationRun | null
-  executionMode: string
+  executionMode: ExecutionMode | null
   onPreview: (run: PortfolioOptimizationRun) => void
   onChanged: () => Promise<void>
 }) {
@@ -191,6 +194,7 @@ function PortfolioConstruction({portfolioId, instruments, universe, policy, prev
   })
   const apply = useMutation({
     mutationFn: async () => {
+      if (!executionMode) throw new Error('The selected portfolio must have a matching Paper or Live Gateway session')
       const run=await request<PortfolioOptimizationRun>('portfolio-optimization/run/', mutationOptions('POST', {optimization_run_id: preview?.id, portfolio_id: portfolioId, universe_id: preview?.universe_id, policy_id: preview?.policy_id}, true))
       return pollRun(run,`portfolio-optimization/runs/${run.id}/`,(value) => !['QUEUED','APPLYING'].includes(value.application_status))
     },
@@ -228,14 +232,15 @@ function PortfolioConstruction({portfolioId, instruments, universe, policy, prev
         <label>Maximum instruments<input name="maximum_instruments" type="number" min="2" max="100" value={maximumInstruments} onChange={(event) => setMaximumInstruments(Number(event.target.value))} /></label>
         <label className="checkbox-field"><input name="include_strategy_instruments" type="checkbox" defaultChecked={universe?.include_strategy_instruments || false} />Include active strategy stocks</label>
       </div>
-      <div className="system-actions"><button className="button-secondary" disabled={save.isPending || instrumentIds.length > maximumInstruments}>{save.isPending ? 'Saving…' : 'Save universe & policy'}</button><button type="button" className="button-primary" disabled={!universe || !policy || optimize.isPending} onClick={() => optimize.mutate()}>{optimize.isPending ? 'Optimizing…' : 'Preview optimization'}</button>{preview && <button type="button" className="button-secondary" disabled={apply.isPending || preview.application_status === 'APPLIED' || Boolean(preview.applied_rebalance)} onClick={() => apply.mutate()}>{preview.applied_rebalance ? 'Optimization already applied' : apply.isPending ? 'Planning…' : `Apply through ${executionMode} rebalance`}</button>}</div>
+      <div className="system-actions"><button className="button-secondary" disabled={save.isPending || instrumentIds.length > maximumInstruments}>{save.isPending ? 'Saving…' : 'Save universe & policy'}</button><button type="button" className="button-primary" disabled={!universe || !policy || optimize.isPending} onClick={() => optimize.mutate()}>{optimize.isPending ? 'Optimizing…' : 'Preview optimization'}</button>{preview && <button type="button" className="button-secondary" disabled={!executionMode || apply.isPending || preview.application_status === 'APPLIED' || Boolean(preview.applied_rebalance)} onClick={() => apply.mutate()}>{preview.applied_rebalance ? 'Optimization already applied' : apply.isPending ? 'Planning…' : executionMode ? `Apply to ${executionModeLabel(executionMode)}` : 'Apply unavailable'}</button>}</div>
+      <p className="inline-note">Preview creates no orders. Apply routes through the selected portfolio’s {executionMode ? executionModeLabel(executionMode) : 'unavailable'} Gateway session.</p>
     </form>
     {save.isError && <ErrorState title="Advanced optimizer settings were not saved" error={save.error} compact />}
     {optimize.isError && <ErrorState title="Optimization preview failed" error={optimize.error} compact />}
     {apply.isError && <ErrorState title="Optimized rebalance was blocked" error={apply.error} compact />}
     {preview?.applied_rebalance && <div className="inline-success"><StatusBadge status={preview.applied_rebalance.status} />Applied rebalance {preview.applied_rebalance.id} · {preview.applied_rebalance.mode}</div>}
     {preview && <>
-      <section className="metric-grid compact"><TerminalMetric label="Expected return" value={formatPercent(preview.expected_return)} /><TerminalMetric label="Expected volatility" value={formatPercent(preview.expected_volatility)} /><TerminalMetric label="Sharpe ratio" value={formatNumber(preview.sharpe_ratio)} /><TerminalMetric label="Estimated turnover" value={formatPercent(preview.turnover)} /><TerminalMetric label="Cash target" value={formatPercent(preview.cash_weight)} /><TerminalMetric label="Planner mode" value={<StatusBadge status={preview.rebalance?.mode || 'SHADOW'} />} /></section>
+      <section className="metric-grid compact"><TerminalMetric label="Expected return" value={formatPercent(preview.expected_return)} /><TerminalMetric label="Expected volatility" value={formatPercent(preview.expected_volatility)} /><TerminalMetric label="Sharpe ratio" value={formatNumber(preview.sharpe_ratio)} /><TerminalMetric label="Estimated turnover" value={formatPercent(preview.turnover)} /><TerminalMetric label="Cash target" value={formatPercent(preview.cash_weight)} /><TerminalMetric label="Preview run type" value={<StatusBadge status={preview.rebalance?.run_type || 'PREVIEW'} />} /><TerminalMetric label="Apply route" value={<StatusBadge status={executionMode || 'UNAVAILABLE'} />} /></section>
       <div><h3>Current versus optimized allocation</h3><DataTable rows={preview.targets || []} columns={allocationColumns} getRowKey={(item) => item.id} emptyTitle="No optimized targets" /></div>
       <div><h3>Planned trades</h3><DataTable rows={preview.planned_trades || []} columns={tradeColumns} getRowKey={(item) => item.instrument_id} emptyTitle="No trades required" emptyDescription="Targets are already within planning tolerances." /></div>
       {preview.warnings.length > 0 && <div className="inline-warning"><StatusBadge status="WARNING" /><div><strong>Solver warnings</strong><p>{formatCompact(preview.warnings)}</p></div></div>}

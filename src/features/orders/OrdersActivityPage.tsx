@@ -32,6 +32,7 @@ export function OrdersActivityPage() {
   const audit = useQuery(queries.audit({limit: 100}))
   const instruments = useQuery(queries.instruments())
   const positions = useQuery(queries.positions(selectedPortfolioId))
+  const system = useQuery(queries.system())
   const orderDetail = useQuery(queries.orderDetail(selectedOrder?.internal_id || ''))
   const manualIntentStatus = useQuery({
     ...queries.manualOrderIntent(activeIntent?.intentId),
@@ -155,6 +156,7 @@ export function OrdersActivityPage() {
       pollTimedOut={pollTimedOut}
       error={createOrder.error || manualIntentStatus.error}
       result={manualResult}
+      allowLiveTrading={system.data?.allow_live_trading === true}
       onSubmit={submitManualOrder}
     /></TerminalPanel>
     {!desktopInspector && <OrderDrawer order={selectedOrder} detail={orderDetail.data} detailLoading={orderDetail.isLoading} executions={(executions.data || []).filter((fill) => fill.order_id === selectedOrder?.internal_id)} modifying={modify.isPending} error={modify.error || cancel.error || orderDetail.error} onClose={() => setSelectedOrder(null)} onModify={(payload) => selectedOrder && modify.mutate({order: selectedOrder, payload})} onCancel={() => selectedOrder && setCancelOrder(selectedOrder)} />}

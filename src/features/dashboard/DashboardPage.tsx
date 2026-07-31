@@ -36,7 +36,7 @@ export function DashboardPage() {
     <PageHeader eyebrow="Portfolio command center" title={`Good overview${portfolio ? `, ${portfolio.name}` : ''}`} description="Monitor capital, execution, and the operating conditions that can block new risk." actions={<Freshness updatedAt={summary.dataUpdatedAt} stale={summary.isStale} fetching={summary.isFetching} onRefresh={() => void summary.refetch()} />} />
     {summary.isError && <ErrorState title="Some dashboard data may be stale" error={summary.error} onRetry={() => void summary.refetch()} compact />}
     <section className="operating-strip" aria-label="Operating status">
-      <div><span>Environment</span><StatusBadge status={data.mode || 'PAPER'} /></div>
+      <div><span>Portfolio mode</span><StatusBadge status={data.mode || 'UNKNOWN'} /></div>
       <div><span>IBKR</span><StatusBadge status={data.gateway?.connected ? 'CONNECTED' : 'DISCONNECTED'} /></div>
       <div><span>Reconciliation</span><StatusBadge status={data.reconciliation_status} /></div>
       <div><span>Portfolio</span><strong>{data.portfolio?.name || 'Not selected'}</strong></div>

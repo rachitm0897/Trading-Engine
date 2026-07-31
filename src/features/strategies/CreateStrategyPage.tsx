@@ -4,10 +4,11 @@ import {ArrowLeft, ArrowRight, Check, CircleCheck, ShieldCheck} from 'lucide-rea
 import {Link, useNavigate} from 'react-router-dom'
 import {mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
-import type {InstrumentResolution, Scalar, StrategyDefinition, StrategyInstance} from '../../api/types'
+import type {ExecutionMode, InstrumentResolution, Scalar, StrategyDefinition, StrategyInstance} from '../../api/types'
 import {BrokerInstrumentSearch} from '../../components/BrokerInstrumentSearch'
 import {SchemaParameterForm} from '../../components/SchemaParameterForm'
 import {ErrorState, PageHeader, Skeleton, StatusBadge, TerminalPanel, formatCompact} from '../../components/ui'
+import {executionModeForSession, executionModeLabel} from '../../executionMode'
 import {useSelection} from '../../stores/useSelection'
 
 const steps = ['Instrument', 'Definition', 'Parameters', 'Risk & execution', 'Review']
@@ -24,18 +25,21 @@ interface Draft {
   priority: string
   riskPolicyId: string
   orderPolicyId: string
-  executionMode: 'SHADOW' | 'OBSERVE' | 'PAPER'
 }
 
 const initialDraft: Draft = {
   ticker: '', exchange: 'SMART', name: '', definitionKey: '', timeframe: '', parameters: {},
-  targetWeight: '0.05', capitalShare: '1', priority: '100', riskPolicyId: '', orderPolicyId: '', executionMode: 'SHADOW',
+  targetWeight: '0.05', capitalShare: '1', priority: '100', riskPolicyId: '', orderPolicyId: '',
 }
 
 export function CreateStrategyPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const {selectedPortfolioId, portfolio} = useSelection()
+  const {selectedPortfolioId, portfolio, sessions} = useSelection()
+  const executionSession = sessions.find(
+    (candidate) => candidate.id === portfolio?.gateway_session_id,
+  ) || null
+  const executionMode = executionModeForSession(executionSession)
   const definitions = useQuery(queries.strategyDefinitions())
   const instruments = useQuery(queries.instruments())
   const policies = useQuery(queries.strategyPolicies())
@@ -44,15 +48,19 @@ export function CreateStrategyPage() {
   const [validation, setValidation] = useState<string | null>(null)
   const [resolution, setResolution] = useState<InstrumentResolution | null>(null)
   const definition = definitions.data?.find((item) => item.key === draft.definitionKey) || null
-  const create = useMutation({
-    mutationFn: () => request<StrategyInstance>('strategy-instances/', mutationOptions('POST', {
-      name: draft.name.trim(), definition_key: draft.definitionKey, instrument_id: resolution?.instrument_id,
-      portfolio_id: selectedPortfolioId, timeframe: draft.timeframe, parameters: draft.parameters,
-      target_configuration: {target_weight: Number(draft.targetWeight), capital_share: Number(draft.capitalShare), priority: Number(draft.priority)},
-      risk_policy_id: draft.riskPolicyId ? Number(draft.riskPolicyId) : null,
-      order_policy_id: draft.orderPolicyId ? Number(draft.orderPolicyId) : null,
-      execution_mode: draft.executionMode, qualify: false,
-    }, true)),
+  const create = useMutation<StrategyInstance, Error, boolean | void>({
+    mutationFn: (activateRequested) => {
+      const activate = activateRequested === true
+      if (!executionMode || !executionSession) throw new Error('The selected portfolio must have an assigned Paper or Live Gateway session')
+      return request<StrategyInstance>('strategy-instances/', mutationOptions('POST', {
+        name: draft.name.trim(), definition_key: draft.definitionKey, instrument_id: resolution?.instrument_id,
+        portfolio_id: selectedPortfolioId, timeframe: draft.timeframe, parameters: draft.parameters,
+        target_configuration: {target_weight: Number(draft.targetWeight), capital_share: Number(draft.capitalShare), priority: Number(draft.priority)},
+        risk_policy_id: draft.riskPolicyId ? Number(draft.riskPolicyId) : null,
+        order_policy_id: draft.orderPolicyId ? Number(draft.orderPolicyId) : null,
+        execution_mode: executionMode, qualify: false, activate,
+      }, true))
+    },
     onSuccess: async (data) => {
       await queryClient.invalidateQueries({queryKey: ['strategy-instances']})
       navigate(`/strategies/${data.id}`)
@@ -82,16 +90,25 @@ export function CreateStrategyPage() {
   if (definitions.isError) return <ErrorState title="Strategy definitions are unavailable" error={definitions.error} onRetry={() => void definitions.refetch()} />
 
   return <div className="page-stack create-strategy-page">
-    <PageHeader eyebrow="Strategies / New" title="Create a strategy" description={`Build for ${portfolio?.name || 'the selected portfolio'}. New instances default to SHADOW and are never offered LIVE mode.`} actions={<Link className="button-secondary" to="/strategies"><ArrowLeft />Back to strategies</Link>} />
+    <PageHeader eyebrow="Strategies / New" title="Create a strategy" description={`Build for ${portfolio?.name || 'the selected portfolio'}. Execution mode comes from its assigned Gateway session${executionMode ? ` (${executionModeLabel(executionMode)})` : ''}.`} actions={<Link className="button-secondary" to="/strategies"><ArrowLeft />Back to strategies</Link>} />
     <ol className="wizard-steps" aria-label="Create strategy progress">{steps.map((label, index) => <li key={label} className={index === step ? 'active' : index < step ? 'complete' : ''}><span>{index < step ? <Check /> : index + 1}</span><strong>{label}</strong></li>)}</ol>
     <TerminalPanel id="create-strategy-wizard" className="wizard-panel" collapsible={false}>
-      {step === 0 && <div className="wizard-content"><div className="wizard-heading"><span>1</span><div><h2>Choose the instrument</h2><p>Search IBKR by ticker or company name, then select and qualify the exact broker contract.</p></div></div><BrokerInstrumentSearch value={draft.ticker} suggestions={instruments.data || []} autoFocus onValueChange={(ticker) => setDraft((current) => ({...current, ticker}))} onContractSelected={(contract) => setDraft((current) => ({...current, exchange: contract.exchange}))} onResolved={(value) => {setResolution(value); setValidation(null)}} /></div>}
+      {step === 0 && <div className="wizard-content"><div className="wizard-heading"><span>1</span><div><h2>Choose the instrument</h2><p>Search IBKR by ticker or company name, then select and qualify the exact broker contract through this portfolio&apos;s assigned Gateway.</p></div></div><BrokerInstrumentSearch value={draft.ticker} suggestions={instruments.data || []} autoFocus portfolioId={selectedPortfolioId} gatewaySessionId={executionSession?.id} onValueChange={(ticker) => setDraft((current) => ({...current, ticker}))} onContractSelected={(contract) => setDraft((current) => ({...current, exchange: contract.exchange}))} onResolved={(value) => {setResolution(value); setValidation(null)}} /></div>}
       {step === 1 && <WizardDefinition draft={draft} setDraft={setDraft} definitions={definitions.data || []} definition={definition} onDefinition={selectDefinition} />}
       {step === 2 && <WizardParameters draft={draft} setDraft={setDraft} definition={definition} />}
-      {step === 3 && <WizardExecution draft={draft} setDraft={setDraft} policies={policies.data} />}
-      {step === 4 && <WizardReview draft={draft} definition={definition} resolution={resolution} portfolioName={portfolio?.name} />}
+      {step === 3 && <WizardExecution draft={draft} setDraft={setDraft} policies={policies.data} executionMode={executionMode} gatewayName={executionSession?.display_name} />}
+      {step === 4 && <WizardReview draft={draft} definition={definition} resolution={resolution} portfolioName={portfolio?.name} executionMode={executionMode} gatewayName={executionSession?.display_name} />}
       {(validation || create.isError) && <ErrorState title={validation ? 'Complete this step' : 'Strategy validation failed'} error={validation ? new Error(validation) : create.error} compact />}
-      <div className="wizard-footer"><button className="button-secondary" disabled={step === 0 || create.isPending} onClick={() => {setValidation(null); setStep((value) => Math.max(0, value - 1))}}><ArrowLeft />Back</button><span>Step {step + 1} of {steps.length}</span>{step < 4 ? <button className="button-primary" onClick={next}>Continue<ArrowRight /></button> : <button className="button-primary" disabled={create.isPending || !selectedPortfolioId} onClick={() => {if (validateStep()) create.mutate()}}><ShieldCheck />{create.isPending ? 'Validating…' : 'Validate & create'}</button>}</div>
+      <div className="wizard-footer">
+        <button className="button-secondary" disabled={step === 0 || create.isPending} onClick={() => {setValidation(null); setStep((value) => Math.max(0, value - 1))}}><ArrowLeft />Back</button>
+        <span>{step < 4 ? `Step ${step + 1} of ${steps.length}` : 'Choose the initial strategy state'}</span>
+        {step < 4
+          ? <button className="button-primary" onClick={next}>Continue<ArrowRight /></button>
+          : <div className="wizard-create-actions">
+              <button className="button-secondary" disabled={create.isPending || !selectedPortfolioId || !executionMode} onClick={() => {if (validateStep()) create.mutate(false)}}><Check />{create.isPending && create.variables === false ? 'Creating…' : 'Create as disabled'}</button>
+              <button className="button-primary" disabled={create.isPending || !selectedPortfolioId || !executionMode} onClick={() => {if (validateStep()) create.mutate(true)}}><ShieldCheck />{create.isPending && create.variables === true ? 'Creating & queuing…' : 'Create and activate'}</button>
+            </div>}
+      </div>
     </TerminalPanel>
   </div>
 }
@@ -104,14 +121,14 @@ function WizardParameters({draft, setDraft, definition}: {draft: Draft; setDraft
   return <div className="wizard-content"><div className="wizard-heading"><span>3</span><div><h2>Configure parameters</h2><p>Fields, defaults, ranges, and choices are generated from this definition’s parameter schema.</p></div></div>{definition ? <SchemaParameterForm schema={definition.parameter_schema} values={draft.parameters} onChange={(parameters) => setDraft((current) => ({...current, parameters}))} /> : <p>Select a definition first.</p>}</div>
 }
 
-function WizardExecution({draft, setDraft, policies}: {draft: Draft; setDraft: React.Dispatch<React.SetStateAction<Draft>>; policies?: {risk_policies: {id: number; name: string}[]; order_policies: {id: number; name: string}[]}}) {
-  return <div className="wizard-content"><div className="wizard-heading"><span>4</span><div><h2>Set capital, risk, and execution</h2><p>SHADOW records the complete planning trace without creating an executable OMS order.</p></div></div><div className="form-grid three-columns"><label>Target weight<input aria-label="Target weight" type="number" min="-1" max="1" step="0.0001" value={draft.targetWeight} onChange={(event) => setDraft((current) => ({...current, targetWeight: event.target.value}))} /></label><label>Capital share<input aria-label="Capital share" type="number" min="0" max="1" step="0.01" value={draft.capitalShare} onChange={(event) => setDraft((current) => ({...current, capitalShare: event.target.value}))} /></label><label>Priority<input aria-label="Priority" type="number" min="1" step="1" value={draft.priority} onChange={(event) => setDraft((current) => ({...current, priority: event.target.value}))} /></label><label>Execution mode<select aria-label="Execution mode" value={draft.executionMode} onChange={(event) => setDraft((current) => ({...current, executionMode: event.target.value as Draft['executionMode']}))}><option>SHADOW</option><option>OBSERVE</option><option>PAPER</option></select><small>LIVE is unavailable.</small></label></div><TerminalPanel id="advanced-policy-settings" title="Advanced policy settings" description="Use platform defaults unless this strategy needs an approved policy override." defaultOpen={false}><div className="form-grid two-columns"><label>Risk policy<select aria-label="Risk policy" value={draft.riskPolicyId} onChange={(event) => setDraft((current) => ({...current, riskPolicyId: event.target.value}))}><option value="">Platform default</option>{(policies?.risk_policies || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Order policy<select aria-label="Order policy" value={draft.orderPolicyId} onChange={(event) => setDraft((current) => ({...current, orderPolicyId: event.target.value}))}><option value="">Platform default</option>{(policies?.order_policies || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div></TerminalPanel></div>
+function WizardExecution({draft, setDraft, policies, executionMode, gatewayName}: {draft: Draft; setDraft: React.Dispatch<React.SetStateAction<Draft>>; policies?: {risk_policies: {id: number; name: string}[]; order_policies: {id: number; name: string}[]}; executionMode: ExecutionMode | null; gatewayName?: string}) {
+  return <div className="wizard-content"><div className="wizard-heading"><span>4</span><div><h2>Set capital, risk, and execution</h2><p>Execution uses the complete sizing, risk, OMS, and matching Gateway pipeline. Use rebalance preview when no orders should be created.</p></div></div><div className="form-grid three-columns"><label>Target weight<input aria-label="Target weight" type="number" min="-1" max="1" step="0.0001" value={draft.targetWeight} onChange={(event) => setDraft((current) => ({...current, targetWeight: event.target.value}))} /></label><label>Capital share<input aria-label="Capital share" type="number" min="0" max="1" step="0.01" value={draft.capitalShare} onChange={(event) => setDraft((current) => ({...current, capitalShare: event.target.value}))} /></label><label>Priority<input aria-label="Priority" type="number" min="1" step="1" value={draft.priority} onChange={(event) => setDraft((current) => ({...current, priority: event.target.value}))} /></label><div className="mode-derived-field" aria-label="Execution mode"><span>Execution mode</span><strong><StatusBadge status={executionMode || 'UNAVAILABLE'} /></strong><small>{gatewayName ? `Derived from ${gatewayName}` : 'Assign the portfolio to a Gateway session.'}</small></div></div><TerminalPanel id="advanced-policy-settings" title="Advanced policy settings" description="Use platform defaults unless this strategy needs an approved policy override." defaultOpen={false}><div className="form-grid two-columns"><label>Risk policy<select aria-label="Risk policy" value={draft.riskPolicyId} onChange={(event) => setDraft((current) => ({...current, riskPolicyId: event.target.value}))}><option value="">Platform default</option>{(policies?.risk_policies || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Order policy<select aria-label="Order policy" value={draft.orderPolicyId} onChange={(event) => setDraft((current) => ({...current, orderPolicyId: event.target.value}))}><option value="">Platform default</option>{(policies?.order_policies || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div></TerminalPanel></div>
 }
 
-function WizardReview({draft, definition, resolution, portfolioName}: {draft: Draft; definition: StrategyDefinition | null; resolution: InstrumentResolution | null; portfolioName?: string}) {
+function WizardReview({draft, definition, resolution, portfolioName, executionMode, gatewayName}: {draft: Draft; definition: StrategyDefinition | null; resolution: InstrumentResolution | null; portfolioName?: string; executionMode: ExecutionMode | null; gatewayName?: string}) {
   const review = [
     ['Portfolio', portfolioName || 'Selected portfolio'], ['Instrument', `${draft.ticker.toUpperCase()} · ${draft.exchange}`], ['Contract', resolution?.conid ? `Qualified · conId ${resolution.conid}` : 'Pending / requested on create'],
-    ['Definition', definition?.name || '—'], ['Timeframe', draft.timeframe], ['Execution mode', draft.executionMode], ['Target weight', draft.targetWeight], ['Capital share', draft.capitalShare], ['Priority', draft.priority],
+    ['Definition', definition?.name || '—'], ['Timeframe', draft.timeframe], ['Execution mode', executionMode || 'UNAVAILABLE'], ['Gateway', gatewayName || 'Not assigned'], ['Target weight', draft.targetWeight], ['Capital share', draft.capitalShare], ['Priority', draft.priority],
   ]
-  return <div className="wizard-content"><div className="wizard-heading"><span>5</span><div><h2>Review and validate</h2><p>The Backend performs final schema, contract, mode, and policy validation before creating immutable version 1.</p></div></div><div className="review-grid">{review.map(([label, value]) => <div key={label}><span>{label}</span>{label === 'Execution mode' ? <StatusBadge status={value} /> : <strong>{value}</strong>}</div>)}</div><div className="review-parameters"><h3>Parameters</h3>{Object.entries(draft.parameters).map(([key, value]) => <div key={key}><span>{key.replaceAll('_', ' ')}</span><code>{formatCompact(value)}</code></div>)}</div><div className="safety-path"><ShieldCheck /><div><strong>Execution boundary preserved</strong><p>This strategy can only produce signals and targets. PAPER execution still passes through allocation, sizing, risk, OMS, Gateway, ledger, and reconciliation.</p></div></div></div>
+  return <div className="wizard-content"><div className="wizard-heading"><span>5</span><div><h2>Review and validate</h2><p>The Backend performs final schema, contract, session-mode, and policy validation before creating immutable version 1.</p></div></div><div className="review-grid">{review.map(([label, value]) => <div key={label}><span>{label}</span>{label === 'Execution mode' ? <StatusBadge status={value} /> : <strong>{value}</strong>}</div>)}</div><div className="review-parameters"><h3>Parameters</h3>{Object.entries(draft.parameters).map(([key, value]) => <div key={key}><span>{key.replaceAll('_', ' ')}</span><code>{formatCompact(value)}</code></div>)}</div><div className="safety-path"><ShieldCheck /><div><strong>Execution boundary preserved</strong><p>Paper and Live both pass through allocation, sizing, risk, OMS, the matching Gateway, ledger, and reconciliation. Preview rebalance creates no orders.</p></div></div></div>
 }

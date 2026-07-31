@@ -11,7 +11,7 @@ import {ErrorState, StatusBadge} from './ui'
 const MINIMUM_QUERY_LENGTH = 2
 const SEARCH_DEBOUNCE_MS = 400
 
-export function BrokerInstrumentSearch({value, onValueChange, onContractSelected, onResolved, suggestions = [], autoFocus = false, searchLabel = 'Ticker'}: {
+export function BrokerInstrumentSearch({value, onValueChange, onContractSelected, onResolved, suggestions = [], autoFocus = false, searchLabel = 'Ticker', portfolioId, gatewaySessionId}: {
   value: string
   onValueChange: (value: string) => void
   onContractSelected?: (contract: InstrumentSearchResult) => void
@@ -19,11 +19,16 @@ export function BrokerInstrumentSearch({value, onValueChange, onContractSelected
   suggestions?: {id: number; symbol: string}[]
   autoFocus?: boolean
   searchLabel?: string
+  portfolioId?: number | null
+  gatewaySessionId?: string | null
 }) {
   const [selected, setSelected] = useState<InstrumentSearchResult | null>(null)
   const [resolution, setResolution] = useState<InstrumentResolution | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const sessionId = usePreferencesStore((state) => state.selectedSessionId)
+  const globallySelectedSessionId = usePreferencesStore((state) => state.selectedSessionId)
+  const sessionId = gatewaySessionId === undefined
+    ? globallySelectedSessionId
+    : gatewaySessionId
   const sessions = useQuery(queries.brokerSessions())
   const selectedSession = (sessions.data || []).find((item) => item.id === sessionId)
   const sessionReady = Boolean(selectedSession?.connected && selectedSession.commands_enabled)
@@ -51,7 +56,11 @@ export function BrokerInstrumentSearch({value, onValueChange, onContractSelected
   const search = useQuery({
     queryKey: ['instrument-search', sessionId, searchQuery],
     queryFn: ({signal}) => request<InstrumentSearchResult[]>(
-      withQuery('instruments/search/', {query: searchQuery, session_id: sessionId}),
+      withQuery('instruments/search/', {
+        query: searchQuery,
+        session_id: sessionId,
+        portfolio_id: portfolioId,
+      }),
       {signal},
     ),
     enabled: sessionReady && searchQuery.length >= MINIMUM_QUERY_LENGTH,
@@ -62,6 +71,7 @@ export function BrokerInstrumentSearch({value, onValueChange, onContractSelected
       if (!selected) throw new Error('Select an exact IBKR contract first.')
       return request<InstrumentResolution>('instruments/resolve/', mutationOptions('POST', {
         ...selected, ticker: selected.symbol, qualify: true, session_id: sessionId,
+        portfolio_id: portfolioId,
       }, true))
     },
     onSuccess: (data) => {setResolution(data); onResolved(data)},
