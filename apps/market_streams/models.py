@@ -72,6 +72,9 @@ class MarketBar(models.Model):
     version = models.PositiveIntegerField(default=1)
     is_final = models.BooleanField(default=False)
     source_event_count = models.PositiveIntegerField(default=0)
+    provider = models.CharField(max_length=16, blank=True)
+    provider_generation = models.CharField(max_length=64, blank=True)
+    source = models.CharField(max_length=64, blank=True)
     processing_mode = models.CharField(max_length=16, choices=PROCESSING_MODES, default="LIVE")
     produced_at = models.DateTimeField()
 
@@ -178,3 +181,16 @@ class InstrumentMarketState(models.Model):
         if self.status != "FRESH" or not self.latest_event_at or self.reference_price is None:
             return False
         return (at - self.latest_event_at).total_seconds() <= self.stale_after_seconds
+
+    def is_execution_usable(self, at=None):
+        """Only fresh live-derived persisted prices may authorize real orders."""
+        if not self.is_usable(at):
+            return False
+        source = str(self.reference_price_source or "").strip().lower()
+        return source not in {
+            "finnhub_historical",
+            "historical",
+            "warmup",
+            "backfill",
+            "replay",
+        }

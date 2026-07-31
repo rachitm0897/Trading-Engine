@@ -1,6 +1,8 @@
 from django.db import models
 from django.utils import timezone
 
+from apps.execution.modes import ExecutionMode
+
 ORDER_STATES = [x for x in "CREATED RISK_APPROVED QUEUED BROKER_BLOCKED SUBMITTED ACKNOWLEDGED PARTIALLY_FILLED FILLED CANCEL_PENDING CANCELLED REJECTED EXPIRED UNKNOWN".split()]
 
 class OrderIntent(models.Model):
@@ -32,7 +34,9 @@ class OrderIntent(models.Model):
     attempt_count = models.PositiveIntegerField(default=1)
     source = models.CharField(max_length=32, default="MANUAL")
     origin = models.CharField(max_length=16, choices=Origin.choices, default=Origin.STRATEGY)
-    mode = models.CharField(max_length=16, default="PAPER")
+    mode = models.CharField(
+        max_length=16, choices=ExecutionMode.choices, default=ExecutionMode.PAPER
+    )
     requires_fresh_price = models.BooleanField(default=False)
     execution_priority = models.PositiveIntegerField(default=100)
     eligible = models.BooleanField(default=True)
@@ -40,6 +44,10 @@ class OrderIntent(models.Model):
 
     class Meta:
         constraints = [
+            models.CheckConstraint(
+                condition=models.Q(mode__in=ExecutionMode.values),
+                name="order_intent_valid_execution_mode",
+            ),
             models.CheckConstraint(
                 condition=models.Q(origin__in=["MANUAL", "STRATEGY", "REBALANCE", "BROKER_IMPORT"]),
                 name="order_intent_valid_origin",

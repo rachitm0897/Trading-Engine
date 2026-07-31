@@ -1,12 +1,21 @@
+from datetime import timedelta
 from decimal import Decimal
 import pytest
 from django.utils import timezone
 from apps.accounts.models import BrokerAccount
 from apps.allocation.models import RebalancePolicy
+from apps.broker_gateway.models import BrokerGatewaySession
 from apps.instruments.models import Instrument
+from apps.market_streams.models import IndicatorValue
 from apps.oms.models import Order, OrderIntent
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
-from apps.rebalancing.services import advance_rebalance, plan_rebalance, recover_incomplete
+from apps.rebalancing.services import (
+    _execution_adv,
+    advance_rebalance,
+    plan_rebalance,
+    recover_incomplete,
+)
+from apps.execution.modes import RunType
 from apps.strategies.models import (
     StrategyAllocation,
     StrategyDefinition,
@@ -15,21 +24,24 @@ from apps.strategies.models import (
     StrategyTarget,
     StrategyVersion,
 )
+from tests.managed_gateway import bind_gateway_mode
 
 pytestmark=pytest.mark.django_db
 
 
-def strategy_target(portfolio,instrument,name,weight,input_hash):
+def strategy_target(portfolio,instrument,name,weight,input_hash,mode="PAPER"):
+    if portfolio.gateway_session_id is None:
+        bind_gateway_mode(portfolio, mode=mode.lower())
     instance=StrategyInstance.objects.create(name=name,definition=StrategyDefinition.objects.get(key="FIXED_WEIGHT_REBALANCE"),
         portfolio=portfolio,instrument=instrument,timeframe="1d",parameters={"direction":"LONG"},enabled=True,
-        execution_mode="PAPER")
+        execution_mode=mode,state="LONG")
     StrategyAllocation.objects.create(portfolio=portfolio,strategy_instance=instance,weight=1)
     version=StrategyVersion.objects.create(strategy_instance=instance,version=instance.version,
         configuration_snapshot={},parameter_hash=f"hash-{instance.pk}")
     run=StrategyRun.objects.create(strategy_instance=instance,strategy_version=version,input_hash=input_hash,
         status="COMPLETED",completed_at=timezone.now())
     StrategyTarget.objects.create(run=run,strategy_instance=instance,strategy_version=version,portfolio=portfolio,
-        instrument=instrument,target_weight=weight,signal_time=timezone.now())
+        instrument=instrument,target_weight=weight,signal_time=timezone.now(),execution_mode=mode)
     return instance
 
 
@@ -136,10 +148,109 @@ def test_mixed_filled_and_rejected_sells_below_threshold_blocks_buys():
     assert not OrderIntent.objects.get(rebalance=run,side="BUY").eligible
 
 
-def test_shadow_preview_never_creates_intents():
+def test_preview_never_creates_intents():
     account,portfolio,old,new,policy=setup_case()
-    run=plan_rebalance(portfolio,"MANUAL","reb-shadow",prices={old.pk:100,new.pk:100},nav=1000,mode="SHADOW",strict_market_state=False)
-    assert run.phase=="SHADOW_COMPLETE" and not OrderIntent.objects.filter(rebalance=run).exists()
+    run=plan_rebalance(portfolio,"MANUAL","reb-preview",prices={old.pk:100,new.pk:100},nav=1000,
+        mode="PAPER",run_type=RunType.PREVIEW,strict_market_state=False)
+    assert run.phase=="PREVIEW_COMPLETE" and not OrderIntent.objects.filter(rebalance=run).exists()
+
+
+@pytest.mark.parametrize(("execution_mode", "gateway_mode"), [
+    ("PAPER", "paper"),
+    ("LIVE", "live"),
+])
+def test_preview_never_creates_intents_in_either_execution_mode(
+    execution_mode, gateway_mode
+):
+    account=BrokerAccount.objects.create(
+        account_id=f"DU-PREVIEW-{execution_mode}",
+        net_liquidation=1000,
+        available_cash=1000,
+    )
+    session=BrokerGatewaySession.objects.create(
+        display_name=f"{execution_mode} preview",
+        username_hint="preview",
+        mode=gateway_mode,
+        child_container_name=f"{gateway_mode}-preview",
+        encrypted_gateway_token="test",
+        encrypted_novnc_password="test",
+    )
+    portfolio=TradingPortfolio.objects.create(
+        name=f"{execution_mode} preview",
+        account=account,
+        gateway_session=session,
+    )
+    instrument=Instrument.objects.create(symbol=f"PREV-{execution_mode}")
+    strategy_target(
+        portfolio,
+        instrument,
+        f"{execution_mode} preview strategy",
+        "0.50",
+        f"preview-{execution_mode}",
+        mode=execution_mode,
+    )
+    policy=RebalancePolicy.objects.create(
+        portfolio=portfolio,
+        maximum_turnover="2",
+        minimum_trade_notional="1",
+        fee_buffer="0",
+        mode=execution_mode,
+    )
+
+    run=plan_rebalance(
+        portfolio,
+        "MANUAL",
+        f"preview-{execution_mode}",
+        prices={instrument.pk:100},
+        nav=1000,
+        mode=execution_mode,
+        policy=policy,
+        run_type=RunType.PREVIEW,
+        strict_market_state=False,
+    )
+
+    assert run.mode == execution_mode
+    assert run.run_type == "PREVIEW"
+    assert run.targets.get().trade_quantity
+    assert not OrderIntent.objects.filter(rebalance=run).exists()
+
+
+def test_execution_adv_uses_only_fresh_daily_configured_final_live_value(settings):
+    settings.EXECUTION_AVERAGE_VOLUME_WINDOW = 20
+    instrument=Instrument.objects.create(symbol="ADV")
+    account=BrokerAccount.objects.create(account_id="DU-ADV")
+    portfolio=TradingPortfolio.objects.create(name="ADV",account=account)
+    policy=RebalancePolicy.objects.create(
+        portfolio=portfolio,
+        price_staleness_limit=300,
+    )
+    now=timezone.now()
+
+    def indicator(source_key, value, *, timeframe="1d", window=20,
+                  event_time=None, is_final=True, processing_mode="LIVE"):
+        return IndicatorValue.objects.create(
+            instrument=instrument,
+            indicator="average_volume",
+            indicator_name="average_volume",
+            requirement_identity_hash=source_key,
+            value=value,
+            parameters={"window": window},
+            timeframe=timeframe,
+            source_bar_id=source_key,
+            is_final=is_final,
+            processing_mode=processing_mode,
+            event_time=event_time or now,
+            source_key=source_key,
+        )
+
+    indicator("adv-correct", 123, event_time=now-timedelta(seconds=5))
+    indicator("adv-wrong-timeframe", 999, timeframe="1m")
+    indicator("adv-wrong-window", 888, window=10)
+    indicator("adv-stale", 777, event_time=now-timedelta(hours=1))
+    indicator("adv-warmup", 666, processing_mode="WARMUP")
+    indicator("adv-nonfinal", 555, is_final=False)
+
+    assert _execution_adv(instrument, None, policy) == Decimal("123")
 
 
 def test_turnover_uses_cash_constrained_executable_quantity_before_later_trades():
@@ -155,7 +266,7 @@ def test_turnover_uses_cash_constrained_executable_quantity_before_later_trades(
         cash_buffer_percent="0",
         fee_buffer="0",
         minimum_trade_notional="1",
-        mode="SHADOW",
+        mode="PAPER",
     )
 
     run=plan_rebalance(
@@ -164,7 +275,7 @@ def test_turnover_uses_cash_constrained_executable_quantity_before_later_trades(
         "rebalance-final-quantity-turnover",
         prices={large.pk:100,later.pk:10},
         nav=1000,
-        mode="SHADOW",
+        mode="PAPER",
         policy=policy,
         strict_market_state=False,
     )

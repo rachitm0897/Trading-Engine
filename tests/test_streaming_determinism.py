@@ -8,8 +8,10 @@ from apps.market_streams.models import IndicatorValue, StrategyEvaluationJob
 from apps.market_streams.services import persist_bar, persist_indicator
 from apps.portfolios.models import TradingPortfolio
 from apps.strategies.evaluation_jobs import process_strategy_evaluation_jobs
-from apps.strategies.framework import create_instance, enable_instance
+from apps.strategies.framework import create_instance
 from apps.strategies.input_identity import requirement_identity_hash
+from tests.managed_gateway import bind_gateway_mode
+from tests.strategy_activation import activate_strategy
 
 
 pytestmark = pytest.mark.django_db
@@ -23,11 +25,13 @@ def portfolio():
         available_cash=100000,
         buying_power=200000,
     )
-    return TradingPortfolio.objects.create(
+    portfolio = TradingPortfolio.objects.create(
         name="Streaming determinism",
         account=account,
         minimum_notional=1,
     )
+    bind_gateway_mode(portfolio)
+    return portfolio
 
 
 @pytest.fixture
@@ -58,7 +62,7 @@ def strategy(portfolio, instrument, name="ORDERED_FIXED"):
         execution_mode="PAPER",
         qualify=False,
     )
-    enable_instance(instance)
+    activate_strategy(instance)
     return instance
 
 

@@ -9,17 +9,19 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.accounts.models import BrokerAccount
+from apps.execution.modes import normalize_gateway_mode
 from apps.portfolios.models import TradingPortfolio
 
 from .client import GatewayClient, GatewayError
 from .configuration import configured_gateway_image, require_managed_broker_deployment
-from .crypto import decrypt_secret
+from .crypto import decrypt_secret, encrypt_secret
 from .models import (
     BrokerGatewaySession,
     BrokerGatewaySessionSecret,
     BrokerSessionAccount,
 )
 from .qch import QCHBrokerClient, QCHError
+from .vnc import normalize_vnc_password
 
 
 CONTAINER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
@@ -44,7 +46,7 @@ def gateway_environment(session, username, password, gateway_token, novnc_passwo
         "IB_PASSWORD": password,
         "IBC_TRADING_MODE": session.mode,
         "GATEWAY_SERVICE_TOKEN": gateway_token,
-        "NOVNC_PASSWORD": novnc_password,
+        "NOVNC_PASSWORD": normalize_vnc_password(novnc_password),
         "BROKER_ADAPTER": "ib_async",
         "PORT": "8080",
         "GATEWAY_CONTRACT_SEARCH_MAX_RESULTS": str(settings.GATEWAY_CONTRACT_SEARCH_MAX_RESULTS),
@@ -153,6 +155,126 @@ def synchronize_accounts(session, client, account_rows=None, summary_rows=None):
     return len(seen)
 
 
+def synchronize_local_paper_gateway():
+    """Bind and synchronize the static Docker paper Gateway without QCH."""
+    base_url=str(getattr(settings,"LOCAL_PAPER_GATEWAY_URL","") or "").strip()
+    token=str(getattr(settings,"LOCAL_PAPER_GATEWAY_SERVICE_TOKEN","") or "").strip()
+    configured_novnc_password=getattr(
+        settings, "LOCAL_PAPER_GATEWAY_NOVNC_PASSWORD", ""
+    )
+    child_name=str(getattr(
+        settings,"LOCAL_PAPER_GATEWAY_CONTAINER_NAME","paper-ibkr-gateway"
+    ) or "").strip()
+    if not base_url or not token:
+        return None
+    novnc_password=normalize_vnc_password(configured_novnc_password)
+    if settings.ALLOW_LIVE_TRADING:
+        raise ValueError("The local paper Gateway requires ALLOW_LIVE_TRADING=false")
+    if not CONTAINER_NAME_RE.fullmatch(child_name):
+        raise ValueError("LOCAL_PAPER_GATEWAY_CONTAINER_NAME is invalid")
+    if child_name not in base_url:
+        raise ValueError("LOCAL_PAPER_GATEWAY_URL must use the configured container name")
+    session=BrokerGatewaySession.objects.filter(child_container_name=child_name).first()
+    if session is None:
+        session=BrokerGatewaySession.objects.create(
+            display_name="Local paper IBKR Gateway",
+            username_hint="local-paper",
+            mode=BrokerGatewaySession.Mode.PAPER,
+            status=BrokerGatewaySession.Status.STARTING,
+            child_container_id=child_name,
+            child_container_name=child_name,
+            internal_base_url=base_url,
+            encrypted_gateway_token=encrypt_secret(token),
+            encrypted_novnc_password=encrypt_secret(novnc_password),
+            commands_enabled=False,
+            provisioned_at=timezone.now(),
+        )
+    else:
+        if session.mode != BrokerGatewaySession.Mode.PAPER:
+            raise ValueError("The static local Gateway session must remain paper-only")
+        encrypted_token=session.encrypted_gateway_token
+        try:
+            token_changed=decrypt_secret(encrypted_token)!=token
+        except Exception:
+            token_changed=True
+        try:
+            stored_novnc_password=decrypt_secret(session.encrypted_novnc_password)
+            normalized_stored_novnc_password=normalize_vnc_password(
+                stored_novnc_password
+            )
+            novnc_password_changed=(
+                normalized_stored_novnc_password != novnc_password
+                or stored_novnc_password != normalized_stored_novnc_password
+            )
+        except Exception:
+            novnc_password_changed=True
+        updates={
+            "display_name":"Local paper IBKR Gateway",
+            "child_container_id":child_name,
+            "internal_base_url":base_url,
+            "deleted_at":None,
+        }
+        if token_changed:
+            updates["encrypted_gateway_token"]=encrypt_secret(token)
+        if novnc_password_changed:
+            updates["encrypted_novnc_password"]=encrypt_secret(novnc_password)
+        BrokerGatewaySession.objects.filter(pk=session.pk).update(**updates)
+        session=BrokerGatewaySession.objects.get(pk=session.pk)
+    try:
+        client=GatewayClient(session)
+        state=client.health() or {}
+        reported_mode=normalize_gateway_mode(state.get("mode"))
+        if reported_mode != BrokerGatewaySession.Mode.PAPER:
+            raise ValueError("The local Gateway did not report paper mode")
+        connected=bool(state.get("connected"))
+        if connected:
+            synchronize_accounts(session,client)
+            from .sync import sync_events
+            sync_events(
+                client,
+                gateway_session=session,
+                connection_generation=state.get("connection_generation"),
+            )
+        with transaction.atomic():
+            locked=BrokerGatewaySession.objects.select_for_update().get(pk=session.pk)
+            locked.mark_checked(
+                status=(
+                    locked.Status.CONNECTED if connected
+                    else locked.Status.WAITING_FOR_LOGIN
+                ),
+                gateway_state=state,
+                qch_state={"name":child_name,"status":"STATIC_DOCKER_COMPOSE"},
+            )
+            locked.commands_enabled=connected
+            if connected:
+                locked.connected_at=locked.connected_at or timezone.now()
+            locked.lifecycle_version+=1
+            fields=[
+                "status","last_gateway_state","last_qch_state","last_error",
+                "last_checked_at","commands_enabled","lifecycle_version","updated_at",
+            ]
+            if connected:
+                fields.append("connected_at")
+            locked.save(update_fields=fields)
+        return BrokerGatewaySession.objects.get(pk=session.pk)
+    except Exception as exc:
+        with transaction.atomic():
+            locked=BrokerGatewaySession.objects.select_for_update().get(pk=session.pk)
+            locked.mark_checked(
+                status=locked.Status.DISCONNECTED,
+                qch_state={"name":child_name,"status":"STATIC_DOCKER_COMPOSE"},
+                error=str(exc),
+            )
+            locked.commands_enabled=False
+            locked.save(update_fields=[
+                "status","last_qch_state","last_error","last_checked_at",
+                "commands_enabled","updated_at",
+            ])
+        if isinstance(exc,(GatewayError,ValueError)):
+            raise
+        raise GatewayError("Local paper Gateway synchronization failed") from exc
+
+
 def inspect_gateway_session(session, *, qch_client=None, container=None, synchronize=True):
     require_managed_broker_deployment()
     qch = qch_client or QCHBrokerClient()
@@ -202,6 +324,29 @@ def inspect_gateway_session(session, *, qch_client=None, container=None, synchro
     try:
         client = GatewayClient(session)
         state = client.health() or {}
+        try:
+            reported_mode = normalize_gateway_mode(state.get("mode"))
+        except ValueError:
+            reported_mode = "<invalid>"
+        if reported_mode != session.mode:
+            with transaction.atomic():
+                locked = BrokerGatewaySession.objects.select_for_update().get(pk=session.pk)
+                locked.mark_checked(
+                    status=locked.Status.ERROR,
+                    gateway_state=state,
+                    qch_state=_container_state(container),
+                    error=(
+                        "Gateway health mode does not match its BrokerGatewaySession "
+                        f"({reported_mode} != {session.mode})"
+                    ),
+                )
+                locked.commands_enabled = False
+                locked.lifecycle_version += 1
+                locked.save(update_fields=[
+                    "status", "commands_enabled", "last_gateway_state", "last_qch_state",
+                    "last_error", "last_checked_at", "lifecycle_version", "updated_at",
+                ])
+                return locked
         connected = bool(state.get("connected"))
         status = session.Status.CONNECTED if connected else (
             session.Status.WAITING_FOR_2FA if session.mode == session.Mode.LIVE else session.Status.WAITING_FOR_LOGIN
@@ -209,7 +354,11 @@ def inspect_gateway_session(session, *, qch_client=None, container=None, synchro
         if synchronize and connected:
             synchronize_accounts(session, client)
             from .sync import sync_events
-            sync_events(client, gateway_session=session)
+            sync_events(
+                client,
+                gateway_session=session,
+                connection_generation=state.get("connection_generation"),
+            )
         with transaction.atomic():
             locked = BrokerGatewaySession.objects.select_for_update().get(pk=session.pk)
             locked.mark_checked(status=status, gateway_state=state, qch_state=_container_state(container))

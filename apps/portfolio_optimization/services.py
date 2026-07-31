@@ -8,6 +8,11 @@ from scipy.optimize import minimize
 
 from apps.audit.models import AuditEvent, OperationAttempt, OutboxEvent
 from apps.core.idempotency import canonical_request_hash, require_matching_request
+from apps.execution.modes import (
+    RunType,
+    execution_mode_for_portfolio,
+    require_portfolio_execution_ready,
+)
 from apps.market_data.models import InstrumentPriceHistory
 from apps.market_data.services import fetch_daily_history
 from apps.portfolios.models import PortfolioPosition
@@ -437,8 +442,11 @@ def run_optimization(portfolio, idempotency_key, *, trigger="MANUAL", nav=None, 
     universe = run.universe if run is not None else PortfolioUniverse.objects.filter(portfolio=portfolio, enabled=True).first()
     if not policy or not universe:
         raise OptimizationError("An enabled portfolio universe and optimization policy are required")
-    if policy.execution_mode not in {"SHADOW", "PAPER"}:
-        raise OptimizationError("Optimization execution mode must be SHADOW or PAPER")
+    expected_mode = execution_mode_for_portfolio(portfolio)
+    if policy.execution_mode != expected_mode:
+        raise OptimizationError(
+            "Optimization execution mode must match the portfolio Gateway session"
+        )
     nav = D(str(nav if nav is not None else portfolio.account.net_liquidation))
     if nav <= 0:
         raise OptimizationError("Portfolio NAV must be positive")
@@ -586,8 +594,16 @@ def latest_prices(optimization_run):
     return result
 
 
-def plan_optimized_rebalance(optimization_run, idempotency_key, *, mode="SHADOW", strict_market_state=False,
-                             available_cash=None, prices=None):
+def plan_optimized_rebalance(
+    optimization_run,
+    idempotency_key,
+    *,
+    mode=None,
+    run_type=RunType.PREVIEW,
+    strict_market_state=False,
+    available_cash=None,
+    prices=None,
+):
     if optimization_run.status != "COMPLETED":
         raise OptimizationError("Only a completed optimization run can create rebalance targets")
     from apps.rebalancing.services import plan_rebalance
@@ -600,13 +616,20 @@ def plan_optimized_rebalance(optimization_run, idempotency_key, *, mode="SHADOW"
         nav=optimization_run.nav,
         available_cash=available_cash,
         mode=mode,
+        run_type=run_type,
         strict_market_state=strict_market_state,
         optimization_run=optimization_run,
     )
 
 
 @transaction.atomic
-def apply_optimization_run(optimization_run, idempotency_key, *, mode="SHADOW", strict_market_state=False):
+def apply_optimization_run(
+    optimization_run,
+    idempotency_key,
+    *,
+    mode=None,
+    strict_market_state=True,
+):
     run_id = optimization_run.pk if isinstance(optimization_run, PortfolioOptimizationRun) else optimization_run
     run = (
         PortfolioOptimizationRun.objects.select_for_update(of=("self",))
@@ -617,6 +640,15 @@ def apply_optimization_run(optimization_run, idempotency_key, *, mode="SHADOW", 
         raise OptimizationError("Only a completed optimization run can be applied")
     if run.policy.portfolio_id != run.portfolio_id or run.universe.portfolio_id != run.portfolio_id:
         raise OptimizationError("Optimization run, policy, universe, and portfolio do not belong together")
+    if not run.policy.enabled or not run.universe.enabled:
+        raise OptimizationError(
+            "Optimization policy and universe must still be enabled at apply time"
+        )
+    mode = require_portfolio_execution_ready(run.portfolio)
+    if run.policy.execution_mode != mode:
+        raise OptimizationError(
+            "Optimization policy mode no longer matches the portfolio Gateway session"
+        )
     if run.applied_rebalance_id:
         if run.application_idempotency_key == idempotency_key:
             return run, run.applied_rebalance, False
@@ -629,6 +661,7 @@ def apply_optimization_run(optimization_run, idempotency_key, *, mode="SHADOW", 
         run,
         f"{idempotency_key}:rebalance",
         mode=mode,
+        run_type=RunType.EXECUTION,
         strict_market_state=strict_market_state,
     )
     if rebalance.optimization_run_id != run.pk:

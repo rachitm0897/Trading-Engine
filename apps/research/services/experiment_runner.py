@@ -204,7 +204,7 @@ def run_experiment(experiment_or_id):
         implementation=experiment.strategy.implementations.filter(
             implementation_hash=experiment.implementation_hash,
             status__in=[ImplementationStatus.VALIDATED,ImplementationStatus.BACKTESTED,ImplementationStatus.SCORED,
-                        ImplementationStatus.APPROVED_FOR_RECOMMENDATION,ImplementationStatus.SHADOW_VALIDATED,
+                        ImplementationStatus.APPROVED_FOR_RECOMMENDATION,ImplementationStatus.PAPER_VALIDATED,
                         ImplementationStatus.BUILDER_READY,ImplementationStatus.APPROVED],exact_semantic_match=True,
         ).select_related("executable_strategy_definition").first()
         if not implementation:raise ValueError("Strategy has no validated exact implementation")

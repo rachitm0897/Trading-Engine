@@ -9,6 +9,10 @@ from apps.audit.models import AuditEvent
 from apps.core.throttling import throttle_response
 from apps.core.validation import decimal_field, require_fields
 from apps.core.views import response
+from apps.execution.modes import (
+    execution_mode_for_portfolio,
+    require_portfolio_execution_ready,
+)
 from apps.instruments.models import Instrument
 from apps.portfolios.models import TradingPortfolio
 
@@ -121,8 +125,9 @@ def _run_row(run, detail=False):
     if run.applied_rebalance_id:
         applied = run.applied_rebalance
         row["applied_rebalance"] = {
-            "id": applied.pk,
-            "mode": applied.mode,
+                "id": applied.pk,
+                "mode": applied.mode,
+                "run_type": applied.run_type,
             "status": applied.status,
             "phase": applied.phase,
             "planned_turnover": applied.planned_turnover,
@@ -142,6 +147,7 @@ def _run_row(run, detail=False):
             row["rebalance"] = {
                 "id": rebalance.pk,
                 "mode": rebalance.mode,
+                "run_type": rebalance.run_type,
                 "status": rebalance.status,
                 "phase": rebalance.phase,
                 "planned_turnover": rebalance.planned_turnover,
@@ -254,7 +260,9 @@ def policies(request):
             if field in payload and not isinstance(payload[field],bool):raise ValueError(f"{field} must be a boolean")
         portfolio = TradingPortfolio.objects.get(pk=payload["portfolio_id"])
         values = {field: payload[field] for field in POLICY_FIELDS if field in payload}
-        values["execution_mode"] = "SHADOW"
+        values["execution_mode"] = execution_mode_for_portfolio(
+            portfolio,
+        )
         if values.get("method", "MINIMUM_VARIANCE") not in {value for value, _ in PortfolioOptimizationPolicy.METHODS}:
             raise ValueError("Method must be MINIMUM_VARIANCE or MAXIMUM_SHARPE")
         policy = PortfolioOptimizationPolicy.objects.filter(portfolio=portfolio).first()
@@ -381,7 +389,7 @@ def execute(request, preview=False):
                 if not retry or not run.retryable:
                     return response(status=409,error={"code":"RETRY_NOT_ALLOWED",
                         "message":run.last_error or "Failed optimization application requires an explicit retry","details":{"retryable":run.retryable}})
-            mode="SHADOW" if settings.NEW_EXECUTION_MODE=="SHADOW" else "PAPER"
+            mode=require_portfolio_execution_ready(run.portfolio)
             if not run.applied_rebalance_id and run.application_status not in {"QUEUED","APPLYING"}:
                 with transaction.atomic():
                     locked=PortfolioOptimizationRun.objects.select_for_update().get(pk=run.pk)

@@ -182,7 +182,7 @@ class GatewayClient:
         if idempotency_key:
             headers["Idempotency-Key"] = self._session_key(idempotency_key)
         timeout = float(timeout if timeout is not None else settings.GATEWAY_HTTP_TIMEOUT_SECONDS)
-        safe = method.upper() == "GET"
+        safe = method.upper() == "GET" or bool(idempotency_key)
         for attempt in range(retries + 1):
             try:
                 response = self.http.request(
@@ -402,8 +402,20 @@ class GatewayClient:
 
     def subscribe_market_data(self, payload, key):
         self._require_session_purpose("command")
-        return self.request("POST", "market-data/subscriptions/", json=payload, idempotency_key=key, retries=0)
+        return self.request(
+            "POST",
+            "market-data/subscriptions/",
+            json=payload,
+            idempotency_key=key,
+            retries=2,
+        )
 
     def cancel_market_data(self, payload, key):
         self._require_session_purpose("command")
-        return self.request("POST", "market-data/subscriptions/cancel/", json=payload, idempotency_key=key, retries=0)
+        return self.request(
+            "POST",
+            "market-data/subscriptions/cancel/",
+            json=payload,
+            idempotency_key=key,
+            retries=2,
+        )

@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from apps.research.configuration import RecommendationSystemConfiguration
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR.parent / ".env", override=False)
 load_dotenv(BASE_DIR / ".env", override=False)
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "test-only-secret")
 DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
@@ -61,11 +62,23 @@ PORTFOLIO_TARGET_COORDINATION_DEBOUNCE_SECONDS = int(
 PORTFOLIO_TARGET_COORDINATION_BATCH_SIZE = int(
     os.getenv("PORTFOLIO_TARGET_COORDINATION_BATCH_SIZE", "50")
 )
+PORTFOLIO_TARGET_COORDINATION_RETRY_BASE_SECONDS = int(
+    os.getenv("PORTFOLIO_TARGET_COORDINATION_RETRY_BASE_SECONDS", "5")
+)
+PORTFOLIO_TARGET_COORDINATION_RETRY_MAX_SECONDS = int(
+    os.getenv("PORTFOLIO_TARGET_COORDINATION_RETRY_MAX_SECONDS", "300")
+)
 EXECUTION_AVERAGE_VOLUME_WINDOW = int(
     os.getenv("EXECUTION_AVERAGE_VOLUME_WINDOW", "20")
 )
 if EXECUTION_AVERAGE_VOLUME_WINDOW < 1:
     raise RuntimeError("EXECUTION_AVERAGE_VOLUME_WINDOW must be positive")
+EXECUTION_REGISTER_ADV_INPUT = (
+    os.getenv("EXECUTION_REGISTER_ADV_INPUT", "true").lower() == "true"
+)
+EXECUTION_ADV_TIMEFRAME = os.getenv(
+    "EXECUTION_ADV_TIMEFRAME", "RUNTIME"
+).strip()
 ORDER_INTENT_BATCH_SIZE = int(os.getenv("ORDER_INTENT_BATCH_SIZE", "50"))
 ORDER_INTENT_CLAIM_TIMEOUT_SECONDS = int(
     os.getenv("ORDER_INTENT_CLAIM_TIMEOUT_SECONDS", "120")
@@ -168,14 +181,30 @@ GLOBAL_KILL_SWITCH = os.getenv("GLOBAL_KILL_SWITCH", "false").lower() == "true"
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_CLIENT_ID = os.getenv("KAFKA_CLIENT_ID", "finflock-backend")
 KAFKA_ENABLED = os.getenv("KAFKA_ENABLED", "false").lower() == "true"
-NEW_EXECUTION_MODE = os.getenv("NEW_EXECUTION_MODE", "SHADOW").upper()
-if NEW_EXECUTION_MODE not in {"SHADOW", "PAPER"}:
-    raise RuntimeError("NEW_EXECUTION_MODE must be SHADOW or PAPER")
 MARKET_PRICE_STALE_SECONDS = int(os.getenv("MARKET_PRICE_STALE_SECONDS", "300"))
 WARMUP_SAFETY_BARS = int(os.getenv("WARMUP_SAFETY_BARS", "5"))
 WARMUP_TIMEOUT_SECONDS = int(os.getenv("WARMUP_TIMEOUT_SECONDS", "300"))
 MARKET_CONSUMER_HEARTBEAT_STALE_SECONDS = int(os.getenv("MARKET_CONSUMER_HEARTBEAT_STALE_SECONDS", "30"))
 KAFKA_LAG_DEGRADED_THRESHOLD = int(os.getenv("KAFKA_LAG_DEGRADED_THRESHOLD", "1000"))
+KAFKA_HEALTH_STALE_SECONDS = int(os.getenv("KAFKA_HEALTH_STALE_SECONDS", "60"))
+OUTBOX_PUBLISHER_HEARTBEAT_STALE_SECONDS = int(
+    os.getenv("OUTBOX_PUBLISHER_HEARTBEAT_STALE_SECONDS", "30")
+)
+EXECUTION_REQUIRED_KAFKA_TOPICS = tuple(
+    value.strip()
+    for value in os.getenv(
+        "EXECUTION_REQUIRED_KAFKA_TOPICS",
+        "market.raw.v1,market.canonical.v1,market.bars.v1,market.indicators.v1,"
+        "market.quality.v1,instrument.registry.v1,strategy.inputs.v1,"
+        "strategy.targets.v1,portfolio.rebalance.planned.v1,risk.decisions.v1,"
+        "orders.events.v1,executions.events.v1,reconciliation.events.v1,"
+        "system.health.v1,dead-letter.v1",
+    ).split(",")
+    if value.strip()
+)
+EXECUTION_ACTIVATION_PREFLIGHT_ENABLED = (
+    os.getenv("EXECUTION_ACTIVATION_PREFLIGHT_ENABLED", "true").lower() == "true"
+)
 FLINK_REST_URL = os.getenv("FLINK_REST_URL", "http://localhost:8081")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 FINNHUB_BASE_URL = os.getenv("FINNHUB_BASE_URL", "https://finnhub.io/api/v1").rstrip("/")
@@ -201,6 +230,16 @@ FINNHUB_SUPPORTED_ASSET_CLASSES = tuple(
     value.strip().upper() for value in os.getenv("FINNHUB_SUPPORTED_ASSET_CLASSES", "STK").split(",") if value.strip()
 )
 GATEWAY_HTTP_TIMEOUT_SECONDS = float(os.getenv("GATEWAY_HTTP_TIMEOUT_SECONDS", "10"))
+LOCAL_PAPER_GATEWAY_URL = os.getenv("LOCAL_PAPER_GATEWAY_URL", "").strip()
+LOCAL_PAPER_GATEWAY_SERVICE_TOKEN = os.getenv(
+    "LOCAL_PAPER_GATEWAY_SERVICE_TOKEN", ""
+).strip()
+LOCAL_PAPER_GATEWAY_NOVNC_PASSWORD = os.getenv(
+    "LOCAL_PAPER_GATEWAY_NOVNC_PASSWORD", ""
+)
+LOCAL_PAPER_GATEWAY_CONTAINER_NAME = os.getenv(
+    "LOCAL_PAPER_GATEWAY_CONTAINER_NAME", "paper-ibkr-gateway"
+).strip()
 GATEWAY_COMMAND_POLL_INTERVAL_SECONDS = float(os.getenv("GATEWAY_COMMAND_POLL_INTERVAL_SECONDS", "0.25"))
 GATEWAY_COMMAND_TIMEOUT_DEFAULT_SECONDS = float(os.getenv("GATEWAY_COMMAND_TIMEOUT_DEFAULT_SECONDS", "20"))
 GATEWAY_COMMAND_TIMEOUT_SEARCH_CONTRACTS_SECONDS = float(
@@ -250,7 +289,6 @@ RESEARCH_BUNDLE_PATH = os.getenv(
     "RESEARCH_BUNDLE_PATH", str(BASE_DIR / "research_bundle")
 )
 RESEARCH_ARTIFACT_ROOT = str(RECOMMENDATION_CONFIG.artifact_root)
-RESEARCH_DAILY_PROVIDER = os.getenv("RESEARCH_DAILY_PROVIDER", "FINNHUB").upper()
 RESEARCH_RECOMMENDATION_MAX_AGE_DAYS = max(1, RECOMMENDATION_SNAPSHOT_MAX_AGE_HOURS // 24)
 RESEARCH_TASK_ROUTES = {
     "apps.research.tasks.refresh_universe_mapping": {"queue": "research_mapping"},
@@ -272,6 +310,7 @@ RESEARCH_TASK_ROUTES = {
     "apps.research.tasks.generate_recommendation_batch": {"queue": "recommendations"},
 }
 STRATEGY_EVALUATION_TASK_ROUTES = {
+    "apps.strategies.tasks.activate_strategy_instance": {"queue": "strategy_evaluation"},
     "apps.strategies.tasks.execute_strategy_evaluation_jobs": {"queue": "strategy_evaluation"},
     "apps.strategies.tasks.recover_strategy_evaluation_jobs": {"queue": "strategy_evaluation"},
 }

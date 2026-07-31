@@ -14,6 +14,7 @@ from apps.oms.services import ALLOWED, apply_execution
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
 from apps.market_streams.models import MarketDataSubscription
 from apps.core.idempotency import canonical_request_hash
+from apps.execution.modes import execution_mode_for_portfolio
 from .client import GatewayClient
 from .models import BrokerPositionSnapshot, BrokerSessionAccount, BrokerSyncCursor
 
@@ -238,7 +239,8 @@ def _external_order(row, instrument, portfolio, gateway_session=None):
         "instrument":instrument,"side":intent_payload["side"],"quantity":intent_payload["quantity"],
         "order_type":intent_payload["order_type"],"limit_price":intent_payload["limit_price"],
         "stop_price":intent_payload["stop_price"],"time_in_force":intent_payload["time_in_force"],
-        "source":"BROKER_IMPORT","origin":OrderIntent.Origin.BROKER_IMPORT})
+        "source":"BROKER_IMPORT","origin":OrderIntent.Origin.BROKER_IMPORT,
+        "mode":execution_mode_for_portfolio(portfolio)})
     order,created=Order.objects.get_or_create(intent=intent,defaults={"internal_id":internal,"quantity":intent.quantity,"status":"ACKNOWLEDGED","broker_order_id":str(row.get("broker_order_id") or ""),"broker_permanent_id":str(row.get("permanent_id") or "")})
     if created: OrderStatusHistory.objects.create(order=order,from_status="",to_status="ACKNOWLEDGED",source="broker_import",reason="Discovered at IBKR",event_key=f"broker-import:{session_key}:{portfolio.account.account_id}:{identity}:ack"[:128])
     return order
@@ -373,6 +375,9 @@ def process_snapshot(event, gateway_session=None):
                 if not event_generation and settings.MARKET_DATA_FALLBACK_ENABLED:return
                 from apps.market_data.fallback import handle_ibkr_failure
                 handle_ibkr_failure(subscription,payload.get("error_code"),payload.get("error_message") or "",historical=False)
+                subscription.refresh_from_db()
+                from apps.market_streams.services import sync_subscription_strategy_lifecycle
+                sync_subscription_strategy_lifecycle(subscription)
         return
     if event_type=="market.raw":
         source_key=str(payload.get("source_event_id") or "")
@@ -397,6 +402,8 @@ def process_snapshot(event, gateway_session=None):
             elif not payload.get("provider_generation") or str(subscription.provider_generation)==str(payload.get("provider_generation")):
                 subscription.state="ACTIVE"
                 subscription.save(update_fields=["state","updated_at"])
+                from apps.market_streams.services import sync_subscription_strategy_lifecycle
+                sync_subscription_strategy_lifecycle(subscription)
         return
     if event_type in {"command.place_order.completed","command.modify_order.completed","command.cancel_order.completed"}:
         from apps.execution.dispatch import record_gateway_command_completed
@@ -418,6 +425,9 @@ def process_snapshot(event, gateway_session=None):
                 if not command_generation and settings.MARKET_DATA_FALLBACK_ENABLED:return
                 from apps.market_data.fallback import handle_ibkr_failure
                 handle_ibkr_failure(subscription,message=reason,historical=True)
+                subscription.refresh_from_db()
+                from apps.market_streams.services import sync_subscription_strategy_lifecycle
+                sync_subscription_strategy_lifecycle(subscription)
         return
     if event_type=="command.failed" and payload.get("command_type") in {"PLACE_ORDER","MODIFY_ORDER","CANCEL_ORDER"}:
         record_gateway_command_failure(payload,gateway_session);return
@@ -448,9 +458,21 @@ def process_snapshot(event, gateway_session=None):
     elif event_type=="snapshot.completed_orders": sync_orders(rows,"completed",gateway_session)
     elif event_type=="snapshot.executions": sync_executions(rows,gateway_session)
 
-def sync_events(client, gateway_session=None):
+def sync_events(client, gateway_session=None, connection_generation=None):
     gateway_session=gateway_session or getattr(client,"gateway_session",None)
     cursor,_=BrokerSyncCursor.objects.get_or_create(session=gateway_session,name="gateway-events")
+    generation=str(connection_generation or "").strip()
+    if generation and cursor.connection_generation!=generation:
+        with transaction.atomic():
+            cursor=BrokerSyncCursor.objects.select_for_update().get(pk=cursor.pk)
+            if cursor.connection_generation!=generation:
+                cursor.connection_generation=generation
+                cursor.last_sequence=0
+                cursor.last_synced_at=None
+                cursor.last_error=""
+                cursor.save(update_fields=[
+                    "connection_generation","last_sequence","last_synced_at","last_error",
+                ])
     events=client.events(cursor.last_sequence) or []
     for event in events:
         if event["id"] <= cursor.last_sequence:

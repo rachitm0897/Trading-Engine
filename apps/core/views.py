@@ -98,7 +98,8 @@ def system(request):
     from apps.reconciliation.models import ReconciliationBreak
     from apps.risk.models import KillSwitch
     is_admin = bool(getattr(request, "user", None) and request.user.is_authenticated and request.user.is_active and request.user.is_staff)
-    return response({"mode":"MULTI_SESSION","execution_mode":settings.NEW_EXECUTION_MODE,
+    return response({"mode":"MULTI_SESSION","execution_modes":["PAPER","LIVE"],
+        "execution_mode_source":"PORTFOLIO_GATEWAY_SESSION",
         "allow_live_trading":settings.ALLOW_LIVE_TRADING,
         "broker_deployment":managed_broker_deployment_configuration(),
         "is_admin":is_admin,"global_kill_switch": settings.GLOBAL_KILL_SWITCH or KillSwitch.objects.filter(scope="GLOBAL", enabled=True).exists(),
@@ -292,6 +293,10 @@ def orders(request, internal_id=None, action=None):
         request_order_modification,
     )
     from apps.execution.tasks import execute_order_intents
+    from apps.execution.modes import (
+        ExecutionMode,
+        execution_mode_for_session,
+    )
     from apps.instruments.models import Instrument
     from apps.oms.models import Order, OrderIntent
     from apps.portfolios.models import TradingPortfolio
@@ -384,10 +389,11 @@ def orders(request, internal_id=None, action=None):
                 session=session,broker_account=portfolio.account,available=True
             ).exists():
                 raise ValueError("Portfolio account is not available in the selected Gateway session")
-            if session.mode.lower()=="live":
+            mode=execution_mode_for_session(session)
+            if mode==ExecutionMode.LIVE and not settings.ALLOW_LIVE_TRADING:
                 return response(status=403,error={
                     "code":"LIVE_MANUAL_TRADING_DISABLED",
-                    "message":"Live manual order routing is disabled by the current execution policy",
+                    "message":"Live manual order routing is disabled by ALLOW_LIVE_TRADING",
                     "details":{"allow_live_trading":settings.ALLOW_LIVE_TRADING},
                 })
             reference=resolve_order_risk_price(
@@ -400,7 +406,7 @@ def orders(request, internal_id=None, action=None):
                     "limit_price":validated["limit_price"],"stop_price":validated["stop_price"],
                     "reference_price":reference or None,"time_in_force":tif,
                     "source":"MANUAL","origin":OrderIntent.Origin.MANUAL,
-                    "mode":"PAPER","requires_fresh_price":order_type in {"MKT","STP"}})
+                    "mode":mode,"requires_fresh_price":order_type in {"MKT","STP"}})
                 if not created:
                     require_matching_request(intent.request_hash,request_hash)
                     if not intent.request_hash:

@@ -10,7 +10,9 @@ from apps.event_bus.models import StreamHealthMetric
 from apps.market_streams.tasks import check_warmup_timeouts
 from apps.accounts.models import BrokerAccount
 from apps.portfolios.models import TradingPortfolio
-from apps.strategies.framework import create_instance,enable_instance
+from apps.strategies.framework import create_instance
+from tests.managed_gateway import bind_gateway_mode
+from tests.strategy_activation import activate_strategy
 
 pytestmark=pytest.mark.django_db
 
@@ -18,9 +20,14 @@ pytestmark=pytest.mark.django_db
 def test_gateway_raw_market_event_enters_transactional_outbox():
     instrument=Instrument.objects.create(symbol="RAW",exchange="SMART",currency="USD")
     BrokerContract.objects.create(instrument=instrument,conid=777)
-    subscription=MarketDataSubscription.objects.create(instrument=instrument,conid=777,timeframe="1m",consumer_count=1)
+    subscription=MarketDataSubscription.objects.create(
+        instrument=instrument,conid=777,timeframe="1m",consumer_count=1,
+        state="SUBSCRIBING",active_provider="IBKR",
+    )
     payload={"source_event_id":"777:1m:2026-07-13T00:00:00+00:00","subscription_key":f"{instrument.pk}:1m",
-        "instrument_id":instrument.pk,"conid":777,"symbol":"RAW","timeframe":"1m","event_time":"2026-07-13T00:01:00+00:00"}
+        "instrument_id":instrument.pk,"conid":777,"symbol":"RAW","timeframe":"1m","event_time":"2026-07-13T00:01:00+00:00",
+        "provider":"IBKR","provider_generation":str(subscription.provider_generation),
+        "processing_mode":"LIVE","source":"ibkr_live"}
     process_snapshot({"event_type":"market.raw","payload":payload});process_snapshot({"event_type":"market.raw","payload":payload})
     subscription.refresh_from_db()
     assert subscription.state=="ACTIVE" and subscription.last_event_at is not None
@@ -29,16 +36,21 @@ def test_gateway_raw_market_event_enters_transactional_outbox():
 
 def test_async_ibkr_market_error_blocks_strategy_with_exact_reason():
     account=BrokerAccount.objects.create(account_id="DU-PERMISSION");portfolio=TradingPortfolio.objects.create(name="Permission",account=account)
+    bind_gateway_mode(portfolio)
     instrument=Instrument.objects.create(symbol="PERM",exchange="SMART",currency="USD");BrokerContract.objects.create(instrument=instrument,conid=780)
     instance,_=create_instance(name="Permission failure",definition_key="FIXED_WEIGHT_REBALANCE",portfolio=portfolio,
         instrument_id=instrument.pk,timeframe="1m",parameters={"direction":"LONG"},target_configuration={"target_weight":"0.01"},qualify=False)
-    enable_instance(instance);MarketDataSubscription.objects.create(instrument=instrument,conid=780,timeframe="1m",consumer_count=1,state="ACTIVE")
+    instance,_,subscription=activate_strategy(instance,ready=False)
     process_snapshot({"event_type":"market.error","payload":{"subscription_key":f"{instrument.pk}:1m",
-        "error_code":"354","error_message":"Requested market data is not subscribed"}})
-    instance.refresh_from_db();subscription=MarketDataSubscription.objects.get(instrument=instrument,timeframe="1m")
+        "provider_generation":str(subscription.provider_generation),
+        "error_code":"354","error_message":"Requested market data is not subscribed"}},gateway_session=portfolio.gateway_session)
+    instance.refresh_from_db();subscription.refresh_from_db()
     assert subscription.state=="ERROR" and subscription.last_error=="IBKR error 354: Requested market data is not subscribed"
     assert instance.state=="BLOCKED" and instance.block_reason==subscription.last_error
-    process_snapshot({"event_type":"command.subscribe_market_data.completed","payload":{"subscription_key":f"{instrument.pk}:1m"}})
+    process_snapshot({"event_type":"command.subscribe_market_data.completed","payload":{
+        "subscription_key":f"{instrument.pk}:1m",
+        "provider_generation":str(subscription.provider_generation),
+    }},gateway_session=portfolio.gateway_session)
     subscription.refresh_from_db()
     assert subscription.state=="ACTIVE" and subscription.last_error=="IBKR error 354: Requested market data is not subscribed"
 
@@ -46,12 +58,14 @@ def test_async_ibkr_market_error_blocks_strategy_with_exact_reason():
 def test_stalled_warmup_becomes_visibly_blocked(settings):
     settings.WARMUP_TIMEOUT_SECONDS=30
     account=BrokerAccount.objects.create(account_id="DU-WARMUP");portfolio=TradingPortfolio.objects.create(name="Warmup",account=account)
+    bind_gateway_mode(portfolio)
     instrument=Instrument.objects.create(symbol="STALL",exchange="SMART",currency="USD");BrokerContract.objects.create(instrument=instrument,conid=778)
     instance,_=create_instance(name="Stalled",definition_key="FIXED_WEIGHT_REBALANCE",portfolio=portfolio,instrument_id=instrument.pk,
         timeframe="1m",parameters={"direction":"LONG"},target_configuration={"target_weight":"0.01"},qualify=False)
-    enable_instance(instance);old=timezone.now()-timedelta(minutes=2)
+    instance,_,subscription=activate_strategy(instance,ready=False);old=timezone.now()-timedelta(minutes=2)
     instance.warmup_started_at=old;instance.warmup_last_progress_at=old;instance.save(update_fields=["warmup_started_at","warmup_last_progress_at"])
-    MarketDataSubscription.objects.create(instrument=instrument,conid=778,timeframe="1m",consumer_count=1,state="ERROR",last_error="IBKR error 354: Not subscribed")
+    subscription.state="ERROR";subscription.last_error="IBKR error 354: Not subscribed"
+    subscription.save(update_fields=["state","last_error","updated_at"])
     assert check_warmup_timeouts()==1
     instance.refresh_from_db();assert instance.state=="BLOCKED" and "IBKR error 354" in instance.block_reason
 
@@ -73,12 +87,13 @@ def test_stream_health_is_not_green_when_consumer_heartbeat_is_stale(client,sett
 
 def test_strategy_api_exposes_each_persisted_stream_stage(client):
     account=BrokerAccount.objects.create(account_id="DU-HEALTH");portfolio=TradingPortfolio.objects.create(name="Health",account=account)
+    bind_gateway_mode(portfolio)
     instrument=Instrument.objects.create(symbol="PATH",exchange="SMART",currency="USD");BrokerContract.objects.create(instrument=instrument,conid=779)
     instance,_=create_instance(name="Path health",definition_key="FIXED_WEIGHT_REBALANCE",portfolio=portfolio,
         instrument_id=instrument.pk,timeframe="1m",parameters={"direction":"LONG"},target_configuration={"target_weight":"0.01"},qualify=False)
-    enable_instance(instance)
-    MarketDataSubscription.objects.create(instrument=instrument,conid=779,timeframe="1m",consumer_count=1,state="ACTIVE",
-        last_event_at=timezone.now())
+    instance,_,subscription=activate_strategy(instance)
+    subscription.last_event_at=timezone.now()
+    subscription.save(update_fields=["last_event_at","updated_at"])
     now=timezone.now()
     from apps.market_streams.models import MarketBar
     from apps.strategies.framework import evaluate_instance

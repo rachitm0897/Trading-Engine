@@ -5,7 +5,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl supervisor
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-COPY .env.example .env
 RUN chmod +x entrypoint.sh
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --retries=5 CMD curl -fsS http://127.0.0.1:${PORT:-8000}/healthz || exit 1

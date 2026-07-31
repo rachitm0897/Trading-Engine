@@ -8,6 +8,7 @@ from apps.instruments.models import Instrument
 from apps.portfolios.models import TradingPortfolio
 from apps.risk.models import CapitalReservation
 from apps.strategies.models import StrategyAllocation, StrategyDefinition, StrategyInstance
+from tests.managed_gateway import bind_gateway_mode
 
 pytestmark=pytest.mark.django_db
 
@@ -50,6 +51,7 @@ def test_withdrawal_uses_cash_then_idle_surplus_and_liquidation():
 def test_flow_retry_is_idempotent_and_reserves_cash():
     account=BrokerAccount.objects.create(account_id="DU1",net_liquidation=1000,available_cash=0)
     portfolio=TradingPortfolio.objects.create(name="P",account=account,cash_buffer_pct="0.10")
+    bind_gateway_mode(portfolio)
     strategy=allocated_strategy(portfolio,"S")
     first=create_flow(portfolio,"DEPOSIT",200,"flow-1"); second=create_flow(portfolio,"DEPOSIT",200,"flow-1")
     assert first.pk==second.pk and first.unallocated_amount==Decimal("120.00")
@@ -62,6 +64,7 @@ def test_flow_retry_is_idempotent_and_reserves_cash():
 def test_auto_without_enabled_optimization_configuration_uses_strategy_allocation():
     account=BrokerAccount.objects.create(account_id="DU-AUTO",net_liquidation=1000,available_cash=1000)
     portfolio=TradingPortfolio.objects.create(name="Auto strategy",account=account)
+    bind_gateway_mode(portfolio)
     strategy=allocated_strategy(portfolio,"Auto S",100)
 
     run=create_flow(portfolio,"DEPOSIT",100,"flow-auto-strategy",allocation_mode="AUTO")
@@ -76,6 +79,7 @@ def test_auto_without_enabled_optimization_configuration_uses_strategy_allocatio
 def test_pending_withdrawal_reserves_cash_for_other_operations():
     account=BrokerAccount.objects.create(account_id="DU-WITHDRAW",net_liquidation=1000,available_cash=300)
     portfolio=TradingPortfolio.objects.create(name="Withdrawal",account=account)
+    bind_gateway_mode(portfolio)
     run=create_flow(portfolio,"WITHDRAWAL",200,"withdrawal-reservation")
     reservation=CapitalReservation.objects.get(reference_type="PORTFOLIO_FLOW",reference_id=str(run.flow_id))
     assert reservation.amount==200 and reservation.status=="ACTIVE"
@@ -84,6 +88,7 @@ def test_pending_withdrawal_reserves_cash_for_other_operations():
 def test_failed_flow_requires_explicit_retry_and_preserves_attempt_history(monkeypatch):
     account=BrokerAccount.objects.create(account_id="DU-RETRY",net_liquidation=1000,available_cash=1000)
     portfolio=TradingPortfolio.objects.create(name="Retry",account=account)
+    bind_gateway_mode(portfolio)
     allocated_strategy(portfolio,"Retry S")
     from apps.allocation import services
     real=services.create_strategy_flow_allocation

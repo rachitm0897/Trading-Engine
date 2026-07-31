@@ -11,9 +11,30 @@ from .models import MarketDataSubscription
 def _requirements(instrument,timeframe,gateway_session=None):
     query=StrategyInstance.objects.filter(enabled=True,instrument=instrument,timeframe=timeframe)
     if gateway_session is not None:query=query.filter(portfolio__gateway_session=gateway_session)
-    instances=list(query.select_related("definition"))
-    required=max((get_plugin(item.definition).warmup_bars(item.parameters) for item in instances),default=0)
+    instances=list(query.select_related("definition").prefetch_related(
+        "input_bindings__requirement","input_bindings__strategy_version",
+    ))
+    required=0
+    for item in instances:
+        current=[
+            binding.requirement.warmup_bars
+            for binding in item.input_bindings.all()
+            if binding.active and binding.strategy_version.version==item.version
+        ]
+        required=max(
+            required,
+            max(current,default=get_plugin(item.definition).warmup_bars(item.parameters)),
+        )
     return instances,required+int(getattr(settings,"WARMUP_SAFETY_BARS",5)) if instances else 0
+
+
+def refresh_market_subscription_counts(subscription):
+    instances,history=_requirements(
+        subscription.instrument,subscription.timeframe,subscription.gateway_session)
+    subscription.consumer_count=len(instances)
+    subscription.required_history_bars=history
+    subscription.save(update_fields=["consumer_count","required_history_bars","updated_at"])
+    return subscription
 
 
 def reconcile_market_subscription(instrument,timeframe,gateway=None,force=False,connection_generation=None,gateway_session=None):

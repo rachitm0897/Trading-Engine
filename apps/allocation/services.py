@@ -4,6 +4,7 @@ from django.db.models import Sum
 from django.utils import timezone
 from apps.audit.models import OperationAttempt, OutboxEvent
 from apps.core.idempotency import canonical_request_hash, require_matching_request
+from apps.execution.modes import RunType, execution_mode_for_portfolio
 from apps.strategies.models import StrategyAllocation
 from .models import AllocationDecision, AllocationRun, PortfolioFlow, StrategyCapitalSnapshot
 
@@ -184,7 +185,7 @@ def _create_flow_run(portfolio, flow_type, amount, idempotency_key, effective_at
         snapshot={
             "nav": str(nav),
             "cash": str(cash),
-            "mode": "SHADOW",
+            "mode": execution_mode_for_portfolio(portfolio),
             "resolved_allocation_mode": allocation_mode,
         },
     )
@@ -321,8 +322,9 @@ def create_optimized_flow_allocation(run):
     rebalance = plan_optimized_rebalance(
         optimization,
         f"rebalance:flow:{flow.pk}:optimization:{optimization.pk}",
-        mode="SHADOW",
-        strict_market_state=False,
+        mode=execution_mode_for_portfolio(portfolio),
+        run_type=RunType.EXECUTION,
+        strict_market_state=True,
         available_cash=post_cash,
     )
     unallocated = _optimized_flow_unallocated(flow, run, optimization, rebalance)

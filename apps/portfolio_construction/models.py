@@ -181,7 +181,10 @@ class GoalStrategyAssignment(models.Model):
 
 
 class PortfolioConstructionRun(models.Model):
-    APPLICATION_STATUSES = [(value, value) for value in ["NOT_APPLIED", "QUEUED", "APPLYING", "APPLIED", "FAILED"]]
+    APPLICATION_STATUSES = [(value, value) for value in [
+        "NOT_APPLIED", "QUEUED", "APPLYING", "ACTIVATING", "APPLIED",
+        "PARTIALLY_APPLIED", "FAILED",
+    ]]
     plan = models.ForeignKey(PortfolioConstructionPlan, on_delete=models.PROTECT, related_name="runs")
     idempotency_key = models.CharField(max_length=128, unique=True)
     request_hash = models.CharField(max_length=64, db_index=True)

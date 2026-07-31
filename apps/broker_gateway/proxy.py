@@ -3,7 +3,7 @@ from http.cookies import SimpleCookie
 import json
 import re
 import struct
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 import httpx
 from asgiref.sync import sync_to_async
@@ -15,6 +15,10 @@ from websockets.asyncio.client import connect as websocket_connect
 from .crypto import decrypt_secret, validate_novnc_access_token
 from .models import BrokerGatewaySession
 from .services import CONTAINER_NAME_RE
+from .vnc import normalize_vnc_password
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 HOP_HEADERS = {
@@ -118,8 +122,18 @@ async def _send_response(send, status, body=b"", headers=None):
 def _connect_page(base_path):
     authorize_url = f"{base_path}/authorize/"
     vnc_url = f"{base_path}/vnc.html"
-    websocket_path = f"{base_path.lstrip('/')}/websockify"
-    values = json.dumps({"authorize": authorize_url, "vnc": vnc_url, "websockify": websocket_path})
+    websocket_path = "websockify"
+    vnc_query = urlencode(
+        {"autoconnect": "1", "resize": "scale", "path": websocket_path}
+    )
+    values = json.dumps(
+        {
+            "authorize": authorize_url,
+            "vnc": vnc_url,
+            "websockify": websocket_path,
+            "vncQuery": vnc_query,
+        }
+    )
     return f"""<!doctype html><meta charset=utf-8><title>Opening noVNC</title>
 <body><p>Authorizing the private noVNC session&hellip;</p><script>
 const routes={values};
@@ -127,8 +141,7 @@ const routes={values};
 if(!token)throw new Error('Missing access token');
 const r=await fetch(routes.authorize,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{token}})}});
 if(!r.ok)throw new Error('noVNC authorization failed');
-const q=new URLSearchParams({{autoconnect:'1',resize:'scale',path:routes.websockify}});
-location.replace(routes.vnc+'?'+q.toString());
+location.replace(routes.vnc+'?'+routes.vncQuery);
 }})().catch(e=>{{document.body.textContent=e.message}});</script></body>""".encode("utf-8")
 
 
@@ -189,7 +202,6 @@ async def proxy_http(scope, receive, send, route):
                 return await _send_response(send,400,b"Client-supplied upstream routing is not allowed")
             safe_query = [(key, value) for key, values in parsed_query.items() if key != "token" for value in values]
             if safe_query:
-                from urllib.parse import urlencode
                 upstream += "?" + urlencode(safe_query)
         forwarded_headers = {
             key.decode("latin-1"): value.decode("latin-1")
@@ -234,7 +246,7 @@ def _reverse_bits(value):
 
 def _vnc_auth_response(password, challenge):
     # RFB VNCAuth uses DES with the bit order of each password byte reversed.
-    raw = password.encode("latin-1", "ignore")[:8].ljust(8, b"\0")
+    raw = normalize_vnc_password(password).encode("ascii")
     key = bytes(_reverse_bits(value) for value in raw)
     encryptor = Cipher(TripleDES(key * 3), modes.ECB()).encryptor()
     return encryptor.update(challenge) + encryptor.finalize()
@@ -319,76 +331,161 @@ async def _prepare_rfb_connection(upstream, receive, send, encrypted_password):
 
 async def proxy_websocket(scope, receive, send, route):
     session_id, asset, _ = route
+
     first = await receive()
     if first.get("type") != "websocket.connect":
         return
+
     session = await _load_session(session_id)
     if session is None:
         return await send({"type": "websocket.close", "code": 4404})
+
     if asset.rstrip("/") != "websockify" or not _is_authorized(scope, session_id):
         return await send({"type": "websocket.close", "code": 4403})
-    offered = scope.get("subprotocols") or ["binary"]
-    upstream_url = f"ws://{session.child_container_name}:8080/novnc/websockify"
+
+    # Preserve exactly what the browser offered.
+    # Modern noVNC usually offers no subprotocol.
+    client_subprotocols = list(scope.get("subprotocols") or [])
+
+    upstream_url = (
+        f"ws://{session.child_container_name}:8080/novnc/websockify"
+    )
+
     try:
         async with websocket_connect(
             upstream_url,
-            subprotocols=offered,
-            open_timeout=float(settings.NOVNC_PROXY_CONNECT_TIMEOUT_SECONDS),
+            subprotocols=client_subprotocols or None,
+            open_timeout=float(
+                settings.NOVNC_PROXY_CONNECT_TIMEOUT_SECONDS
+            ),
             close_timeout=5,
             max_size=16 * 1024 * 1024,
         ) as upstream:
-            await send({"type": "websocket.accept", "subprotocol": upstream.subprotocol})
+            accept_message = {"type": "websocket.accept"}
+
+            # Return a subprotocol only when the browser offered it.
+            if upstream.subprotocol is not None:
+                if upstream.subprotocol not in client_subprotocols:
+                    raise RuntimeError(
+                        "Upstream selected an unrequested WebSocket subprotocol"
+                    )
+                accept_message["subprotocol"] = upstream.subprotocol
+
+            await send(accept_message)
+
             client_disconnected = asyncio.Event()
-            encrypted_password = getattr(session, "encrypted_novnc_password", "")
+            encrypted_password = getattr(
+                session,
+                "encrypted_novnc_password",
+                "",
+            )
+
             if encrypted_password:
-                await _prepare_rfb_connection(upstream, receive, send, encrypted_password)
+                await _prepare_rfb_connection(
+                    upstream,
+                    receive,
+                    send,
+                    encrypted_password,
+                )
 
             async def client_to_upstream():
                 while True:
                     try:
                         message = await asyncio.wait_for(
-                            receive(), timeout=float(settings.NOVNC_PROXY_IDLE_TIMEOUT_SECONDS)
+                            receive(),
+                            timeout=float(
+                                settings.NOVNC_PROXY_IDLE_TIMEOUT_SECONDS
+                            ),
                         )
                     except asyncio.TimeoutError:
                         await upstream.close(code=1001)
                         return
+
                     if message["type"] == "websocket.disconnect":
                         client_disconnected.set()
-                        await upstream.close(code=message.get("code", 1000))
+                        await upstream.close(
+                            code=message.get("code", 1000)
+                        )
                         return
+
                     if message["type"] == "websocket.receive":
-                        data = message.get("bytes") if message.get("bytes") is not None else message.get("text")
+                        data = (
+                            message.get("bytes")
+                            if message.get("bytes") is not None
+                            else message.get("text")
+                        )
                         if data is not None:
                             await upstream.send(data)
 
             async def upstream_to_client():
                 iterator = upstream.__aiter__()
+
                 while True:
                     try:
                         data = await asyncio.wait_for(
-                            iterator.__anext__(), timeout=float(settings.NOVNC_PROXY_IDLE_TIMEOUT_SECONDS)
+                            iterator.__anext__(),
+                            timeout=float(
+                                settings.NOVNC_PROXY_IDLE_TIMEOUT_SECONDS
+                            ),
                         )
                     except StopAsyncIteration:
                         return
                     except asyncio.TimeoutError:
                         await upstream.close(code=1001)
                         return
-                    key = "bytes" if isinstance(data, bytes) else "text"
-                    await send({"type": "websocket.send", key: data})
 
-            tasks = [asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())]
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    key = "bytes" if isinstance(data, bytes) else "text"
+                    await send({
+                        "type": "websocket.send",
+                        key: data,
+                    })
+
+            tasks = [
+                asyncio.create_task(client_to_upstream()),
+                asyncio.create_task(upstream_to_client()),
+            ]
+
+            done, pending = await asyncio.wait(
+                tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
             for task in pending:
                 task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+
+            await asyncio.gather(
+                *pending,
+                return_exceptions=True,
+            )
+
             for task in done:
                 task.result()
+
             if not client_disconnected.is_set():
-                await send({"type": "websocket.close", "code": getattr(upstream, "close_code", None) or 1000})
+                await send({
+                    "type": "websocket.close",
+                    "code": getattr(
+                        upstream,
+                        "close_code",
+                        None,
+                    ) or 1000,
+                })
+
     except asyncio.CancelledError:
         raise
     except Exception:
-        await send({"type": "websocket.close", "code": 1011})
+        logger.exception(
+            "noVNC WebSocket proxy failed",
+            extra={
+                "session_id": str(session_id),
+                "child_container": session.child_container_name,
+                "asset": asset,
+            },
+        )   
+        await send({
+            "type": "websocket.close",
+            "code": 1011,
+        })
 
 
 class BrokerProxyRouter:

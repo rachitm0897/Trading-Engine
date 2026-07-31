@@ -9,6 +9,8 @@ from django.utils import timezone
 
 from apps.accounts.models import BrokerAccount
 from apps.audit.models import OperationAttempt
+from apps.broker_gateway.models import BrokerGatewaySession
+from apps.execution.modes import RunType
 from apps.allocation.models import AllocationDecision, RebalancePolicy, StrategyCapitalSnapshot
 from apps.allocation.services import create_flow
 from apps.instruments.models import BrokerContract, Instrument
@@ -78,8 +80,27 @@ def test_transaction_cost_penalty_reduces_turnover():
 
 
 def _optimization_case():
-    account = BrokerAccount.objects.create(account_id="DU-OPT", net_liquidation=10000, available_cash=10000)
-    portfolio = TradingPortfolio.objects.create(name="Optimized", account=account)
+    suffix = BrokerAccount.objects.count() + 1
+    account = BrokerAccount.objects.create(
+        account_id=f"DU-OPT-{suffix}",
+        net_liquidation=10000,
+        available_cash=10000,
+        is_reconciled=True,
+    )
+    session = BrokerGatewaySession.objects.create(
+        display_name=f"Optimizer Paper {suffix}",
+        username_hint="optimizer",
+        mode="paper",
+        status=BrokerGatewaySession.Status.CONNECTED,
+        child_container_name=f"optimizer-paper-{suffix}",
+        encrypted_gateway_token="test",
+        encrypted_novnc_password="test",
+        commands_enabled=True,
+        last_gateway_state={"connected": True, "reconciled": True, "mode": "paper"},
+    )
+    portfolio = TradingPortfolio.objects.create(
+        name="Optimized", account=account, gateway_session=session,
+    )
     instruments = [Instrument.objects.create(symbol=symbol) for symbol in ["AAA", "BBB"]]
     for index, instrument in enumerate(instruments, start=1):
         BrokerContract.objects.create(instrument=instrument, conid=1000 + index)
@@ -137,6 +158,7 @@ def test_optimization_targets_use_existing_rebalance_and_sizing_pipeline():
         optimization,
         "optimized-rebalance-1",
         mode="PAPER",
+        run_type=RunType.EXECUTION,
         strict_market_state=True,
     )
     assert rebalance.target_source == "PORTFOLIO_OPTIMIZATION"
@@ -165,7 +187,7 @@ def test_failed_optimization_requires_explicit_retry_and_preserves_attempts(monk
     assert [(item.status,item.retryable) for item in attempts]==[("FAILED",True),("COMPLETED",False)]
 
 
-def test_optimization_preview_api_queues_then_task_builds_metrics_targets_and_shadow_trades(client):
+def test_optimization_preview_api_queues_then_task_builds_metrics_targets_and_preview_trades(client):
     portfolio, _, _ = _optimization_case()
     RebalancePolicy.objects.create(portfolio=portfolio, maximum_turnover="2", minimum_trade_notional="1", fee_buffer="0")
     result = client.post(
@@ -183,7 +205,8 @@ def test_optimization_preview_api_queues_then_task_builds_metrics_targets_and_sh
     assert body["status"] == "COMPLETED"
     assert body["expected_volatility"] is not None
     assert len(body["targets"]) == 2
-    assert body["rebalance"]["mode"] == "SHADOW"
+    assert body["rebalance"]["mode"] == "PAPER"
+    assert body["rebalance"]["run_type"] == "PREVIEW"
     assert body["planned_trades"]
     assert not OrderIntent.objects.exists()
 
@@ -194,6 +217,12 @@ def test_optimization_preview_api_queues_then_task_builds_metrics_targets_and_sh
 ])
 def test_deposits_and_withdrawals_recalculate_post_flow_optimized_weights(flow_type, amount, expected_nav, expected_cash):
     portfolio, instruments, _ = _optimization_case()
+    RebalancePolicy.objects.create(
+        portfolio=portfolio,
+        maximum_turnover="2",
+        minimum_trade_notional="1",
+        fee_buffer="0",
+    )
     strategy = _allocated_strategy(portfolio, instruments[0], f"Flow strategy {flow_type}", 10000)
     allocation = create_flow(
         portfolio,
@@ -207,9 +236,10 @@ def test_deposits_and_withdrawals_recalculate_post_flow_optimized_weights(flow_t
     assert allocation.optimization_run.nav == expected_nav
     assert Decimal(allocation.snapshot["post_flow_cash"]) == expected_cash
     rebalance = allocation.optimization_run.rebalances.get()
-    assert rebalance.mode == "SHADOW"
+    assert rebalance.mode == "PAPER"
+    assert rebalance.run_type == "EXECUTION"
     assert rebalance.target_source == "PORTFOLIO_OPTIMIZATION"
-    assert not OrderIntent.objects.filter(rebalance=rebalance).exists()
+    assert OrderIntent.objects.filter(rebalance=rebalance).exists()
     assert strategy.allocated_capital == Decimal("10000")
     assert not AllocationDecision.objects.filter(run=allocation).exists()
     assert not StrategyCapitalSnapshot.objects.filter(allocation_run=allocation).exists()
@@ -273,7 +303,7 @@ def test_optimization_application_is_one_time_and_identical_retry_returns_existi
         HTTP_IDEMPOTENCY_KEY="apply-once",
     )
     assert first.status_code==202
-    apply_optimization_run_task.run(preview["id"],"apply-once","SHADOW")
+    apply_optimization_run_task.run(preview["id"],"apply-once","PAPER")
     retry = client.post(
         "/api/v1/portfolio-optimization/run/",
         data=payload,
@@ -295,7 +325,30 @@ def test_optimization_application_is_one_time_and_identical_retry_returns_existi
     run = PortfolioOptimizationRun.objects.get(pk=preview["id"])
     assert run.application_status == "APPLIED"
     assert run.rebalances.count() == 2
-    assert run.applied_rebalance.mode == "SHADOW"
+    assert run.applied_rebalance.mode == "PAPER"
+    assert run.applied_rebalance.run_type == "EXECUTION"
+
+
+def test_optimizer_apply_rechecks_policy_and_universe_readiness():
+    portfolio, _, policy = _optimization_case()
+    run = run_optimization(
+        portfolio,
+        "optimizer-readiness-preview",
+        refresh_history=False,
+    )
+    policy.enabled = False
+    policy.save(update_fields=["enabled", "updated_at"])
+
+    from apps.portfolio_optimization.services import (
+        OptimizationError,
+        apply_optimization_run,
+    )
+
+    with pytest.raises(OptimizationError, match="must still be enabled"):
+        apply_optimization_run(run, "optimizer-readiness-apply")
+
+    run.refresh_from_db()
+    assert run.applied_rebalance_id is None
 
 
 def test_universe_size_is_rejected_on_save_and_revalidated_before_optimization(client):

@@ -12,7 +12,12 @@ from .configuration import (
 )
 from .models import BrokerGatewaySession, BrokerGatewaySessionSecret
 from .qch import QCHError
-from .services import inspect_gateway_session, provision_session, record_provision_failure
+from .services import (
+    inspect_gateway_session,
+    provision_session,
+    record_provision_failure,
+    synchronize_local_paper_gateway,
+)
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=5)
@@ -64,14 +69,18 @@ def monitor_broker_sessions():
             recovered.append(str(session_id))
 
     results = {}
-    for session in BrokerGatewaySession.objects.exclude(
+    sessions=BrokerGatewaySession.objects.exclude(
         status__in=[
             BrokerGatewaySession.Status.CREATING,
             BrokerGatewaySession.Status.LOGIN_FAILED,
             BrokerGatewaySession.Status.STOPPING,
             BrokerGatewaySession.Status.DELETED,
         ]
-    ).order_by("created_at"):
+    )
+    local_name=str(getattr(settings,"LOCAL_PAPER_GATEWAY_CONTAINER_NAME","") or "")
+    if local_name:
+        sessions=sessions.exclude(child_container_name=local_name)
+    for session in sessions.order_by("created_at"):
         try:
             results[str(session.pk)] = inspect_gateway_session(session).status
         except Exception as exc:
@@ -88,5 +97,10 @@ def monitor_broker_sessions():
 
 @shared_task
 def sync_broker_events():
-    # Kept as the established task name; monitoring now owns independent per-session sync.
-    return monitor_broker_sessions()
+    local=synchronize_local_paper_gateway()
+    managed=monitor_broker_sessions()
+    return {
+        "local_paper_session_id":str(local.pk) if local else None,
+        "local_paper_status":local.status if local else "disabled",
+        "managed":managed,
+    }

@@ -18,6 +18,39 @@ def test_gateway_auth_and_safe_retry():
     assert client.health()["connected"] is True
     assert responses.calls[1].request.headers["Authorization"] == "Bearer secret"
 
+
+@responses.activate
+def test_idempotent_market_subscription_retries_transient_gateway_500():
+    url = "http://gateway/api/v1/market-data/subscriptions/"
+    responses.post(url, status=500, json={"ok": False})
+    responses.post(
+        url,
+        status=202,
+        json={"ok": True, "data": {"command_id": 12, "status": "PENDING"}},
+    )
+    client = GatewayClient(
+        GatewayRoute("test-subscribe", "http://gateway/api/v1", "secret")
+    )
+
+    result = client.subscribe_market_data(
+        {
+            "subscription_key": "subscription-1",
+            "instrument_id": 1,
+            "conid": 123,
+            "symbol": "TEST",
+            "timeframe": "1m",
+        },
+        "market-subscribe:subscription-1",
+    )
+
+    assert result["command_id"] == 12
+    assert len(responses.calls) == 2
+    assert (
+        responses.calls[0].request.headers["Idempotency-Key"]
+        == responses.calls[1].request.headers["Idempotency-Key"]
+    )
+
+
 @responses.activate
 def test_gateway_contract_search_waits_for_durable_command():
     responses.post("http://gateway/api/v1/contracts/search/",json={"ok":True,"data":{"command_id":7,"status":"PENDING"}},status=202)

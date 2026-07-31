@@ -50,7 +50,7 @@ class ImplementationStatus(models.TextChoices):
     BACKTESTED = "BACKTESTED"
     SCORED = "SCORED"
     APPROVED_FOR_RECOMMENDATION = "APPROVED_FOR_RECOMMENDATION"
-    SHADOW_VALIDATED = "SHADOW_VALIDATED"
+    PAPER_VALIDATED = "PAPER_VALIDATED"
     BUILDER_READY = "BUILDER_READY"
     # Kept for compatibility with deployments promoted under the legacy lifecycle.
     APPROVED = "APPROVED"

@@ -14,6 +14,12 @@ from apps.broker_gateway.client import (
     GatewayTransportError,
 )
 from apps.core.idempotency import IdempotencyConflict, canonical_request_hash
+from apps.execution.modes import (
+    ExecutionMode,
+    require_execution_mode_chain,
+    require_live_trading_allowed,
+    require_portfolio_execution_mode,
+)
 from apps.oms.models import Order, OrderIntent
 from apps.oms.services import create_order, transition
 from apps.reconciliation.models import ReconciliationBreak
@@ -57,6 +63,10 @@ def enqueue_broker_command(order, command_type, payload, idempotency_key):
     session = order.intent.portfolio.gateway_session
     if session is None:
         raise ValueError("Order portfolio is not bound to a Gateway session")
+    mode = require_portfolio_execution_mode(
+        order.intent.portfolio,
+        order.intent.mode,
+    )
     command_type = str(command_type).upper()
     if command_type not in BrokerCommand.CommandType.values:
         raise ValueError(f"Unsupported broker command type: {command_type}")
@@ -71,6 +81,7 @@ def enqueue_broker_command(order, command_type, payload, idempotency_key):
             "command_type": command_type,
             "request_payload": normalized,
             "request_hash": request_hash,
+            "mode": mode,
             "next_attempt_at": timezone.now(),
         },
     )
@@ -78,6 +89,7 @@ def enqueue_broker_command(order, command_type, payload, idempotency_key):
         command.order_id != order.pk
         or command.command_type != command_type
         or command.request_hash != request_hash
+        or command.mode != mode
     ):
         raise IdempotencyConflict(
             "Broker command idempotency key was reused with a different request"
@@ -88,12 +100,18 @@ def enqueue_broker_command(order, command_type, payload, idempotency_key):
 def _place_payload(order):
     intent = order.intent
     instrument = intent.instrument
+    contract = getattr(instrument, "broker_contract", None)
     return {
         "internal_id": order.internal_id,
         "account": intent.portfolio.account.account_id,
+        "conid": contract.conid if contract else None,
         "symbol": instrument.symbol,
+        "local_symbol": contract.local_symbol if contract else instrument.symbol,
         "asset_class": instrument.asset_class,
         "exchange": instrument.exchange,
+        "primary_exchange": (
+            contract.primary_exchange if contract else instrument.primary_exchange
+        ),
         "currency": instrument.currency,
         "side": intent.side,
         "quantity": str(order.quantity),
@@ -319,13 +337,21 @@ def _schedule_retry(command_id, reason, *, clear_uncertainty=False):
 
 
 def _final_dispatch_checks(command, client):
-    if command.command_type == BrokerCommand.CommandType.CANCEL:
-        return
     order = command.order
     intent = order.intent
     session = command.gateway_session
-    if intent.mode.upper() != "PAPER" or session.mode.lower() != "paper":
-        raise ValueError("Automatic broker dispatch is restricted to PAPER mode")
+    state = client.health() or {}
+    mode = require_execution_mode_chain(
+        intent_mode=intent.mode,
+        command_mode=command.mode,
+        session_mode=session.mode,
+        health_mode=state.get("mode"),
+    )
+    if not state.get("connected"):
+        raise GatewayError("Final dispatch requires a connected Gateway")
+    if command.command_type == BrokerCommand.CommandType.CANCEL:
+        return
+    require_live_trading_allowed(mode)
     if (
         settings.GLOBAL_KILL_SWITCH
         or intent.portfolio.kill_switch
@@ -340,14 +366,11 @@ def _final_dispatch_checks(command, client):
         resolved=False,
     ).exists():
         raise GatewayError("Final dispatch blocked until broker reconciliation is clean")
-    state = client.health() or {}
     if (
-        not state.get("connected")
-        or not state.get("reconciled")
-        or str(state.get("mode", "")).lower() != "paper"
+        not state.get("reconciled")
     ):
         raise GatewayError(
-            "Final dispatch requires a connected, reconciled PAPER Gateway"
+            f"Final dispatch requires a connected, reconciled {mode} Gateway"
         )
 
 
@@ -638,8 +661,8 @@ def recover_stuck_broker_commands(now=None):
 
 
 @transaction.atomic
-def claim_next_order_intent():
-    intent = (
+def claim_next_order_intent(exclude_ids=None):
+    candidates = (
         OrderIntent.objects.select_for_update(skip_locked=True)
         .annotate(
             _has_order=Exists(
@@ -649,12 +672,14 @@ def claim_next_order_intent():
         .filter(
             operation_status="PENDING",
             eligible=True,
-            mode="PAPER",
+            mode__in=ExecutionMode.values,
             _has_order=False,
         )
         .order_by("execution_priority", "created_at", "pk")
-        .first()
     )
+    if exclude_ids:
+        candidates = candidates.exclude(pk__in=exclude_ids)
+    intent = candidates.first()
     if intent is None:
         return None
     if OperationAttempt.objects.filter(
@@ -772,7 +797,27 @@ def execute_order_intent(intent_id):
         if hasattr(intent, "order"):
             return enqueue_place_command(intent.order)
         return None
-    if intent.mode.upper() != "PAPER" or not intent.eligible:
+    if not intent.eligible:
+        return None
+    try:
+        require_portfolio_execution_mode(intent.portfolio, intent.mode)
+    except ValueError as exc:
+        OrderIntent.objects.filter(pk=intent.pk).update(
+            operation_status="FAILED",
+            operation_error=str(exc)[:1000],
+            retryable=False,
+            eligible=False,
+        )
+        OperationAttempt.objects.filter(
+            operation_type="ORDER_INTENT",
+            operation_id=str(intent.pk),
+            attempt_number=intent.attempt_count,
+        ).update(
+            status="FAILED",
+            retryable=False,
+            error=str(exc)[:1000],
+            completed_at=timezone.now(),
+        )
         return None
     try:
         state = GatewayClient.for_portfolio(intent.portfolio).health()
@@ -855,10 +900,12 @@ def execute_order_intent(intent_id):
 def process_order_intents(limit=None):
     limit = int(limit or getattr(settings, "ORDER_INTENT_BATCH_SIZE", 50))
     result = {"claimed": 0, "commands_created": 0}
+    attempted = set()
     for _ in range(limit):
-        intent_id = claim_next_order_intent()
+        intent_id = claim_next_order_intent(exclude_ids=attempted)
         if intent_id is None:
             break
+        attempted.add(intent_id)
         result["claimed"] += 1
         if execute_order_intent(intent_id) is not None:
             result["commands_created"] += 1

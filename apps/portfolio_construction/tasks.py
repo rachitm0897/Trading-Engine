@@ -2,6 +2,7 @@ from celery import shared_task
 from django.utils import timezone
 
 from apps.audit.models import OperationAttempt
+from apps.execution.modes import RunType
 
 from .models import PortfolioConstructionRun
 from .services import apply_construction_run, plan_construction_rebalance, run_construction
@@ -18,7 +19,7 @@ def execute_construction_run(run_id, refresh_history=True, create_preview=True):
             plan_construction_rebalance(
                 run,
                 f"{run.idempotency_key}:rebalance",
-                mode="SHADOW",
+                run_type=RunType.PREVIEW,
                 strict_market_state=False,
             )
     except Exception as exc:
@@ -39,7 +40,7 @@ def execute_construction_run(run_id, refresh_history=True, create_preview=True):
 
 
 @shared_task
-def apply_construction_run_task(run_id, idempotency_key, mode="SHADOW"):
+def apply_construction_run_task(run_id, idempotency_key, mode=None):
     run = PortfolioConstructionRun.objects.get(pk=run_id)
     try:
         run, rebalance, _ = apply_construction_run(run, idempotency_key, mode=mode)

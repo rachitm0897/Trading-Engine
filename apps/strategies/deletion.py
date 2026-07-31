@@ -30,6 +30,7 @@ from .models import (
     StrategySignal,
     StrategyTarget,
     StrategyVersion,
+    StrategyWarmupReadiness,
 )
 from .plugins import get_plugin
 
@@ -373,6 +374,9 @@ def _delete_mutable_records(instance, version_ids):
             strategy_instance=instance
         ).count(),
         "actions": StrategyAction.objects.filter(strategy_instance=instance).count(),
+        "warmup_readiness": StrategyWarmupReadiness.objects.filter(
+            strategy_instance=instance
+        ).count(),
         "construction_assignments_detached": instance.construction_assignments.count(),
     }
 
@@ -392,6 +396,7 @@ def _delete_mutable_records(instance, version_ids):
     StrategyAttributedPosition.objects.filter(strategy_instance=instance).delete()
     StrategyAllocation.objects.filter(strategy_instance=instance).delete()
     StrategyAction.objects.filter(strategy_instance=instance).delete()
+    StrategyWarmupReadiness.objects.filter(strategy_instance=instance).delete()
     instance.construction_assignments.update(created_strategy_instance=None)
     StrategyVersion.objects.filter(strategy_instance=instance).delete()
     OutboxEvent.objects.select_for_update().filter(

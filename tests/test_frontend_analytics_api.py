@@ -9,8 +9,9 @@ from apps.instruments.models import BrokerContract, Instrument
 from apps.market_streams.models import IndicatorValue, MarketBar
 from apps.oms.models import Order, OrderIntent
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
-from apps.strategies.framework import create_instance, enable_instance, evaluate_instance
+from apps.strategies.framework import create_instance, evaluate_instance
 from tests.managed_gateway import bind_managed_gateway
+from tests.strategy_activation import activate_strategy
 
 pytestmark = pytest.mark.django_db
 
@@ -73,7 +74,7 @@ def test_strategy_chart_maps_persisted_market_and_strategy_facts(client, portfol
         instrument_id=instrument.pk, timeframe="5m", parameters={"direction": "LONG"},
         target_configuration={"target_weight": "0.10"}, qualify=False,
     )
-    enable_instance(instance)
+    activate_strategy(instance)
     IndicatorValue.objects.create(
         instrument=instrument, bar=bar, indicator="sma", indicator_name="sma", indicator_role="",
         implementation_version=1, requirement_identity_hash="c"*64, value=99, parameters={"window": 2},

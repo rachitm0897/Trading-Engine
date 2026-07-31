@@ -66,15 +66,15 @@ def promote_strategy(
             "exact_semantic_match": True,
             "supported_frequency": "1d",
             "supported_direction": "LONG",
-            "status": "BUILDER_READY" if approval_evidence.get("shadow_validated") else "APPROVED_FOR_RECOMMENDATION",
+            "status": "BUILDER_READY" if approval_evidence.get("paper_validated") else "APPROVED_FOR_RECOMMENDATION",
             "executable_strategy_definition": definition,
             "default_parameters": candidate.best_parameters,
             "approval_record": {"actor": approval_actor, "at": timezone.now().isoformat(), **approval_evidence},
         },
     )
     readiness.approved = True
-    readiness.builder_ready = bool(approval_evidence.get("shadow_validated"))
-    readiness.blocking_reasons = [] if readiness.builder_ready else ["SHADOW_VALIDATION_REQUIRED"]
+    readiness.builder_ready = bool(approval_evidence.get("paper_validated"))
+    readiness.blocking_reasons = [] if readiness.builder_ready else ["PAPER_VALIDATION_REQUIRED"]
     readiness.save(update_fields=["approved", "builder_ready", "blocking_reasons"])
     AuditEvent.objects.create(
         event_type="research.strategy.promoted",
