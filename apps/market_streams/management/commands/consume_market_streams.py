@@ -4,7 +4,7 @@ import signal
 import time
 from django.conf import settings
 from django.core.management.base import BaseCommand
-from apps.event_bus.services import route_dead_letter
+from apps.event_bus.services import deterministic_invalid_event_error,route_dead_letter
 from apps.event_bus.models import StreamHealthMetric
 from apps.market_streams.services import consume_market_event
 
@@ -19,9 +19,9 @@ class Command(BaseCommand):
         if not settings.KAFKA_ENABLED:
             self.stdout.write("Kafka is disabled; market consumer exiting")
             return
-        from confluent_kafka import Consumer
+        from confluent_kafka import Consumer, KafkaError
         consumer=Consumer({"bootstrap.servers":settings.KAFKA_BOOTSTRAP_SERVERS,
-            "group.id":"finflock-backend-market-persistence-v1","enable.auto.commit":False,
+            "group.id":"finflock-backend-market-persistence-v2","enable.auto.commit":False,
             "auto.offset.reset":"earliest"})
         consumer.subscribe(["market.bars.v1","market.indicators.v1","market.quality.v1"])
         running=True
@@ -43,17 +43,54 @@ class Command(BaseCommand):
                     if options["once"]:break
                     continue
                 if message.error():
-                    raise RuntimeError(str(message.error()))
+                    kafka_error = message.error()
+
+                    if kafka_error.code() == KafkaError._PARTITION_EOF:
+                        continue
+
+                    error_message = str(kafka_error)
+
+                    heartbeat(
+                        "DEGRADED",
+                        kafka_error_code=kafka_error.code(),
+                        error=error_message[:255],
+                        retryable=not kafka_error.fatal(),
+                    )
+
+                    self.stderr.write(
+                        self.style.WARNING(
+                            f"Kafka consumer error: {error_message}"
+                        )
+                    )
+
+                    if kafka_error.fatal():
+                        raise RuntimeError(error_message)
+
+                    if options["once"]:
+                        raise RuntimeError(error_message)
+
+                    time.sleep(2)
+                    continue
                 envelope=None
                 processing_error=None
                 dead_letter=None
                 try:
                     envelope=json.loads(message.value())
-                    consume_market_event("market-persistence-v1",envelope)
+                    consume_market_event("market-persistence-v2",envelope)
                 except Exception as exc:
                     processing_error=str(exc)
+                    if not deterministic_invalid_event_error(exc):
+                        heartbeat(
+                            "DEGRADED",
+                            topic=message.topic(),
+                            partition=message.partition(),
+                            offset=message.offset(),
+                            retryable=True,
+                            error=str(exc)[:255],
+                        )
+                        raise
                     dead_letter=route_dead_letter(message.topic(),envelope or {"raw":message.value().decode(errors="replace")},
-                        exc,"market-persistence-v1")
+                        exc,"market-persistence-v2")
                 consumer.commit(message=message,asynchronous=False)
                 StreamHealthMetric.objects.update_or_create(component="backend-market-consumer",metric="last_event",
                     defaults={"status":"DEGRADED" if processing_error else "HEALTHY","value":{"topic":message.topic(),

@@ -4,12 +4,14 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
+from apps.execution.modes import normalize_gateway_mode
+
 
 def normalize_broker_mode(value):
-    mode = str(value or "").strip().lower()
-    if mode not in {"paper", "live"}:
-        raise ValidationError("IBKR mode must be exactly paper or live")
-    return mode
+    try:
+        return normalize_gateway_mode(value)
+    except ValueError as exc:
+        raise ValidationError("IBKR mode must be exactly paper or live") from exc
 
 
 class BrokerGatewaySession(models.Model):
@@ -113,6 +115,7 @@ class BrokerSyncCursor(models.Model):
         BrokerGatewaySession, on_delete=models.PROTECT, related_name="sync_cursors", null=True, blank=True
     )
     name = models.CharField(max_length=64, default="gateway-events")
+    connection_generation = models.CharField(max_length=64, blank=True)
     last_sequence = models.BigIntegerField(default=0)
     last_synced_at = models.DateTimeField(null=True, blank=True)
     last_error = models.CharField(max_length=1000, blank=True)

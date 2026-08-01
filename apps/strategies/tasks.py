@@ -8,6 +8,7 @@ from .evaluation_jobs import (
     process_strategy_evaluation_jobs,
     recover_stuck_strategy_evaluation_jobs,
 )
+from .framework import StrategyActivationError, activate_instance
 
 
 def _run_with_heartbeat(callback):
@@ -42,3 +43,21 @@ def execute_strategy_evaluation_jobs(limit=None):
 @shared_task
 def recover_strategy_evaluation_jobs():
     return _run_with_heartbeat(recover_stuck_strategy_evaluation_jobs)
+
+
+@shared_task
+def activate_strategy_instance(instance_id, action_id=None, construction_run_id=None):
+    try:
+        instance=activate_instance(
+            instance_id,action_id=action_id,construction_run_id=construction_run_id)
+        return {
+            "strategy_instance_id":instance.pk,
+            "activation_status":instance.state,
+        }
+    except StrategyActivationError as exc:
+        return {
+            "strategy_instance_id":instance_id,
+            "activation_status":"BLOCKED",
+            "block_reason":str(exc),
+            "retryable":exc.retryable,
+        }

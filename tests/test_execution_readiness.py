@@ -85,7 +85,6 @@ def healthy_flink(now, *, missing=(), stopped=(), checkpoint_age=5):
 
 def healthy_runtime(settings):
     settings.KAFKA_ENABLED = True
-    settings.NEW_EXECUTION_MODE = "PAPER"
     settings.EXECUTION_REQUIRED_FLINK_JOBS = DEFAULT_REQUIRED_FLINK_JOBS
     settings.FLINK_CHECKPOINT_STALE_SECONDS = 180
     settings.MARKET_RAW_PRODUCER_HEARTBEAT_STALE_SECONDS = 30
@@ -96,6 +95,23 @@ def healthy_runtime(settings):
     settings.TARGET_COORDINATION_BACKLOG_THRESHOLD = 100
     settings.PENDING_INTENT_MAX_AGE_SECONDS = 60
     settings.BROKER_COMMAND_MAX_AGE_SECONDS = 60
+    settings.KAFKA_HEALTH_STALE_SECONDS = 60
+    settings.OUTBOX_PUBLISHER_HEARTBEAT_STALE_SECONDS = 30
+    StreamHealthMetric.objects.create(
+        component="kafka",
+        metric="connectivity",
+        status="HEALTHY",
+        value={
+            "enabled": True,
+            "topics": list(settings.EXECUTION_REQUIRED_KAFKA_TOPICS),
+        },
+    )
+    StreamHealthMetric.objects.create(
+        component="outbox-publisher",
+        metric="heartbeat",
+        status="HEALTHY",
+        value={"published": 0, "failed": 0},
+    )
     StreamHealthMetric.objects.create(
         component="market-raw-producer",
         metric="heartbeat",
@@ -129,7 +145,7 @@ def paper_scope(now):
         encrypted_gateway_token="encrypted",
         encrypted_novnc_password="encrypted",
         commands_enabled=True,
-        last_gateway_state={"connected": True, "reconciled": True},
+        last_gateway_state={"connected": True, "reconciled": True, "mode": "paper"},
         last_checked_at=now,
     )
     portfolio = TradingPortfolio.objects.create(
@@ -291,7 +307,11 @@ def test_stale_market_unreconciled_gateway_and_uncertain_order_block_portfolio(
     InstrumentMarketState.objects.filter(instrument=instrument).update(
         latest_event_at=now - timedelta(hours=1)
     )
-    session.last_gateway_state = {"connected": True, "reconciled": False}
+    session.last_gateway_state = {
+        "connected": True,
+        "reconciled": False,
+        "mode": "paper",
+    }
     session.save(update_fields=["last_gateway_state", "updated_at"])
     account.is_reconciled = False
     account.save(update_fields=["is_reconciled", "updated_at"])

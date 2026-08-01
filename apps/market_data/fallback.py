@@ -79,19 +79,69 @@ def _metric_increment(name, *, provider, reason=""):
 
 def _block_strategies(subscription, reason):
     message = str(reason)[:255]
-    return StrategyInstance.objects.filter(
-        enabled=True, instrument_id=subscription.instrument_id, timeframe=subscription.timeframe,
-    ).update(state="BLOCKED", block_reason=message)
+    instances=StrategyInstance.objects.filter(
+        enabled=True,portfolio__gateway_session=subscription.gateway_session,
+        instrument_id=subscription.instrument_id,timeframe=subscription.timeframe,
+    )
+    updated=0
+    for instance in instances:
+        state_data=dict(instance.state_data or {})
+        if instance.state!="BLOCKED" and not state_data.get("market_data_resume_state"):
+            state_data["market_data_resume_state"]=instance.state
+            state_data["market_data_blocked_at"]=timezone.now().isoformat()
+        instance.state="BLOCKED"
+        instance.block_reason=message
+        instance.state_data=state_data
+        instance.save(update_fields=["state","block_reason","state_data","updated_at"])
+        updated+=1
+        construction_run_id=instance.target_configuration.get("construction_run_id")
+        if construction_run_id:
+            from apps.portfolio_construction.services import record_strategy_activation_result
+            record_strategy_activation_result(construction_run_id,instance.pk)
+    return updated
 
 
 def _unblock_strategies(subscription):
-    return StrategyInstance.objects.filter(
-        enabled=True, instrument_id=subscription.instrument_id, timeframe=subscription.timeframe,
+    from apps.strategies.models import StrategyWarmupReadiness
+
+    instances=StrategyInstance.objects.filter(
+        enabled=True,portfolio__gateway_session=subscription.gateway_session,
+        instrument_id=subscription.instrument_id,timeframe=subscription.timeframe,
         state="BLOCKED",
     ).filter(
         Q(block_reason__startswith="Market data unavailable:") | Q(block_reason__startswith="IBKR error ")
         | Q(block_reason__startswith="FINNHUB_") | Q(block_reason__startswith="MARKET_DATA_"),
-    ).update(state="WARMING_UP", block_reason="", warmup_last_progress_at=timezone.now())
+    )
+    from apps.market_streams.services import refresh_strategy_warmup_state
+    updated=0
+    for instance in instances:
+        state_data=dict(instance.state_data or {})
+        resume_state=str(state_data.pop("market_data_resume_state","") or "")
+        state_data.pop("market_data_blocked_at",None)
+        audited_ready=bool(
+            instance.warmup_completed_at
+            and instance.first_evaluation_completed_at
+            and StrategyWarmupReadiness.objects.filter(
+                strategy_instance=instance,
+                strategy_version__version=instance.version,
+                is_current=True,
+            ).exists()
+        )
+        active_states={
+            "READY_WAITING_FOR_LIVE_BAR","FLAT","ENTRY_PENDING","PARTIALLY_LONG",
+            "LONG","EXIT_PENDING","PARTIALLY_SHORT","SHORT",
+        }
+        instance.state=resume_state if audited_ready and resume_state in active_states else "WARMING_UP"
+        instance.block_reason=""
+        instance.state_data=state_data
+        instance.warmup_last_progress_at=timezone.now()
+        instance.save(update_fields=[
+            "state","block_reason","state_data","warmup_last_progress_at","updated_at",
+        ])
+        if instance.state=="WARMING_UP":
+            refresh_strategy_warmup_state(instance)
+        updated+=1
+    return updated
 
 
 def _canonical_outbox_key(payload):

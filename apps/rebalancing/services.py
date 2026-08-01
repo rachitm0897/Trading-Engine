@@ -1,8 +1,16 @@
+from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from apps.audit.models import OutboxEvent
 from apps.core.idempotency import canonical_request_hash, require_matching_request
+from apps.execution.modes import (
+    ExecutionMode,
+    RunType,
+    normalize_run_type,
+    require_portfolio_execution_mode,
+)
 from apps.allocation.models import (
     OrderIntentAttribution,
     PortfolioTargetSnapshot,
@@ -36,7 +44,7 @@ def _reference_prices(portfolio, prices, strict):
         result.update({key:D(str(value)) for key,value in prices.items() if not str(key).startswith("lot:")})
     for state in InstrumentMarketState.objects.filter(instrument_id__in=set(result) | set(
             PortfolioPosition.objects.filter(portfolio=portfolio).values_list("instrument_id", flat=True))):
-        if state.is_usable() and state.reference_price:
+        if state.is_execution_usable() and state.reference_price:
             result[state.instrument_id] = D(state.reference_price)
         elif strict:
             unusable.add(state.instrument_id)
@@ -78,11 +86,35 @@ def _portfolio_order_limit(snapshot, quantity, notional):
     return ""
 
 
+def _execution_adv(instrument, target_snapshot, policy):
+    """Resolve only a registered, final, fresh live execution ADV."""
+    from django.conf import settings
+    from apps.market_streams.models import IndicatorValue
+
+    window = int(getattr(settings, "EXECUTION_AVERAGE_VOLUME_WINDOW", 20))
+    cutoff = timezone.now() - timedelta(seconds=int(policy.price_staleness_limit))
+    query = IndicatorValue.objects.filter(
+        instrument=instrument,
+        is_final=True,
+        processing_mode="LIVE",
+        parameters={"window": window},
+        event_time__gte=cutoff,
+        value__isnull=False,
+    ).filter(
+        Q(indicator_name="average_volume") | Q(indicator="average_volume")
+    )
+    timeframe=str(getattr(settings,"EXECUTION_ADV_TIMEFRAME","RUNTIME") or "").strip()
+    if timeframe.upper()!="RUNTIME":
+        query=query.filter(timeframe=timeframe)
+    row=query.order_by("-event_time", "-pk").first()
+    return D(row.value) if row is not None else D(0)
+
+
 @transaction.atomic
 def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None, mode=None,
                    policy=None, strict_market_state=True, optimization_run=None, construction_run=None,
                    target_snapshot=None, available_cash=None, defer=False, retry_failed=False,
-                   automatic=False):
+                   automatic=False, run_type=RunType.EXECUTION):
     explicit_sources = sum(bool(value) for value in (optimization_run, construction_run, target_snapshot))
     if explicit_sources > 1:
         raise ValueError("A rebalance may use only one immutable target source")
@@ -97,7 +129,11 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
             target_snapshot = build_portfolio_target_snapshot(
                 portfolio,
                 logical_time=timezone.now(),
-                prices=prices,
+                prices=(
+                    None
+                    if strict_market_state and portfolio.gateway_session_id
+                    else prices
+                ),
             )
     if target_snapshot:
         target_snapshot = PortfolioTargetSnapshot.objects.get(pk=target_snapshot.pk)
@@ -105,14 +141,22 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
             raise ValueError("Portfolio target snapshot belongs to another portfolio")
         if target_snapshot.status != "READY":
             raise ValueError("Rejected portfolio target snapshots cannot create a rebalance")
-    policy = policy or RebalancePolicy.objects.filter(portfolio=portfolio).first() or RebalancePolicy.objects.create(portfolio=portfolio)
-    mode = (mode or (target_snapshot.execution_mode if target_snapshot else policy.mode)).upper()
-    if mode not in {"SHADOW", "PAPER"}:
-        raise ValueError("Rebalancing supports SHADOW or PAPER mode only")
-    if target_snapshot and mode == "PAPER" and target_snapshot.execution_mode != "PAPER":
-        raise ValueError("A SHADOW target snapshot cannot be promoted to PAPER")
+    mode = require_portfolio_execution_mode(
+        portfolio,
+        mode,
+    )
+    run_type = normalize_run_type(run_type)
+    policy = policy or RebalancePolicy.objects.filter(portfolio=portfolio).first()
+    if policy is None:
+        policy = RebalancePolicy.objects.create(portfolio=portfolio, mode=mode)
+    elif policy.mode != mode:
+        policy.mode = mode
+        policy.save(update_fields=["mode", "updated_at"])
+    if target_snapshot and target_snapshot.execution_mode != mode:
+        raise ValueError("Target snapshot mode must match the portfolio Gateway session")
     request_hash=canonical_request_hash("rebalance",{
         "portfolio_id":portfolio.pk,"trigger":trigger,"prices":prices,"nav":nav,"mode":mode,
+        "run_type":run_type,
         "policy_id":policy.pk,"strict_market_state":strict_market_state,
         "optimization_run_id":optimization_run.pk if optimization_run else None,
         "construction_run_id":construction_run.pk if construction_run else None,
@@ -120,6 +164,7 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
         "available_cash":available_cash,"automatic":automatic})
     run, created = RebalanceRun.objects.get_or_create(idempotency_key=idempotency_key, defaults={
         "portfolio": portfolio, "policy": policy, "trigger": trigger, "mode": mode,
+        "run_type": run_type,
         "request_hash":request_hash,
         "optimization_run": optimization_run,
         "construction_run": construction_run,
@@ -170,6 +215,21 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
     instrument_ids = set(target_weights) | set(current_rows)
     if target_snapshot:
         instrument_ids |= {int(key) for key in target_snapshot.current_positions}
+        no_op_instruments = {
+            instrument_id
+            for instrument_id in instrument_ids
+            if target_weights.get(instrument_id, D(0)) == 0
+            and instrument_id not in current_rows
+            and D(
+                str(
+                    target_snapshot.current_positions.get(
+                        str(instrument_id), {}
+                    ).get("projected_quantity", 0)
+                )
+            )
+            == 0
+        }
+        instrument_ids -= no_op_instruments
         reference = {
             int(instrument_id): D(str(price))
             for instrument_id, price in target_snapshot.reference_prices.items()
@@ -253,11 +313,15 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
     planned_has_sells = any(x["delta"] < 0 and not x["reason"] for x in candidates)
     run.total_drift = sum(abs(x["drift"]) for x in candidates)
     run.planned_turnover = turnover_used
-    run.phase = "SHADOW_COMPLETE" if mode == "SHADOW" else ("SELLS" if policy.sell_before_buy and planned_has_sells else "BUYS")
-    run.status = "PLANNED" if mode == "SHADOW" else "INTENTS_CREATED"
+    run.phase = (
+        "PREVIEW_COMPLETE"
+        if run_type == RunType.PREVIEW
+        else ("SELLS" if policy.sell_before_buy and planned_has_sells else "BUYS")
+    )
+    run.status = "PLANNED" if run_type == RunType.PREVIEW else "INTENTS_CREATED"
     run.last_recalculated_at = timezone.now()
     run.save(update_fields=["nav","snapshot","total_drift","planned_turnover","phase","status","last_recalculated_at"])
-    if mode == "PAPER":
+    if run_type == RunType.EXECUTION:
         for item in candidates:
             if item["reason"] or not item["delta"]:
                 continue
@@ -286,21 +350,19 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
                     "rebalance_id":run.pk,"portfolio_id":portfolio.pk,"instrument_id":item["instrument"].pk,
                     "side":"BUY" if is_buy else "SELL","quantity":abs(item["delta"]),"order_type":order_type,
                     "time_in_force":tif,"limit_price":limit_price,"strategy_versions":sorted(version_ids)}), source="REBALANCE",
-                origin=OrderIntent.Origin.REBALANCE, mode="PAPER", requires_fresh_price=True,
+                origin=OrderIntent.Origin.REBALANCE, mode=mode, requires_fresh_price=True,
                 execution_priority=item["target_row"].rank, eligible=eligible)
             if strict_market_state:
                 from apps.position_sizing.models import PositionSizingPolicy
                 from apps.position_sizing.services import size_and_record
-                from apps.market_streams.models import IndicatorValue
                 sizing_policy = PositionSizingPolicy.objects.filter(portfolio=portfolio, enabled=True).first() or PositionSizingPolicy.objects.create(portfolio=portfolio)
-                adv_record = IndicatorValue.objects.filter(instrument=item["instrument"], indicator="average_volume").order_by("-event_time").first()
                 limits = target_snapshot.portfolio_risk_limits if target_snapshot else {}
                 broker_limits = {
                     "broker_max_quantity": D(str(limits.get("maximum_order_quantity", intent.quantity))),
                     "short_available": item["weight"] >= 0,
                 }
                 size_and_record(sizing_policy, item["instrument"], intent.side, intent.quantity, item["price"], None, nav,
-                    available_cash, adv_record.value if adv_record and adv_record.value is not None else 0,
+                    available_cash, _execution_adv(item["instrument"], target_snapshot, policy),
                     broker_limits=broker_limits,strategy_limits={},order_intent=intent,
                     idempotency_key=f"sizing:rebalance:{run.pk}:instrument:{item['instrument'].pk}:v1")
             net_contribution = sum(contributions.values(), D(0))
@@ -334,12 +396,13 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
                     allocated_quantity=allocated_quantity)
     OutboxEvent.objects.create(topic="portfolio.rebalance.planned.v1", event_type="portfolio.rebalance.planned",
         aggregate_type="portfolio", aggregate_id=str(portfolio.pk), partition_key=str(portfolio.pk),
-        payload={"rebalance_run_id":run.pk,"mode":mode,"phase":run.phase,"turnover":str(turnover_used),
+        payload={"rebalance_run_id":run.pk,"mode":mode,"run_type":run_type,
+                 "phase":run.phase,"turnover":str(turnover_used),
                  "target_source":run.target_source,"optimization_run_id":optimization_run.pk if optimization_run else None,
                  "construction_run_id":construction_run.pk if construction_run else None,
                  "target_snapshot_id":target_snapshot.pk if target_snapshot else None},
         idempotency_key=f"rebalance:{run.pk}:planned")
-    if mode == "PAPER" and run.phase != "SELLS":
+    if run_type == RunType.EXECUTION and run.phase != "SELLS":
         run = _finish_rebalance_at_safe_boundary(run)
     return run
 
@@ -347,7 +410,7 @@ def plan_rebalance(portfolio, trigger, idempotency_key, *, prices=None, nav=None
 @transaction.atomic
 def advance_rebalance(run):
     run = RebalanceRun.objects.select_for_update().get(pk=run.pk)
-    if run.mode != "PAPER":
+    if run.run_type != RunType.EXECUTION:
         return run
     if run.phase != "SELLS":
         return _finish_rebalance_at_safe_boundary(run)
@@ -482,7 +545,11 @@ def _finish_rebalance_at_safe_boundary(run):
 
 def recover_incomplete():
     recovered = 0
-    for run in RebalanceRun.objects.filter(status__in=["INTENTS_CREATED", "EXECUTING"], mode="PAPER"):
+    for run in RebalanceRun.objects.filter(
+        status__in=["INTENTS_CREATED", "EXECUTING"],
+        mode__in=ExecutionMode.values,
+        run_type=RunType.EXECUTION,
+    ):
         advance_rebalance(run)
         recovered += 1
     return recovered

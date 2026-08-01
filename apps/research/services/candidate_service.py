@@ -67,8 +67,8 @@ def _update_lifecycle(strategy,has_score,has_eligible):
     if has_eligible and implementation.status in {ImplementationStatus.SCORED,ImplementationStatus.BACKTESTED}:
         implementation.status=ImplementationStatus.APPROVED_FOR_RECOMMENDATION
     evidence=implementation.approval_record or {}
-    if has_eligible and evidence.get("shadow_validated") is True:
-        implementation.status=ImplementationStatus.SHADOW_VALIDATED
+    if has_eligible and evidence.get("paper_validated") is True:
+        implementation.status=ImplementationStatus.PAPER_VALIDATED
         profile=StrategyConstructionProfile.objects.filter(
             strategy_definition=implementation.executable_strategy_definition,construction_enabled=True
         ).exists()
@@ -90,7 +90,7 @@ def _update_lifecycle(strategy,has_score,has_eligible):
     if not readiness.implementation_ready:blockers.append("NO_VALIDATED_IMPLEMENTATION")
     if not readiness.backtest_ready:blockers.append("NO_PASSING_BACKTEST")
     if not readiness.approved:blockers.append("NO_PASSING_SCORE")
-    if not readiness.builder_ready:blockers.append("SHADOW_VALIDATION_REQUIRED")
+    if not readiness.builder_ready:blockers.append("PAPER_VALIDATION_REQUIRED")
     readiness.blocking_reasons=blockers;readiness.save(update_fields=["blocking_reasons"])
 
 

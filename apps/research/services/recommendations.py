@@ -121,7 +121,7 @@ def _candidate_rows(run):
         implementation = ResearchStrategyImplementation.objects.filter(
             research_strategy=score.strategy,
             status__in=[ImplementationStatus.BUILDER_READY,ImplementationStatus.APPROVED,
-                        ImplementationStatus.SHADOW_VALIDATED,ImplementationStatus.APPROVED_FOR_RECOMMENDATION],
+                        ImplementationStatus.PAPER_VALIDATED,ImplementationStatus.APPROVED_FOR_RECOMMENDATION],
             exact_semantic_match=True,
             executable_strategy_definition__enabled=True,
         ).select_related("executable_strategy_definition").first()

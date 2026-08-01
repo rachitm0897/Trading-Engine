@@ -8,6 +8,7 @@ from django.utils import timezone
 from apps.accounts.models import BrokerAccount
 from apps.allocation.models import RebalancePolicy
 from apps.audit.models import AuditEvent, OperationAttempt
+from apps.broker_gateway.models import BrokerGatewaySession
 from apps.core.idempotency import canonical_request_hash
 from apps.instruments.models import BrokerContract, Instrument
 from apps.market_data.models import InstrumentPriceHistory
@@ -44,9 +45,23 @@ D = Decimal
 def construction_case(symbols=("AAA", "BBB", "CCC")):
     suffix = BrokerAccount.objects.count() + 1
     account = BrokerAccount.objects.create(
-        account_id=f"DU-BUILDER-{suffix}", net_liquidation=10000, available_cash=10000
+        account_id=f"DU-BUILDER-{suffix}", net_liquidation=10000, available_cash=10000,
+        is_reconciled=True,
     )
-    portfolio = TradingPortfolio.objects.create(name="Builder portfolio", account=account)
+    session = BrokerGatewaySession.objects.create(
+        display_name=f"Builder Paper {suffix}",
+        username_hint="builder",
+        mode="paper",
+        status=BrokerGatewaySession.Status.CONNECTED,
+        child_container_name=f"builder-paper-{suffix}",
+        encrypted_gateway_token="test",
+        encrypted_novnc_password="test",
+        commands_enabled=True,
+        last_gateway_state={"connected": True, "reconciled": True, "mode": "paper"},
+    )
+    portfolio = TradingPortfolio.objects.create(
+        name="Builder portfolio", account=account, gateway_session=session,
+    )
     instruments = []
     start = timezone.now().date() - timedelta(days=79)
     for index, symbol in enumerate(symbols, start=1):
@@ -314,7 +329,7 @@ def test_async_preview_retry_records_attempts_and_is_idempotent(client, monkeypa
     ).values_list("status", flat=True)) == ["FAILED", "COMPLETED"]
 
 
-def test_apply_creates_one_net_construction_rebalance_and_reuses_disabled_shadow_instances():
+def test_apply_creates_one_net_construction_rebalance_and_reuses_disabled_paper_instances():
     portfolio, instruments = construction_case()
     plan = PortfolioConstructionPlan.objects.create(portfolio=portfolio)
     first = add_goal(plan, "Growth", "0.50", "GROW", 4, 1)
@@ -326,9 +341,9 @@ def test_apply_creates_one_net_construction_rebalance_and_reuses_disabled_shadow
     first_a = first_stock.assignments.get()
     second_a = second_stock.assignments.get()
     run = run_construction(create_construction_run(plan, "apply-preview", refresh_history=False), refresh_history=False)
-    preview = plan_construction_rebalance(run, "apply-preview:rebalance", mode="SHADOW")
+    preview = plan_construction_rebalance(run, "apply-preview:rebalance", mode="PAPER")
     assert preview.target_source == "GOAL_CONSTRUCTION"
-    applied, rebalance, created = apply_construction_run(run, "apply-once", mode="SHADOW")
+    applied, rebalance, created = apply_construction_run(run, "apply-once", mode="PAPER")
     assert created is True
     assert rebalance.target_source == "GOAL_CONSTRUCTION"
     assert rebalance.construction_run_id == run.pk
@@ -336,14 +351,37 @@ def test_apply_creates_one_net_construction_rebalance_and_reuses_disabled_shadow
     assert applied.applied_rebalance_id == rebalance.pk
     assert StrategyInstance.objects.filter(portfolio=portfolio).count() == 3
     assert not StrategyInstance.objects.filter(portfolio=portfolio, enabled=True).exists()
-    assert not StrategyInstance.objects.filter(portfolio=portfolio).exclude(execution_mode="SHADOW").exists()
+    assert not StrategyInstance.objects.filter(portfolio=portfolio).exclude(execution_mode="PAPER").exists()
     first_a.refresh_from_db()
     second_a.refresh_from_db()
     assert first_a.created_strategy_instance_id == second_a.created_strategy_instance_id
-    same, same_rebalance, duplicate_created = apply_construction_run(run, "apply-once", mode="SHADOW")
+    same, same_rebalance, duplicate_created = apply_construction_run(run, "apply-once", mode="PAPER")
     assert duplicate_created is False and same_rebalance.pk == rebalance.pk
     with pytest.raises(ConstructionAlreadyApplied):
-        apply_construction_run(run, "apply-again", mode="SHADOW")
+        apply_construction_run(run, "apply-again", mode="PAPER")
+
+
+def test_apply_rechecks_builder_plan_readiness_after_preview():
+    portfolio, instruments = construction_case(("AAA",))
+    plan = PortfolioConstructionPlan.objects.create(portfolio=portfolio)
+    goal = add_goal(plan, "Readiness changed", "1", "GROW", 4)
+    add_stock(goal, instruments[0])
+    run = run_construction(
+        create_construction_run(
+            plan,
+            "builder-readiness-preview",
+            refresh_history=False,
+        ),
+        refresh_history=False,
+    )
+    goal.allocation_weight = Decimal("0.50")
+    goal.save(update_fields=["allocation_weight", "updated_at"])
+
+    with pytest.raises(ConstructionError, match="total exactly 100%"):
+        apply_construction_run(run, "builder-readiness-apply")
+
+    run.refresh_from_db()
+    assert run.applied_rebalance_id is None
 
 
 def test_apply_api_queues_polls_and_returns_identical_one_time_result(client):
@@ -366,9 +404,10 @@ def test_apply_api_queues_polls_and_returns_identical_one_time_result(client):
     assert queued.json()["data"]["application_status"] == "QUEUED"
     from apps.portfolio_construction.tasks import apply_construction_run_task
 
-    apply_construction_run_task.run(run.pk, "api-apply-once", "SHADOW")
+    apply_construction_run_task.run(run.pk, "api-apply-once", "PAPER")
     polled = client.get(f"/api/v1/portfolio-construction/runs/{run.pk}/").json()["data"]
-    assert polled["application_status"] == "APPLIED"
+    assert polled["application_status"] == "ACTIVATING"
+    assert polled["metrics"]["application"]["strategy_activation"] == "QUEUED"
     assert polled["applied_rebalance"]["id"]
     assert polled["strategy_instances"][0]["strategy_instance_id"]
     same = client.post(
@@ -509,11 +548,11 @@ def test_apply_aggregates_same_identity_across_goals_into_nonzero_target_configu
     instance = StrategyInstance.objects.get(portfolio=portfolio)
     assert instance.target_configuration == {
         "target_weight": "0.25000000",
-        "capital_share": "0.25000000",
+        "capital_share": "1",
         "priority": 100,
         "construction_run_id": str(run.pk),
     }
-    assert instance.enabled is False and instance.execution_mode == "SHADOW"
+    assert instance.enabled is False and instance.execution_mode == "PAPER"
     first_assignment.refresh_from_db()
     second_assignment.refresh_from_db()
     assert first_assignment.created_strategy_instance_id == instance.pk
@@ -546,7 +585,7 @@ def test_different_strategy_identity_dimensions_create_different_instances(ident
     assert {D(item.target_configuration["target_weight"]) for item in instances} == {D("0.125")}
 
 
-def test_outdated_disabled_shadow_instance_is_versioned_via_update_workflow():
+def test_outdated_disabled_paper_instance_is_versioned_via_update_workflow():
     from apps.strategies.framework import create_instance
 
     portfolio, instruments = construction_case(("AAA",))
@@ -559,7 +598,7 @@ def test_outdated_disabled_shadow_instance_is_versioned_via_update_workflow():
         timeframe="1d",
         parameters={"direction": "LONG"},
         target_configuration={"target_weight": "0.01", "capital_share": "0.01", "priority": 100},
-        execution_mode="SHADOW",
+        execution_mode="PAPER",
         qualify=False,
     )
     plan = PortfolioConstructionPlan.objects.create(portfolio=portfolio)
@@ -574,43 +613,41 @@ def test_outdated_disabled_shadow_instance_is_versioned_via_update_workflow():
     assert existing.version == 2
     assert existing.versions.count() == 2
     assert existing.target_configuration["target_weight"] == "0.25000000"
-    assert existing.enabled is False and existing.execution_mode == "SHADOW"
+    assert existing.enabled is False and existing.execution_mode == "PAPER"
 
 
-@pytest.mark.parametrize("incompatible", ["enabled", "paper"])
-def test_enabled_or_non_shadow_instances_are_never_reused_or_modified(incompatible):
+def test_enabled_instances_are_never_reused_or_modified():
     from apps.strategies.framework import create_instance
 
     portfolio, instruments = construction_case(("AAA",))
     definition = StrategyDefinition.objects.get(key="FIXED_WEIGHT_REBALANCE")
     existing, _ = create_instance(
-        name=f"Incompatible {incompatible}",
+        name="Incompatible enabled",
         definition_key=definition.key,
         portfolio=portfolio,
         instrument_id=instruments[0].pk,
         timeframe="1d",
         parameters={"direction": "LONG"},
         target_configuration={"target_weight": "0.01", "capital_share": "0.01", "priority": 100},
-        execution_mode="PAPER" if incompatible == "paper" else "SHADOW",
+        execution_mode="PAPER",
         qualify=False,
     )
-    if incompatible == "enabled":
-        existing.enabled = True
-        existing.state = "LONG"
-        existing.save(update_fields=["enabled", "state"])
+    existing.enabled = True
+    existing.state = "LONG"
+    existing.save(update_fields=["enabled", "state"])
     original_configuration = dict(existing.target_configuration)
     plan = PortfolioConstructionPlan.objects.create(portfolio=portfolio)
     goal = add_goal(plan, "Growth", "1", "GROW", 5)
     add_stock(goal, instruments[0])
     run = run_construction(
-        create_construction_run(plan, f"incompatible-{incompatible}", refresh_history=False),
+        create_construction_run(plan, "incompatible-enabled", refresh_history=False),
         refresh_history=False,
     )
-    apply_construction_run(run, f"incompatible-{incompatible}-apply")
+    apply_construction_run(run, "incompatible-enabled-apply")
     existing.refresh_from_db()
     assert existing.target_configuration == original_configuration and existing.version == 1
     created = StrategyInstance.objects.exclude(pk=existing.pk).get(portfolio=portfolio)
-    assert created.execution_mode == "SHADOW" and created.enabled is False
+    assert created.execution_mode == "PAPER" and created.enabled is False
     assert created.target_configuration["target_weight"] == "0.25000000"
 
 

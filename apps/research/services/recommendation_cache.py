@@ -211,7 +211,7 @@ def calculate_role_scores(dataset, *, as_of_date=None):
 
 
 def _execution_mapping(dataset, research_strategy_id, *, allow_validated=False):
-    statuses = [ImplementationStatus.BUILDER_READY, ImplementationStatus.APPROVED, ImplementationStatus.SHADOW_VALIDATED,
+    statuses = [ImplementationStatus.BUILDER_READY, ImplementationStatus.APPROVED, ImplementationStatus.PAPER_VALIDATED,
                 ImplementationStatus.APPROVED_FOR_RECOMMENDATION]
     if allow_validated:
         statuses += [ImplementationStatus.VALIDATED, ImplementationStatus.BACKTESTED, ImplementationStatus.SCORED]

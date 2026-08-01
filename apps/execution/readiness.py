@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from apps.accounts.models import BrokerAccount
 from apps.allocation.models import PortfolioTargetCoordination, RebalanceRun
+from apps.audit.models import OutboxEvent
 from apps.broker_gateway.models import BrokerGatewaySession
 from apps.event_bus.models import StreamHealthMetric
 from apps.market_streams.models import (
@@ -298,9 +299,12 @@ def _flink_readiness(
     return signal, blockers
 
 
-def _paper_scope(now):
+def _execution_scope(now):
     strategies = list(
-        StrategyInstance.objects.filter(enabled=True, execution_mode="PAPER")
+        StrategyInstance.objects.filter(
+            enabled=True,
+            execution_mode__in=["PAPER", "LIVE"],
+        )
         .select_related("portfolio__account", "portfolio__gateway_session", "instrument")
         .order_by("pk")
     )
@@ -338,7 +342,7 @@ def _paper_scope(now):
                 strategy.timeframe,
             )
         ) or subscriptions.get((None, strategy.instrument_id, strategy.timeframe))
-        state_usable = bool(state and state.is_usable(now))
+        state_usable = bool(state and state.is_execution_usable(now))
         subscription_age = _age_seconds(
             subscription.last_event_at if subscription else None, now
         )
@@ -442,6 +446,7 @@ def _gateway_and_reconciliation(scope, now):
             and state.get("connected") is True
             and age is not None
             and age <= gateway_stale_seconds
+            and str(state.get("mode") or "").lower() == session.mode
         )
         reconciled = bool(connected and state.get("reconciled") is True)
         row = {
@@ -466,7 +471,7 @@ def _gateway_and_reconciliation(scope, now):
         blockers.append(
             {
                 "code": "GATEWAY_NOT_CONNECTED",
-                "message": "A PAPER portfolio has no healthy connected Gateway",
+                "message": "An execution portfolio has no healthy mode-matched Gateway",
                 "details": {
                     "missing_session_portfolio_ids": sorted(
                         set(missing_session_portfolios)
@@ -521,7 +526,7 @@ def _gateway_and_reconciliation(scope, now):
         blockers.append(
             {
                 "code": "BROKER_RECONCILIATION_NOT_READY",
-                "message": "A PAPER portfolio account is not reconciled",
+                "message": "An execution portfolio account is not reconciled",
                 "details": {"account_ids": unreconciled_accounts},
             }
         )
@@ -566,6 +571,22 @@ def collect_execution_readiness(*, http_get=None, now=None):
     )
     blockers.extend(flink_blockers)
 
+    required_topics=_setting_tuple(
+        "EXECUTION_REQUIRED_KAFKA_TOPICS",()
+    )
+    kafka_metric=StreamHealthMetric.objects.filter(
+        component="kafka",metric="connectivity"
+    ).first()
+    kafka_signal=_heartbeat_signal(
+        kafka_metric,
+        stale_seconds=int(getattr(settings,"KAFKA_HEALTH_STALE_SECONDS",60)),
+        now=now,
+    )
+    available_topics=set((kafka_metric.value or {}).get("topics") or []) if kafka_metric else set()
+    missing_topics=sorted(set(required_topics)-available_topics)
+    kafka_signal["required_topics"]=list(required_topics)
+    kafka_signal["available_topics"]=sorted(available_topics)
+    kafka_signal["missing_topics"]=missing_topics
     if not settings.KAFKA_ENABLED:
         blockers.append(
             {
@@ -574,7 +595,44 @@ def collect_execution_readiness(*, http_get=None, now=None):
                 "details": {},
             }
         )
+    elif not kafka_signal["healthy"]:
+        blockers.append({
+            "code":"KAFKA_UNAVAILABLE",
+            "message":"Kafka connectivity proof is missing, stale, or degraded",
+            "details":{"status":kafka_signal["status"]},
+        })
+    elif missing_topics:
+        blockers.append({
+            "code":"REQUIRED_KAFKA_TOPICS_MISSING",
+            "message":"One or more required Kafka topics are missing",
+            "details":{"topics":missing_topics},
+        })
 
+    outbox_metric=StreamHealthMetric.objects.filter(
+        component="outbox-publisher",metric="heartbeat"
+    ).first()
+    outbox_signal=_heartbeat_signal(
+        outbox_metric,
+        stale_seconds=int(getattr(
+            settings,"OUTBOX_PUBLISHER_HEARTBEAT_STALE_SECONDS",30
+        )),
+        now=now,
+    )
+    outbox_signal["pending_count"]=OutboxEvent.objects.filter(
+        status__in=["PENDING","PUBLISHING"]
+    ).count()
+    outbox_signal["failed_count"]=OutboxEvent.objects.filter(status="FAILED").count()
+    if not outbox_signal["healthy"] or outbox_signal["failed_count"]:
+        blockers.append({
+            "code":"OUTBOX_PUBLISHER_UNHEALTHY",
+            "message":"Transactional outbox publishing is missing, stale, or failing",
+            "details":{
+                "status":outbox_signal["status"],
+                "failed_count":outbox_signal["failed_count"],
+            },
+        })
+
+    scope = _execution_scope(now)
     raw_metric = StreamHealthMetric.objects.filter(
         component="market-raw-producer", metric="heartbeat"
     ).first()
@@ -589,7 +647,7 @@ def collect_execution_readiness(*, http_get=None, now=None):
         ),
         now=now,
     )
-    if not raw_signal["healthy"]:
+    if scope["strategy_count"] and not raw_signal["healthy"]:
         blockers.append(
             {
                 "code": "MARKET_RAW_PRODUCER_HEARTBEAT_STALE",
@@ -643,12 +701,11 @@ def collect_execution_readiness(*, http_get=None, now=None):
             }
         )
 
-    scope = _paper_scope(now)
     if scope["stale_strategies"]:
         blockers.append(
             {
                 "code": "MARKET_DATA_STALE",
-                "message": "Market data is stale or incomplete for a PAPER strategy",
+                "message": "Market data is stale or incomplete for an execution strategy",
                 "details": {"strategies": scope["stale_strategies"]},
             }
         )
@@ -737,7 +794,7 @@ def collect_execution_readiness(*, http_get=None, now=None):
     }
 
     pending_intents = OrderIntent.objects.filter(
-        mode="PAPER",
+        mode__in=["PAPER", "LIVE"],
         eligible=True,
         operation_status__in=PENDING_INTENT_STATUSES,
     )
@@ -756,7 +813,7 @@ def collect_execution_readiness(*, http_get=None, now=None):
         blockers.append(
             {
                 "code": "PENDING_INTENT_STALE",
-                "message": "A pending PAPER intent exceeds its maximum age",
+                "message": "A pending execution intent exceeds its maximum age",
                 "details": {"oldest_age_seconds": intent_age},
             }
         )
@@ -769,7 +826,7 @@ def collect_execution_readiness(*, http_get=None, now=None):
     )
     command_max_age = int(getattr(settings, "BROKER_COMMAND_MAX_AGE_SECONDS", 60))
     uncertain = BrokerCommand.objects.filter(status=BrokerCommand.Status.UNCERTAIN)
-    scoped_uncertain = uncertain.filter(order__intent__mode="PAPER")
+    scoped_uncertain = uncertain.filter(order__intent__mode__in=["PAPER", "LIVE"])
     command_signal = {
         "status": "DEGRADED"
         if command_age is not None and command_age > command_max_age
@@ -800,7 +857,7 @@ def collect_execution_readiness(*, http_get=None, now=None):
         blockers.append(
             {
                 "code": "UNRESOLVED_UNCERTAIN_ORDER",
-                "message": "An uncertain broker order blocks a PAPER portfolio",
+                "message": "An uncertain broker order blocks an execution portfolio",
                 "details": {
                     "portfolio_ids": command_signal["uncertain_portfolio_ids"],
                     "count": command_signal["scoped_uncertain_count"],
@@ -818,15 +875,18 @@ def collect_execution_readiness(*, http_get=None, now=None):
         "ready": ready,
         "automatic_execution_ready": ready,
         "status": "READY" if ready else "NOT_READY",
-        "execution_mode": settings.NEW_EXECUTION_MODE,
+        "execution_modes": ["PAPER", "LIVE"],
+        "execution_mode_source": "PORTFOLIO_GATEWAY_SESSION",
         "observed_at": now,
         "blockers": blockers,
         "signals": {
+            "kafka":kafka_signal,
+            "outbox_publisher":outbox_signal,
             "market_raw_producer": raw_signal,
             "flink": flink_signal,
             "kafka_consumer": consumer_signal,
             "workers": worker_signals,
-            "paper_scope": {
+            "execution_scope": {
                 "strategy_count": scope["strategy_count"],
                 "portfolio_ids": scope["portfolio_ids"],
                 "instrument_ids": scope["instrument_ids"],

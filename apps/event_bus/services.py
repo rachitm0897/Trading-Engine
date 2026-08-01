@@ -1,8 +1,10 @@
 import uuid
+import json
 from copy import deepcopy
 from datetime import timedelta
+from decimal import InvalidOperation
 from django.conf import settings
-from django.db import IntegrityError, transaction
+from django.db import DataError, IntegrityError, InterfaceError, OperationalError, transaction
 from django.utils import timezone
 from apps.audit.models import OutboxEvent
 from .models import ConsumedEvent, DeadLetterEvent, ReplayRequest
@@ -119,6 +121,47 @@ def route_dead_letter(source_topic, envelope, reason, consumer_name=""):
     except (ValueError,TypeError,AttributeError): raw_id=None
     return DeadLetterEvent.objects.create(event_id=raw_id, source_topic=source_topic,
         consumer_name=consumer_name, reason=str(reason)[:255], envelope=decimal_safe(envelope))
+
+
+def deterministic_invalid_event_error(exc):
+    """Return True only when replaying the same bytes cannot make them valid."""
+    if isinstance(exc,(OperationalError,InterfaceError,ConnectionError,TimeoutError)):
+        return False
+    try:
+        from jsonschema import ValidationError as JsonSchemaValidationError
+        schema_errors=(JsonSchemaValidationError,)
+    except ImportError:
+        schema_errors=()
+    return isinstance(exc,(
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        InvalidOperation,
+        DataError,
+        IntegrityError,
+        UnicodeDecodeError,
+        *schema_errors,
+    ))
+
+
+def replay_dead_letter(dead_letter):
+    from apps.market_streams.services import consume_market_event
+    if dead_letter.source_topic not in {
+        "market.bars.v1","market.indicators.v1","market.quality.v1",
+    }:
+        raise ValueError(
+            f"No Backend market replay handler is registered for {dead_letter.source_topic}"
+        )
+    envelope=deepcopy(dead_letter.envelope)
+    envelope.setdefault("payload",{})["processing_mode"]="REPLAY"
+    result=consume_market_event(
+        dead_letter.consumer_name or "market-persistence-v2",
+        envelope,
+    )
+    dead_letter.replayed_at=timezone.now()
+    dead_letter.save(update_fields=["replayed_at"])
+    return result
 
 
 def request_replay(topic, consumer_name, idempotency_key, from_timestamp=None, to_timestamp=None):

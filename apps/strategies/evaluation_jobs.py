@@ -16,7 +16,7 @@ from apps.strategies.plugins import get_plugin
 
 
 ACTIVE_STRATEGY_STATES = {
-    "WARMING_UP", "FLAT", "ENTRY_PENDING", "PARTIALLY_LONG", "LONG", "EXIT_PENDING",
+    "READY_WAITING_FOR_LIVE_BAR", "FLAT", "ENTRY_PENDING", "PARTIALLY_LONG", "LONG", "EXIT_PENDING",
     "PARTIALLY_SHORT", "SHORT",
 }
 
@@ -419,6 +419,14 @@ def _record_failure(job_id, raw_error):
     }:
         job.strategy_instance.__class__.objects.filter(pk=job.strategy_instance_id).update(
             state="ERROR", block_reason=message[:255],
+        )
+    if job.status == "FAILED":
+        from apps.strategies.framework import fail_activation_workflow
+        instance=StrategyInstance.objects.get(pk=job.strategy_instance_id)
+        fail_activation_workflow(
+            instance,
+            message,
+            retryable=bool(error.retryable),
         )
     return job
 

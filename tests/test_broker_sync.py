@@ -1,6 +1,6 @@
 import pytest
 from apps.accounts.models import BrokerAccount
-from apps.broker_gateway.models import BrokerSyncCursor
+from apps.broker_gateway.models import BrokerGatewaySession, BrokerSyncCursor
 from apps.broker_gateway.models import BrokerPositionSnapshot
 from apps.broker_gateway.sync import sync_events, sync_positions
 from apps.execution.models import Fill
@@ -11,8 +11,10 @@ from apps.portfolios.models import PortfolioPosition, TradingPortfolio
 pytestmark=pytest.mark.django_db
 
 class FakeGateway:
-    def __init__(self, events): self._events=events; self.acked=0
-    def events(self, after=0): return [event for event in self._events if event["id"]>after]
+    def __init__(self, events): self._events=events; self.acked=0; self.requested_after=[]
+    def events(self, after=0):
+        self.requested_after.append(after)
+        return [event for event in self._events if event["id"]>after]
     def ack_events(self, sequence): self.acked=sequence
 
 def event(sequence, kind, rows): return {"id":sequence,"event_type":f"snapshot.{kind}","payload":{"value":rows}}
@@ -34,16 +36,52 @@ def test_gateway_snapshots_create_broker_truth_projections_and_ledgers():
         event(4,"executions",[{**contract,"execution_id":"E-1","broker_order_id":"77","permanent_id":"9001","side":"BOT","quantity":"5","price":"99.50","commission":"1.25","executed_at":"2026-07-11T09:00:00+00:00"}]),
         event(5,"positions",[{**contract,"quantity":"5","average_cost":"99.75","market_price":"101.00"}]),
     ]
+    session=BrokerGatewaySession.objects.create(
+        display_name="IBKR",
+        username_hint="test",
+        mode="paper",
+        status=BrokerGatewaySession.Status.CONNECTED,
+        child_container_name="broker-sync-test",
+        encrypted_gateway_token="test",
+        encrypted_novnc_password="test",
+        commands_enabled=True,
+        last_gateway_state={"connected":True,"reconciled":True,"mode":"paper"},
+    )
     gateway=FakeGateway(events)
+    gateway.gateway_session=session
     assert sync_events(gateway)==5 and gateway.acked==5
     account=BrokerAccount.objects.get(account_id="DU123")
     assert account.net_liquidation==125000 and account.available_cash==40000
-    assert TradingPortfolio.objects.get(account=account).name=="IBKR DU123"
+    assert TradingPortfolio.objects.get(account=account).name=="IBKR · DU123"
     assert PortfolioPosition.objects.get(portfolio__account=account).quantity==5
     assert Order.objects.get(broker_permanent_id="9001").status=="FILLED"
-    assert Fill.objects.get(execution_id="E-1").commission==pytest.approx(1.25)
+    assert Fill.objects.get(execution_id=f"{session.pk}:E-1").commission==pytest.approx(1.25)
     assert BrokerSyncCursor.objects.get().last_sequence==5
     assert sync_events(gateway)==0 and Fill.objects.count()==1
+
+
+def test_gateway_generation_change_replays_a_restarted_event_sequence():
+    session=BrokerGatewaySession.objects.create(
+        display_name="Static paper",
+        username_hint="test",
+        mode="paper",
+        status=BrokerGatewaySession.Status.CONNECTED,
+        child_container_name="paper-ibkr-gateway",
+        encrypted_gateway_token="test",
+        encrypted_novnc_password="test",
+        commands_enabled=True,
+    )
+    first=FakeGateway([event(9,"accounts",[{"account_id":"DU-A"}])])
+    second=FakeGateway([event(1,"accounts",[{"account_id":"DU-B"}])])
+
+    assert sync_events(first,session,connection_generation="generation-a")==1
+    assert sync_events(second,session,connection_generation="generation-b")==1
+
+    cursor=BrokerSyncCursor.objects.get(session=session)
+    assert first.requested_after==[0] and second.requested_after==[0]
+    assert cursor.connection_generation=="generation-b"
+    assert cursor.last_sequence==1 and second.acked==1
+    assert BrokerAccount.objects.filter(account_id="DU-B").exists()
 
 
 def _position(account, quantity, *, conid=265598, symbol="AAPL"):

@@ -1,6 +1,10 @@
+import uuid
+
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+
+from apps.execution.modes import ExecutionMode
 
 
 class StrategyDefinition(models.Model):
@@ -48,10 +52,11 @@ class StrategyRiskPolicy(models.Model):
 
 
 class StrategyInstance(models.Model):
-    MODES = [(x, x) for x in ["OBSERVE", "SHADOW", "PAPER"]]
+    MODES = ExecutionMode.choices
     STATES = [(x, x) for x in ["FLAT", "ENTRY_PENDING", "PARTIALLY_LONG", "LONG", "EXIT_PENDING",
         "PARTIALLY_SHORT", "SHORT", "PAUSED", "DISABLED", "FLATTEN_REQUESTED", "KILLED",
-        "BLOCKED", "WARMING_UP", "ERROR"]]
+        "ACTIVATING", "SUBSCRIBING", "WARMING_UP", "READY_WAITING_FOR_LIVE_BAR",
+        "BLOCKED", "ERROR"]]
     name = models.CharField(max_length=128)
     definition = models.ForeignKey(StrategyDefinition, on_delete=models.PROTECT, related_name="instances")
     portfolio = models.ForeignKey("portfolios.TradingPortfolio", on_delete=models.PROTECT, related_name="strategy_instances")
@@ -62,8 +67,11 @@ class StrategyInstance(models.Model):
     target_configuration = models.JSONField(default=dict)
     risk_policy = models.ForeignKey(StrategyRiskPolicy, on_delete=models.PROTECT, null=True, blank=True)
     order_policy = models.ForeignKey(OrderPolicy, on_delete=models.PROTECT, null=True, blank=True)
-    execution_mode = models.CharField(max_length=16, choices=MODES, default="SHADOW")
-    state = models.CharField(max_length=24, choices=STATES, default="WARMING_UP")
+    workflow_trace_id = models.UUIDField(default=uuid.uuid4, editable=False, db_index=True)
+    execution_mode = models.CharField(
+        max_length=16, choices=MODES, default=ExecutionMode.PAPER
+    )
+    state = models.CharField(max_length=32, choices=STATES, default="DISABLED")
     enabled = models.BooleanField(default=False)
     allocated_capital = models.DecimalField(max_digits=24, decimal_places=8, default=0)
     kill_switch = models.BooleanField(default=False)
@@ -74,6 +82,11 @@ class StrategyInstance(models.Model):
     warmup_progress = models.PositiveIntegerField(default=0)
     warmup_started_at = models.DateTimeField(null=True, blank=True)
     warmup_last_progress_at = models.DateTimeField(null=True, blank=True)
+    subscription_ready_at = models.DateTimeField(null=True, blank=True)
+    warmup_completed_at = models.DateTimeField(null=True, blank=True)
+    ready_waiting_since = models.DateTimeField(null=True, blank=True)
+    first_evaluation_completed_at = models.DateTimeField(null=True, blank=True)
+    execution_active_at = models.DateTimeField(null=True, blank=True)
     block_reason = models.CharField(max_length=255, blank=True)
     last_market_event_at = models.DateTimeField(null=True, blank=True)
     last_market_bar_id = models.CharField(max_length=160, blank=True)
@@ -82,12 +95,19 @@ class StrategyInstance(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["portfolio", "name"], name="unique_strategy_instance_name")]
+        constraints = [
+            models.UniqueConstraint(fields=["portfolio", "name"], name="unique_strategy_instance_name"),
+            models.CheckConstraint(
+                condition=models.Q(execution_mode__in=ExecutionMode.values),
+                name="strategy_instance_valid_execution_mode",
+            ),
+        ]
         indexes = [models.Index(fields=["enabled","state","instrument","timeframe"],name="strategy_active_input_idx")]
 
     def clean(self):
-        if self.execution_mode == "LIVE":
-            raise ValidationError("Live mode is unavailable for configurable strategies")
+        from apps.execution.modes import normalize_execution_mode
+
+        self.execution_mode = normalize_execution_mode(self.execution_mode)
 
 
 class StrategyVersion(models.Model):
@@ -133,6 +153,32 @@ class StrategyInputBinding(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["strategy_version", "requirement"], name="unique_version_input_requirement")]
+
+
+class StrategyWarmupReadiness(models.Model):
+    strategy_instance = models.ForeignKey(
+        StrategyInstance, on_delete=models.PROTECT, related_name="warmup_readiness_records"
+    )
+    strategy_version = models.ForeignKey(
+        StrategyVersion, on_delete=models.PROTECT, related_name="warmup_readiness_records"
+    )
+    provider = models.CharField(max_length=16)
+    provider_generation = models.CharField(max_length=64)
+    requirement_hashes = models.JSONField(default=list)
+    requirement_snapshot_hash = models.CharField(max_length=64)
+    bar_ids = models.JSONField(default=list)
+    bar_timestamps = models.JSONField(default=list)
+    evidence_hash = models.CharField(max_length=64, unique=True)
+    is_current = models.BooleanField(default=True)
+    completed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["strategy_instance", "strategy_version", "-completed_at"],
+                name="strategy_warmup_audit_idx",
+            ),
+        ]
 
 
 class StrategyRun(models.Model):
@@ -182,13 +228,22 @@ class StrategyTarget(models.Model):
     signal_type = models.CharField(max_length=32, default="SET_TARGET")
     signal_time = models.DateTimeField(null=True, blank=True)
     source_event_id = models.CharField(max_length=160, blank=True)
+    execution_mode = models.CharField(
+        max_length=16, choices=ExecutionMode.choices, default=ExecutionMode.PAPER
+    )
     reason = models.CharField(max_length=255, blank=True)
     rationale = models.CharField(max_length=255, blank=True)
     confidence = models.DecimalField(max_digits=8, decimal_places=6, null=True, blank=True)
     status = models.CharField(max_length=24, default="ACTIVE")
     created_at = models.DateTimeField(default=timezone.now)
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["run", "instrument"], name="unique_run_target")]
+        constraints = [
+            models.UniqueConstraint(fields=["run", "instrument"], name="unique_run_target"),
+            models.CheckConstraint(
+                condition=models.Q(execution_mode__in=ExecutionMode.values),
+                name="strategy_target_valid_execution_mode",
+            ),
+        ]
         indexes = [models.Index(fields=["strategy_instance","status","-created_at"],name="strategy_target_latest_idx")]
 
 

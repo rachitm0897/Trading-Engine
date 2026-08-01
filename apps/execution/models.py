@@ -1,5 +1,7 @@
 from django.db import models
 
+from .modes import ExecutionMode
+
 
 class BrokerCommand(models.Model):
     class CommandType(models.TextChoices):
@@ -29,6 +31,9 @@ class BrokerCommand(models.Model):
     idempotency_key = models.CharField(max_length=128, unique=True)
     request_payload = models.JSONField(default=dict)
     request_hash = models.CharField(max_length=64, db_index=True)
+    mode = models.CharField(
+        max_length=16, choices=ExecutionMode.choices, default=ExecutionMode.PAPER
+    )
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.PENDING
     )
@@ -55,6 +60,12 @@ class BrokerCommand(models.Model):
             models.Index(
                 fields=["gateway_session", "internal_order_id"],
                 name="broker_cmd_session_order_idx",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(mode__in=ExecutionMode.values),
+                name="broker_command_valid_execution_mode",
             ),
         ]
 

@@ -17,6 +17,7 @@ from apps.portfolios.models import TradingPortfolio
 from apps.strategies.models import OrderPolicy, StrategyDefinition, StrategyRiskPolicy
 from apps.research.models import BacktestProtocolVersion, RecommendationBatchRun, ResearchDatasetVersion
 from apps.research.services.builder_readiness import portfolio_builder_readiness
+from apps.execution.modes import require_portfolio_execution_ready
 from apps.research.services.recommendation_batch import create_recommendation_batch
 from apps.research.tasks import generate_recommendation_batch
 
@@ -157,6 +158,7 @@ def _rebalance_row(rebalance):
     return {
         "id": rebalance.pk,
         "mode": rebalance.mode,
+        "run_type": rebalance.run_type,
         "status": rebalance.status,
         "phase": rebalance.phase,
         "planned_turnover": rebalance.planned_turnover,
@@ -828,7 +830,7 @@ def apply(request, run_id):
                     "message": run.last_error or "Failed construction application requires an explicit retry",
                     "details": {"retryable": run.retryable},
                 })
-        mode = "SHADOW" if settings.NEW_EXECUTION_MODE == "SHADOW" else "PAPER"
+        mode = require_portfolio_execution_ready(run.plan.portfolio)
         if not run.applied_rebalance_id and run.application_status not in {"QUEUED", "APPLYING"}:
             with transaction.atomic():
                 locked = PortfolioConstructionRun.objects.select_for_update().get(pk=run.pk)

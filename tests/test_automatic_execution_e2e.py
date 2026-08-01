@@ -84,9 +84,10 @@ from apps.strategies.evaluation_jobs import (
     process_strategy_evaluation_jobs,
     recover_stuck_strategy_evaluation_jobs,
 )
-from apps.strategies.framework import create_instance, enable_instance
+from apps.strategies.framework import create_instance
 from apps.strategies.models import StrategyRun, StrategyTarget
 from tests.managed_gateway import bind_managed_gateway
+from tests.strategy_activation import activate_strategy
 
 
 pytestmark = pytest.mark.django_db
@@ -177,6 +178,20 @@ def _domain(settings, suffix):
         primary_exchange="NASDAQ",
         currency="USD",
     )
+    IndicatorValue.objects.create(
+        instrument=instrument,
+        indicator="average_volume",
+        indicator_name="average_volume",
+        requirement_identity_hash=f"execution-adv-{suffix}",
+        value=100000,
+        parameters={"window": 3},
+        timeframe="1d",
+        source_bar_id=f"execution-adv-{suffix}",
+        is_final=True,
+        processing_mode="LIVE",
+        event_time=timezone.now(),
+        source_key=f"execution-adv-{suffix}",
+    )
     BrokerContract.objects.create(
         instrument=instrument,
         conid=8_000_000 + instrument.pk,
@@ -207,7 +222,7 @@ def _domain(settings, suffix):
         execution_mode="PAPER",
         qualify=False,
     )
-    enable_instance(strategy)
+    activate_strategy(strategy)
     return AutomaticDomain(
         account=account,
         portfolio=portfolio,
@@ -499,7 +514,7 @@ def test_synthetic_live_market_sequence_creates_one_idempotent_paper_order(
     )
 
     assert MarketBar.objects.count() == 4
-    assert IndicatorValue.objects.count() == 12
+    assert IndicatorValue.objects.count() == 9
     assert StrategyEvaluationJob.objects.count() == 1
     assert StrategyRun.objects.count() == StrategyTarget.objects.count() == 1
     assert PortfolioTargetSnapshot.objects.filter(status="READY").count() == 1
@@ -513,6 +528,25 @@ def test_synthetic_live_market_sequence_creates_one_idempotent_paper_order(
     assert cash_total == -(fill.quantity * fill.price) - fill.commission
     assert order.status == "FILLED"
     assert rebalance.status == "COMPLETED"
+
+    from apps.strategies.workflow import execution_workflow
+    workflow = execution_workflow(domain.strategy)
+    by_stage = {row["stage"]: row for row in workflow["stages"]}
+    assert workflow["status"] == "COMPLETED"
+    assert workflow["terminal"] is True
+    assert by_stage["TARGET_GENERATED"]["entity_id"] == str(
+        StrategyTarget.objects.get().pk
+    )
+    assert by_stage["REBALANCE_CREATED"]["entity_id"] == str(rebalance.pk)
+    assert by_stage["ORDER_INTENT_CREATED"]["entity_id"] == str(intent.pk)
+    assert by_stage["RISK_DECISION"]["status"] == "COMPLETED"
+    assert by_stage["BROKER_COMMAND_SENT"]["entity_id"] == str(command.pk)
+    assert by_stage["ORDER_ACKNOWLEDGED"]["status"] == "COMPLETED"
+    assert by_stage["FILL_PROGRESS"]["status"] == "COMPLETED"
+    assert by_stage["FILL_PROGRESS"]["entity_id"] == str(fill.pk)
+    assert {row["trace_id"] for row in workflow["stages"]} == {
+        str(domain.strategy.workflow_trace_id)
+    }
 
     broker = ReconciledBroker(
         position=_broker_row(
@@ -573,16 +607,15 @@ def test_delayed_indicator_and_consumer_replay_create_one_ready_job(
     assert first["bar_id"] == job.bar_id
     assert job.status == "WAITING_FOR_INPUT"
 
-    consume_market_event("automatic-e2e-market", live["indicators"][0])
+    first_indicator = live["indicators"][0]
+    consume_market_event("automatic-e2e-market", first_indicator)
     job.refresh_from_db()
     assert job.status == "WAITING_FOR_INPUT"
     assert consume_market_event(
-        "automatic-e2e-market", live["indicators"][0]
+        "automatic-e2e-market", first_indicator
     ) == {"duplicate": True}
-    consume_market_event("automatic-e2e-market", live["indicators"][1])
-    job.refresh_from_db()
-    assert job.status == "WAITING_FOR_INPUT"
-    consume_market_event("automatic-e2e-market", live["indicators"][2])
+    for indicator in live["indicators"][1:]:
+        consume_market_event("automatic-e2e-market", indicator)
     job.refresh_from_db()
     assert job.status == "PENDING"
     assert StrategyEvaluationJob.objects.count() == 1

@@ -25,8 +25,10 @@ from apps.strategies.evaluation_jobs import (
     process_strategy_evaluation_jobs,
     recover_stuck_strategy_evaluation_jobs,
 )
-from apps.strategies.framework import create_instance, enable_instance
+from apps.strategies.framework import create_instance
 from apps.strategies.models import StrategyRun
+from tests.managed_gateway import bind_gateway_mode
+from tests.strategy_activation import activate_strategy
 
 
 pytestmark = pytest.mark.django_db
@@ -40,11 +42,13 @@ def portfolio():
         available_cash=100000,
         buying_power=200000,
     )
-    return TradingPortfolio.objects.create(
+    portfolio = TradingPortfolio.objects.create(
         name="Evaluation jobs",
         account=account,
         minimum_notional=1,
     )
+    bind_gateway_mode(portfolio)
+    return portfolio
 
 
 @pytest.fixture
@@ -75,10 +79,10 @@ def make_instance(portfolio, instrument, *, definition="FIXED_WEIGHT_REBALANCE",
         timeframe="5m",
         parameters=parameters,
         target_configuration={"target_weight": "0.05"},
-        execution_mode="SHADOW",
+        execution_mode="PAPER",
         qualify=False,
     )
-    enable_instance(instance)
+    activate_strategy(instance)
     return instance
 
 

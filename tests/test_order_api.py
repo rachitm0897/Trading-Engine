@@ -82,11 +82,11 @@ def _disable_task_enqueue(monkeypatch):
     return calls
 
 
-def _healthy_gateway(monkeypatch):
+def _healthy_gateway(monkeypatch, mode="paper"):
     monkeypatch.setattr(
         GatewayClient,
         "health",
-        lambda self: {"connected": True, "reconciled": True, "mode": "paper"},
+        lambda self: {"connected": True, "reconciled": True, "mode": mode},
     )
 
 
@@ -294,6 +294,43 @@ def test_live_manual_request_is_rejected_without_creating_an_intent(
     assert result.json()["error"]["code"] == "LIVE_MANUAL_TRADING_DISABLED"
     assert not OrderIntent.objects.exists()
     assert task_calls == []
+
+
+def test_live_manual_request_uses_live_intent_command_and_gateway(
+    client, settings, monkeypatch
+):
+    settings.ALLOW_LIVE_TRADING = True
+    _, portfolio, _, instrument = _manual_case(settings, mode="live")
+    _disable_task_enqueue(monkeypatch)
+    _healthy_gateway(monkeypatch, mode="live")
+
+    accepted = _post(
+        client,
+        _payload(portfolio, instrument),
+        "manual-live-enabled",
+    )
+
+    assert accepted.status_code == 202
+    intent = OrderIntent.objects.get(pk=accepted.json()["data"]["intent_id"])
+    assert intent.mode == "LIVE"
+    command = execute_order_intent(intent.pk)
+    assert command.mode == "LIVE"
+    assert command.gateway_session.mode == "live"
+
+    class LiveGateway:
+        place_calls = 0
+
+        def health(self):
+            return {"connected": True, "reconciled": True, "mode": "live"}
+
+        def place_order(self, payload, key):
+            self.place_calls += 1
+            return {"command_id": 72, "status": "PENDING"}
+
+    gateway = LiveGateway()
+    assert claim_next_broker_command() == command.pk
+    assert dispatch_broker_command(command.pk, gateway) == "ACKNOWLEDGED"
+    assert gateway.place_calls == 1
 
 
 def test_market_order_ignores_untrusted_client_reference_price(

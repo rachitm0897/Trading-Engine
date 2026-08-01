@@ -28,8 +28,13 @@ from apps.broker_gateway.services import (
     record_provision_failure,
     gateway_environment,
     synchronize_accounts,
+    synchronize_local_paper_gateway,
 )
 from apps.broker_gateway.tasks import monitor_broker_sessions
+from apps.broker_gateway.vnc import (
+    VNCPasswordConfigurationError,
+    normalize_vnc_password,
+)
 from apps.portfolios.models import TradingPortfolio
 
 
@@ -381,6 +386,113 @@ def test_gateway_environment_uses_an_ephemeral_unique_django_secret():
     assert "DJANGO_SECRET_KEY" not in {field.name for field in BrokerGatewaySession._meta.fields}
 
 
+def _configure_local_gateway(settings, *, token, novnc_password):
+    settings.ALLOW_LIVE_TRADING = False
+    settings.LOCAL_PAPER_GATEWAY_URL = (
+        "http://paper-ibkr-gateway:8080/api/v1"
+    )
+    settings.LOCAL_PAPER_GATEWAY_CONTAINER_NAME = "paper-ibkr-gateway"
+    settings.LOCAL_PAPER_GATEWAY_SERVICE_TOKEN = token
+    settings.LOCAL_PAPER_GATEWAY_NOVNC_PASSWORD = novnc_password
+
+
+def _waiting_local_gateway(monkeypatch):
+    monkeypatch.setattr(
+        GatewayClient,
+        "health",
+        lambda self: {"connected": False, "mode": "paper"},
+    )
+
+
+def test_static_gateway_stores_and_repairs_each_credential_independently(
+    settings, monkeypatch
+):
+    _waiting_local_gateway(monkeypatch)
+    _configure_local_gateway(
+        settings,
+        token="dummy-service-token-a",
+        novnc_password="vnc-pass-alpha",
+    )
+
+    session = synchronize_local_paper_gateway()
+
+    assert decrypt_secret(session.encrypted_gateway_token) == "dummy-service-token-a"
+    assert decrypt_secret(session.encrypted_novnc_password) == "vnc-pass"
+    assert (
+        decrypt_secret(session.encrypted_gateway_token)
+        != decrypt_secret(session.encrypted_novnc_password)
+    )
+
+    # Repair a session created by the old service-token-as-VNC-password bug.
+    broken_vnc = encrypt_secret("dummy-se")
+    BrokerGatewaySession.objects.filter(pk=session.pk).update(
+        encrypted_novnc_password=broken_vnc
+    )
+    repaired = synchronize_local_paper_gateway()
+    assert decrypt_secret(repaired.encrypted_novnc_password) == "vnc-pass"
+
+    vnc_ciphertext = repaired.encrypted_novnc_password
+    settings.LOCAL_PAPER_GATEWAY_SERVICE_TOKEN = "dummy-service-token-b"
+    service_rotated = synchronize_local_paper_gateway()
+    assert decrypt_secret(service_rotated.encrypted_gateway_token) == (
+        "dummy-service-token-b"
+    )
+    assert service_rotated.encrypted_novnc_password == vnc_ciphertext
+
+    service_ciphertext = service_rotated.encrypted_gateway_token
+    settings.LOCAL_PAPER_GATEWAY_NOVNC_PASSWORD = "new-pass-bravo"
+    vnc_rotated = synchronize_local_paper_gateway()
+    assert vnc_rotated.encrypted_gateway_token == service_ciphertext
+    assert decrypt_secret(vnc_rotated.encrypted_novnc_password) == "new-pass"
+
+
+@pytest.mark.parametrize(
+    "invalid_password",
+    ["", "short", "linefeed\nvalue", "return\rvalue", "password-\N{SNOWMAN}"],
+)
+def test_static_gateway_invalid_vnc_configuration_fails_closed_without_secret(
+    invalid_password, settings, monkeypatch
+):
+    _waiting_local_gateway(monkeypatch)
+    _configure_local_gateway(
+        settings,
+        token="dummy-service-token",
+        novnc_password=invalid_password,
+    )
+
+    with pytest.raises(VNCPasswordConfigurationError) as error:
+        synchronize_local_paper_gateway()
+
+    assert not BrokerGatewaySession.objects.filter(
+        child_container_name="paper-ibkr-gateway"
+    ).exists()
+    if invalid_password:
+        assert invalid_password not in str(error.value)
+
+
+def test_static_gateway_secrets_are_not_serialized(client, settings, monkeypatch):
+    _waiting_local_gateway(monkeypatch)
+    service_token = "dummy-service-token-not-public"
+    vnc_password = "vnc-hide-not-public"
+    _configure_local_gateway(
+        settings, token=service_token, novnc_password=vnc_password
+    )
+    session = synchronize_local_paper_gateway()
+
+    result = client.get(f"/api/v1/broker-sessions/{session.pk}/")
+
+    assert result.status_code == 200
+    payload = result.content.decode("utf-8")
+    assert service_token not in payload
+    assert vnc_password not in payload
+    assert "encrypted_gateway_token" not in payload
+    assert "encrypted_novnc_password" not in payload
+
+
+def test_vnc_password_normalization_matches_classic_rfb_effective_bytes():
+    assert normalize_vnc_password("12345678-extra") == "12345678"
+
+
 def test_provision_adoption_deletes_secret_and_retryable_failure_keeps_it(monkeypatch):
     adopted = make_session("Adopt", "paper")
     add_secret(adopted)
@@ -626,7 +738,11 @@ def test_public_novnc_url_and_asgi_connect_page_use_exact_prefix_once(monkeypatc
     assert preserved[0]["status"] == 200
     assert f'"authorize": "{prefix}/authorize/"' in page
     assert f'"vnc": "{prefix}/vnc.html"' in page
-    assert f'"websockify": "{prefix.lstrip("/")}/websockify"' in page
+    assert '"websockify": "websockify"' in page
+    assert "path=websockify" in page
+    assert "/novnc/novnc/" not in page
+    assert session.child_container_name not in page
+    assert "access_token=" not in page
     assert "../authorize/" not in page and "../vnc.html" not in page
 
     stripped_scope = {

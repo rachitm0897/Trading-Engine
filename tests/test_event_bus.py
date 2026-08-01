@@ -1,14 +1,26 @@
 import uuid
+import json
+import sys
 from datetime import timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 import pytest
+from django.core.management import call_command
+from django.db import OperationalError
 from django.test import override_settings
 from apps.accounts.models import BrokerAccount
 from apps.audit.models import AuditEvent, OutboxEvent
 from apps.broker_gateway.models import BrokerPositionSnapshot
 from apps.event_bus.models import ConsumedEvent, DeadLetterEvent, ReplayRequest, StreamHealthMetric
 from apps.event_bus.schemas import decimal_safe, validate_envelope
-from apps.event_bus.services import consume_once, envelope_for, publish_batch, replay_envelopes, route_dead_letter
+from apps.event_bus.services import (
+    consume_once,
+    deterministic_invalid_event_error,
+    envelope_for,
+    publish_batch,
+    replay_envelopes,
+    route_dead_letter,
+)
 from apps.event_bus.tasks import compact_operational_records
 from django.utils import timezone
 
@@ -79,6 +91,93 @@ def test_failed_consumer_remains_visible_and_can_be_retried():
 def test_dead_letter_retains_original_event():
     envelope=envelope_for(event()); route_dead_letter("market.raw.v1",envelope,"malformed","normalizer")
     row=DeadLetterEvent.objects.get(); assert row.envelope["event_id"]==envelope["event_id"] and row.reason=="malformed"
+
+
+class ConsumerMessage:
+    def __init__(self, payload):
+        self.payload = json.dumps(payload).encode()
+
+    def value(self): return self.payload
+    def error(self): return None
+    def topic(self): return "market.bars.v1"
+    def partition(self): return 0
+    def offset(self): return 7
+
+
+class OneMessageConsumer:
+    def __init__(self, payload):
+        self.message = ConsumerMessage(payload)
+        self.commits = []
+        self.closed = False
+
+    def subscribe(self, topics): self.topics = topics
+    def poll(self, timeout):
+        message, self.message = self.message, None
+        return message
+    def commit(self, **kwargs): self.commits.append(kwargs)
+    def close(self): self.closed = True
+
+
+@override_settings(KAFKA_ENABLED=True)
+def test_market_consumer_does_not_commit_transient_database_failure(monkeypatch):
+    fake=OneMessageConsumer({"event_id":str(uuid.uuid4())})
+    monkeypatch.setitem(
+        sys.modules,
+        "confluent_kafka",
+        SimpleNamespace(Consumer=lambda _configuration:fake),
+    )
+    monkeypatch.setattr(
+        "apps.market_streams.management.commands.consume_market_streams.consume_market_event",
+        lambda *_args,**_kwargs:(_ for _ in ()).throw(
+            OperationalError("database temporarily unavailable")
+        ),
+    )
+    with pytest.raises(OperationalError,match="temporarily unavailable"):
+        call_command("consume_market_streams","--once")
+    assert fake.commits == []
+    assert fake.closed
+    assert DeadLetterEvent.objects.count() == 0
+    assert not deterministic_invalid_event_error(OperationalError("retry"))
+
+
+@override_settings(KAFKA_ENABLED=True)
+def test_market_consumer_commits_deterministic_invalid_only_after_dlq(monkeypatch):
+    payload={"event_id":str(uuid.uuid4()),"payload":{"bad":True}}
+    fake=OneMessageConsumer(payload)
+    monkeypatch.setitem(
+        sys.modules,
+        "confluent_kafka",
+        SimpleNamespace(Consumer=lambda _configuration:fake),
+    )
+    monkeypatch.setattr(
+        "apps.market_streams.management.commands.consume_market_streams.consume_market_event",
+        lambda *_args,**_kwargs:(_ for _ in ()).throw(ValueError("invalid schema")),
+    )
+    call_command("consume_market_streams","--once")
+    row=DeadLetterEvent.objects.get()
+    assert row.envelope == payload and row.reason == "invalid schema"
+    assert len(fake.commits) == 1
+    assert fake.commits[0]["message"].offset() == 7
+    assert fake.closed
+
+
+def test_market_dlq_replay_command_forces_replay_mode(monkeypatch):
+    row=DeadLetterEvent.objects.create(
+        source_topic="market.bars.v1",
+        consumer_name="market-persistence-v2",
+        reason="previous deterministic failure",
+        envelope={"event_id":str(uuid.uuid4()),"payload":{"processing_mode":"LIVE"}},
+    )
+    consumed=[]
+    monkeypatch.setattr(
+        "apps.market_streams.services.consume_market_event",
+        lambda consumer,envelope:consumed.append((consumer,envelope)) or {"ok":True},
+    )
+    call_command("replay_market_dlq","--id",str(row.pk))
+    row.refresh_from_db()
+    assert row.replayed_at is not None
+    assert consumed[0][0] == "market-persistence-v2"
+    assert consumed[0][1]["payload"]["processing_mode"] == "REPLAY"
 
 
 def test_replay_uses_consumer_idempotency():
