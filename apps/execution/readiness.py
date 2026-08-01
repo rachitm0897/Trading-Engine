@@ -60,6 +60,7 @@ PENDING_BROKER_COMMAND_STATUSES = (
     BrokerCommand.Status.UNCERTAIN,
 )
 HEALTHY_HEARTBEAT_STATUSES = {"HEALTHY", "RUNNING", "IDLE"}
+TERMINAL_FLINK_JOB_STATES = {"CANCELED", "FAILED", "FINISHED"}
 
 
 def _setting_tuple(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -159,6 +160,41 @@ def _completed_checkpoint(payload):
     )
 
 
+def _flink_job_start_time(job):
+    value = (
+        job.get("start-time")
+        or job.get("start_time")
+        or job.get("startTime")
+    )
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
+def _flink_job_selection_key(job):
+    state = str(job.get("state") or "UNKNOWN").upper()
+    if state == "RUNNING":
+        state_priority = 2
+    elif state not in TERMINAL_FLINK_JOB_STATES:
+        state_priority = 1
+    else:
+        state_priority = 0
+    return state_priority, _flink_job_start_time(job)
+
+
+def _select_flink_jobs_by_name(jobs):
+    selected = {}
+    for job in jobs:
+        name = str(job.get("name") or "")
+        current = selected.get(name)
+        if current is None or _flink_job_selection_key(
+            job
+        ) > _flink_job_selection_key(current):
+            selected[name] = job
+    return selected
+
+
 def _flink_readiness(
     *,
     http_get: Callable[..., Any],
@@ -188,7 +224,7 @@ def _flink_readiness(
         if hasattr(response, "raise_for_status"):
             response.raise_for_status()
         jobs = (response.json() or {}).get("jobs") or []
-        by_name = {str(item.get("name") or ""): item for item in jobs}
+        by_name = _select_flink_jobs_by_name(jobs)
         signal["running_jobs"] = sorted(
             name
             for name in required_jobs

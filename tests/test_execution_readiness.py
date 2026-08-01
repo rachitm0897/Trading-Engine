@@ -83,6 +83,36 @@ def healthy_flink(now, *, missing=(), stopped=(), checkpoint_age=5):
     return get
 
 
+def flink_inventory(now, jobs, *, checkpoint_age=5):
+    job_ids = {
+        job.get("jid") or job.get("id")
+        for job in jobs
+        if job.get("jid") or job.get("id")
+    }
+
+    def get(url, timeout):
+        if url.endswith("/jobs/overview"):
+            return JsonResponse({"jobs": jobs})
+        job_id = url.split("/jobs/", 1)[1].split("/", 1)[0]
+        assert job_id in job_ids
+        checkpoint_at = now - timedelta(seconds=checkpoint_age)
+        return JsonResponse(
+            {
+                "latest": {
+                    "completed": {
+                        "id": 7,
+                        "status": "COMPLETED",
+                        "latest_ack_timestamp": int(
+                            checkpoint_at.timestamp() * 1000
+                        ),
+                    }
+                }
+            }
+        )
+
+    return get
+
+
 def healthy_runtime(settings):
     settings.KAFKA_ENABLED = True
     settings.EXECUTION_REQUIRED_FLINK_JOBS = DEFAULT_REQUIRED_FLINK_JOBS
@@ -260,6 +290,126 @@ def test_missing_required_flink_job_and_checkpoint_are_blocking(settings):
     assert result["signals"]["flink"]["missing_jobs"] == [
         "indicator-computation-v2"
     ]
+
+
+def test_running_flink_job_is_selected_over_older_canceled_job(settings):
+    healthy_runtime(settings)
+    now = timezone.now()
+    name = DEFAULT_REQUIRED_FLINK_JOBS[0]
+    settings.EXECUTION_REQUIRED_FLINK_JOBS = (name,)
+    jobs = [
+        {
+            "jid": "running-job",
+            "name": name,
+            "state": "RUNNING",
+            "start-time": int((now - timedelta(minutes=1)).timestamp() * 1000),
+        },
+        {
+            "jid": "canceled-job",
+            "name": name,
+            "state": "CANCELED",
+            "start-time": int((now - timedelta(hours=1)).timestamp() * 1000),
+        },
+    ]
+
+    result = collect_execution_readiness(
+        http_get=flink_inventory(now, jobs),
+        now=now,
+    )
+
+    flink = result["signals"]["flink"]
+    assert flink["jobs"][0]["job_id"] == "running-job"
+    assert flink["running_jobs"] == [name]
+    assert "REQUIRED_FLINK_JOBS_NOT_RUNNING" not in blocker_codes(result)
+
+
+def test_newest_running_flink_job_is_selected(settings):
+    healthy_runtime(settings)
+    now = timezone.now()
+    name = DEFAULT_REQUIRED_FLINK_JOBS[0]
+    settings.EXECUTION_REQUIRED_FLINK_JOBS = (name,)
+    jobs = [
+        {
+            "jid": "new-running-job",
+            "name": name,
+            "state": "RUNNING",
+            "start-time": int((now - timedelta(minutes=1)).timestamp() * 1000),
+        },
+        {
+            "jid": "old-running-job",
+            "name": name,
+            "state": "RUNNING",
+            "start-time": int((now - timedelta(hours=1)).timestamp() * 1000),
+        },
+    ]
+
+    result = collect_execution_readiness(
+        http_get=flink_inventory(now, jobs),
+        now=now,
+    )
+
+    assert result["signals"]["flink"]["jobs"][0]["job_id"] == "new-running-job"
+
+
+def test_only_canceled_flink_job_is_reported_not_running(settings):
+    healthy_runtime(settings)
+    now = timezone.now()
+    name = DEFAULT_REQUIRED_FLINK_JOBS[0]
+    settings.EXECUTION_REQUIRED_FLINK_JOBS = (name,)
+    jobs = [
+        {
+            "jid": "canceled-job",
+            "name": name,
+            "state": "CANCELED",
+            "start-time": int((now - timedelta(hours=1)).timestamp() * 1000),
+        }
+    ]
+
+    result = collect_execution_readiness(
+        http_get=flink_inventory(now, jobs),
+        now=now,
+    )
+
+    flink = result["signals"]["flink"]
+    assert flink["jobs"][0]["job_id"] == "canceled-job"
+    assert flink["not_running_jobs"] == [name]
+    assert "REQUIRED_FLINK_JOBS_NOT_RUNNING" in blocker_codes(result)
+
+
+def test_all_required_flink_jobs_running_with_historical_canceled_jobs(settings):
+    healthy_runtime(settings)
+    now = timezone.now()
+    running_jobs = [
+        {
+            "jid": f"running-{index}",
+            "name": name,
+            "state": "RUNNING",
+            "start-time": int((now - timedelta(minutes=index)).timestamp() * 1000),
+        }
+        for index, name in enumerate(DEFAULT_REQUIRED_FLINK_JOBS, start=1)
+    ]
+    canceled_jobs = [
+        {
+            "jid": f"canceled-{index}",
+            "name": name,
+            "state": "CANCELED",
+            "start-time": int((now - timedelta(days=index)).timestamp() * 1000),
+        }
+        for index, name in enumerate(DEFAULT_REQUIRED_FLINK_JOBS, start=1)
+    ]
+
+    result = collect_execution_readiness(
+        http_get=flink_inventory(now, running_jobs + canceled_jobs),
+        now=now,
+    )
+
+    flink = result["signals"]["flink"]
+    assert result["ready"] is True
+    assert flink["running_jobs"] == sorted(DEFAULT_REQUIRED_FLINK_JOBS)
+    assert flink["not_running_jobs"] == []
+    assert {job["job_id"] for job in flink["jobs"]} == {
+        job["jid"] for job in running_jobs
+    }
 
 
 def test_worker_heartbeat_and_strategy_backlog_block_readiness(settings):
