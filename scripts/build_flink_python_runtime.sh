@@ -28,7 +28,7 @@ tar -xzf "${RUNTIME_TARBALL}" -C "${RUNTIME_ROOT}" --strip-components=1
   --no-cache-dir \
   "apache-flink==1.20.1"
 "${RUNTIME_ROOT}/bin/python3" -c \
-  "import platform, pyflink; assert platform.machine() == 'x86_64'; assert pyflink.version.__version__ == '1.20.1'"
+  "import platform; from pyflink.version import __version__; assert platform.machine() == 'x86_64'; assert __version__ == '1.20.1'"
 
 # No TaskManager may be asked to follow a Backend/build-host-only symlink.
 if find "${RUNTIME_ROOT}" -type l -lname '/*' -print | grep -q .; then
@@ -53,7 +53,7 @@ mkdir -p "${VERIFY_ROOT}"
 unzip -q "${OUTPUT_PATH}" -d "${VERIFY_ROOT}"
 test -x "${VERIFY_ROOT}/bin/python"
 "${VERIFY_ROOT}/bin/python" -c \
-  "import platform, pyflink; assert platform.machine() == 'x86_64'; assert pyflink.version.__version__ == '1.20.1'"
+  "import platform; from pyflink.version import __version__; assert platform.machine() == 'x86_64'; assert __version__ == '1.20.1'"
 if find "${VERIFY_ROOT}" -xtype l -print | grep -q .; then
   echo "Packaged Python runtime contains a broken symlink after extraction" >&2
   exit 1
