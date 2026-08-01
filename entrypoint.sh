@@ -15,5 +15,13 @@ python manage.py migrate --noinput
 echo "Checking required Kafka topics..."
 python scripts/ensure_kafka_topics.py
 
+echo "Checking required Flink jobs..."
+if python -u scripts/ensure_flink_jobs.py; then
+  echo "Flink job bootstrap finished."
+else
+  bootstrap_status=$?
+  echo "Flink job bootstrap failed with status ${bootstrap_status}; continuing so Backend diagnostics remain available." >&2
+fi
+
 echo "Starting Backend services..."
 exec supervisord -c /app/supervisord.conf
