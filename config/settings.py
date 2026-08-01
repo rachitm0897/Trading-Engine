@@ -1,0 +1,358 @@
+import os
+from pathlib import Path
+import dj_database_url
+from corsheaders.defaults import default_headers
+from dotenv import load_dotenv
+
+from apps.research.configuration import RecommendationSystemConfiguration
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR.parent / ".env", override=False)
+load_dotenv(BASE_DIR / ".env", override=False)
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "test-only-secret")
+DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
+ALLOWED_HOSTS = [x.strip() for x in os.getenv("ALLOWED_HOSTS", "*").split(",") if x.strip()]
+APP_BASE_PATH = "/" + os.getenv("APP_BASE_PATH", "").strip("/") if os.getenv("APP_BASE_PATH", "").strip("/") else ""
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+FORCE_SCRIPT_NAME = APP_BASE_PATH or None
+
+INSTALLED_APPS = [
+    "django.contrib.contenttypes",
+    "django.contrib.auth",
+    "django.contrib.sessions",
+    "corsheaders",
+    "rest_framework",
+    "django_celery_results",
+
+    "apps.core",
+    "apps.instruments",
+    "apps.broker_gateway",
+    "apps.accounts",
+    "apps.portfolios",
+    "apps.strategies",
+    "apps.allocation",
+    "apps.risk",
+    "apps.oms",
+    "apps.execution",
+    "apps.reconciliation",
+    "apps.audit",
+    "apps.event_bus",
+    "apps.market_streams",
+    "apps.rebalancing",
+    "apps.position_sizing",
+    "apps.market_data",
+    "apps.portfolio_optimization",
+    "apps.portfolio_construction",
+    "apps.research",
+]
+
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+
+    "apps.core.middleware.ApiSlashCompatibilityMiddleware",
+
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+]
+ROOT_URLCONF = "config.urls"
+TEMPLATES = []
+WSGI_APPLICATION = "config.wsgi.application"
+ASGI_APPLICATION = "config.asgi.application"
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'db.sqlite3'}")
+DATABASES = {"default": dj_database_url.parse(DATABASE_URL, conn_max_age=60)}
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+USE_TZ = True
+CORS_ALLOWED_ORIGINS = [x.strip() for x in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if x.strip()]
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = (*default_headers, "idempotency-key")
+CSRF_TRUSTED_ORIGINS = [x.strip() for x in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if x.strip()]
+REST_FRAMEWORK = {"DEFAULT_AUTHENTICATION_CLASSES": [], "DEFAULT_PERMISSION_CLASSES": []}
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/1")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
+STRATEGY_EVALUATION_MAX_ATTEMPTS = int(os.getenv("STRATEGY_EVALUATION_MAX_ATTEMPTS", "5"))
+STRATEGY_EVALUATION_RETRY_BASE_SECONDS = int(os.getenv("STRATEGY_EVALUATION_RETRY_BASE_SECONDS", "5"))
+STRATEGY_EVALUATION_RETRY_MAX_SECONDS = int(os.getenv("STRATEGY_EVALUATION_RETRY_MAX_SECONDS", "300"))
+STRATEGY_EVALUATION_CLAIM_TIMEOUT_SECONDS = int(os.getenv("STRATEGY_EVALUATION_CLAIM_TIMEOUT_SECONDS", "300"))
+STRATEGY_EVALUATION_BATCH_SIZE = int(os.getenv("STRATEGY_EVALUATION_BATCH_SIZE", "50"))
+PORTFOLIO_TARGET_MAX_AGE_SECONDS = int(os.getenv("PORTFOLIO_TARGET_MAX_AGE_SECONDS", "900"))
+PORTFOLIO_TARGET_COORDINATION_DEBOUNCE_SECONDS = int(
+    os.getenv("PORTFOLIO_TARGET_COORDINATION_DEBOUNCE_SECONDS", "2")
+)
+PORTFOLIO_TARGET_COORDINATION_BATCH_SIZE = int(
+    os.getenv("PORTFOLIO_TARGET_COORDINATION_BATCH_SIZE", "50")
+)
+PORTFOLIO_TARGET_COORDINATION_RETRY_BASE_SECONDS = int(
+    os.getenv("PORTFOLIO_TARGET_COORDINATION_RETRY_BASE_SECONDS", "5")
+)
+PORTFOLIO_TARGET_COORDINATION_RETRY_MAX_SECONDS = int(
+    os.getenv("PORTFOLIO_TARGET_COORDINATION_RETRY_MAX_SECONDS", "300")
+)
+EXECUTION_AVERAGE_VOLUME_WINDOW = int(
+    os.getenv("EXECUTION_AVERAGE_VOLUME_WINDOW", "20")
+)
+if EXECUTION_AVERAGE_VOLUME_WINDOW < 1:
+    raise RuntimeError("EXECUTION_AVERAGE_VOLUME_WINDOW must be positive")
+EXECUTION_REGISTER_ADV_INPUT = (
+    os.getenv("EXECUTION_REGISTER_ADV_INPUT", "true").lower() == "true"
+)
+EXECUTION_ADV_TIMEFRAME = os.getenv(
+    "EXECUTION_ADV_TIMEFRAME", "RUNTIME"
+).strip()
+ORDER_INTENT_BATCH_SIZE = int(os.getenv("ORDER_INTENT_BATCH_SIZE", "50"))
+ORDER_INTENT_CLAIM_TIMEOUT_SECONDS = int(
+    os.getenv("ORDER_INTENT_CLAIM_TIMEOUT_SECONDS", "120")
+)
+BROKER_COMMAND_BATCH_SIZE = int(os.getenv("BROKER_COMMAND_BATCH_SIZE", "50"))
+BROKER_COMMAND_RETRY_BASE_SECONDS = int(
+    os.getenv("BROKER_COMMAND_RETRY_BASE_SECONDS", "5")
+)
+BROKER_COMMAND_RETRY_MAX_SECONDS = int(
+    os.getenv("BROKER_COMMAND_RETRY_MAX_SECONDS", "300")
+)
+BROKER_COMMAND_CLAIM_TIMEOUT_SECONDS = int(
+    os.getenv("BROKER_COMMAND_CLAIM_TIMEOUT_SECONDS", "120")
+)
+EXECUTION_REQUIRED_FLINK_JOBS = tuple(
+    value.strip()
+    for value in os.getenv(
+        "EXECUTION_REQUIRED_FLINK_JOBS",
+        "market-normalization-v2,bar-aggregation-v2,indicator-computation-v2,"
+        "stale-price-detection-v1,stream-health-v1",
+    ).split(",")
+    if value.strip()
+)
+FLINK_CHECKPOINT_STALE_SECONDS = int(
+    os.getenv("FLINK_CHECKPOINT_STALE_SECONDS", "180")
+)
+EXECUTION_READINESS_HTTP_TIMEOUT_SECONDS = float(
+    os.getenv("EXECUTION_READINESS_HTTP_TIMEOUT_SECONDS", "2")
+)
+MARKET_RAW_PRODUCER_HEARTBEAT_STALE_SECONDS = int(
+    os.getenv("MARKET_RAW_PRODUCER_HEARTBEAT_STALE_SECONDS", "30")
+)
+EXECUTION_WORKER_HEARTBEAT_STALE_SECONDS = int(
+    os.getenv("EXECUTION_WORKER_HEARTBEAT_STALE_SECONDS", "30")
+)
+GATEWAY_CONNECTIVITY_STALE_SECONDS = int(
+    os.getenv("GATEWAY_CONNECTIVITY_STALE_SECONDS", "30")
+)
+STRATEGY_JOB_BACKLOG_THRESHOLD = int(
+    os.getenv("STRATEGY_JOB_BACKLOG_THRESHOLD", "100")
+)
+TARGET_COORDINATION_BACKLOG_THRESHOLD = int(
+    os.getenv("TARGET_COORDINATION_BACKLOG_THRESHOLD", "100")
+)
+PENDING_INTENT_MAX_AGE_SECONDS = int(
+    os.getenv("PENDING_INTENT_MAX_AGE_SECONDS", "60")
+)
+BROKER_COMMAND_MAX_AGE_SECONDS = int(
+    os.getenv("BROKER_COMMAND_MAX_AGE_SECONDS", "60")
+)
+CELERY_BEAT_SCHEDULE = {
+    "reconcile": {"task": "apps.reconciliation.tasks.run_scheduled_reconciliation", "schedule": 60.0},
+    "sync-broker": {"task": "apps.broker_gateway.tasks.sync_broker_events", "schedule": 5.0},
+    "publish-outbox": {"task": "apps.event_bus.tasks.publish_outbox_events", "schedule": 2.0},
+    "stream-health": {"task": "apps.event_bus.tasks.check_stream_health", "schedule": 30.0},
+    "restore-market-subscriptions": {"task": "apps.market_streams.tasks.restore_active_market_subscriptions", "schedule": 15.0},
+    "warmup-timeouts": {"task": "apps.market_streams.tasks.check_warmup_timeouts", "schedule": 30.0},
+    "strategy-evaluation": {"task": "apps.strategies.tasks.execute_strategy_evaluation_jobs", "schedule": 1.0},
+    "recover-strategy-evaluation": {"task": "apps.strategies.tasks.recover_strategy_evaluation_jobs", "schedule": 30.0},
+    "instrument-registry": {"task": "apps.instruments.tasks.publish_instrument_registry_snapshot", "schedule": 60.0},
+    "recover-rebalances": {"task": "apps.rebalancing.tasks.recover_incomplete_rebalances", "schedule": 60.0},
+    "coordinate-portfolio-targets": {"task": "apps.rebalancing.tasks.coordinate_portfolio_targets", "schedule": 1.0},
+    "execute-order-intents": {"task": "apps.execution.tasks.execute_order_intents", "schedule": 1.0},
+    "recover-order-intents": {"task": "apps.execution.tasks.recover_order_intents", "schedule": 30.0},
+    "dispatch-broker-commands": {"task": "apps.execution.tasks.dispatch_broker_commands", "schedule": 1.0},
+    "recover-broker-commands": {"task": "apps.execution.tasks.recover_broker_commands", "schedule": 30.0},
+    "sync-finnhub-history": {"task": "apps.market_data.tasks.sync_active_finnhub_universes", "schedule": 21600.0},
+    "check-finnhub-history": {"task": "apps.market_data.tasks.check_finnhub_history_staleness", "schedule": 21600.0},
+    "verify-finnhub-mappings": {"task": "apps.market_data.tasks.verify_pending_finnhub_mappings", "schedule": 21600.0},
+    "monitor-market-data-providers": {"task": "apps.market_streams.tasks.monitor_market_data_providers", "schedule": 5.0},
+    "compact-operational-records": {"task": "apps.event_bus.tasks.compact_operational_records", "schedule": 86400.0},
+    "research-universe-mapping": {"task": "apps.research.tasks.refresh_universe_mapping", "schedule": 86400.0},
+    "research-daily-refresh": {"task": "apps.research.tasks.refresh_research_pipeline", "schedule": 86400.0},
+    "research-intraday-refresh": {"task": "apps.research.tasks.refresh_intraday_data", "schedule": 3600.0},
+    "research-fundamentals": {"task": "apps.research.tasks.refresh_fundamentals", "schedule": 86400.0},
+    "research-events": {"task": "apps.research.tasks.refresh_events", "schedule": 3600.0},
+    "research-features": {"task": "apps.research.tasks.calculate_features", "schedule": 86400.0},
+    "research-experiments": {"task": "apps.research.tasks.schedule_research_experiments", "schedule": 86400.0},
+    "research-experiment-dispatch": {"task": "apps.research.tasks.dispatch_research_experiments", "schedule": 60.0},
+    "research-scoring": {"task": "apps.research.tasks.score_current_candidates", "schedule": 86400.0},
+    "recommendation-cache": {"task": "apps.research.tasks.warm_recommendation_cache", "schedule": 86400.0},
+}
+ALLOW_LIVE_TRADING = os.getenv("ALLOW_LIVE_TRADING", "false").lower() == "true"
+BROKER_SESSION_ENCRYPTION_KEY = os.getenv("BROKER_SESSION_ENCRYPTION_KEY", "")
+BROKER_CREDENTIAL_TTL_SECONDS = int(os.getenv("BROKER_CREDENTIAL_TTL_SECONDS", "900"))
+BROKER_SESSION_CREATING_STALE_SECONDS = int(os.getenv("BROKER_SESSION_CREATING_STALE_SECONDS", "60"))
+BROKER_SESSION_START_TIMEOUT_SECONDS = float(os.getenv("BROKER_SESSION_START_TIMEOUT_SECONDS", "45"))
+BROKER_SESSION_HEALTH_TIMEOUT_SECONDS = float(os.getenv("BROKER_SESSION_HEALTH_TIMEOUT_SECONDS", "5"))
+NOVNC_ACCESS_TOKEN_TTL_SECONDS = int(os.getenv("NOVNC_ACCESS_TOKEN_TTL_SECONDS", "300"))
+NOVNC_PROXY_CONNECT_TIMEOUT_SECONDS = float(os.getenv("NOVNC_PROXY_CONNECT_TIMEOUT_SECONDS", "10"))
+NOVNC_PROXY_IDLE_TIMEOUT_SECONDS = float(os.getenv("NOVNC_PROXY_IDLE_TIMEOUT_SECONDS", "300"))
+NOVNC_PROXY_MAX_BODY_BYTES = int(os.getenv("NOVNC_PROXY_MAX_BODY_BYTES", str(10 * 1024 * 1024)))
+QCH_APP_ID = os.getenv("QCH_APP_ID", "")
+QCH_API_HOST = os.getenv("QCH_API_HOST", "").rstrip("/")
+QCH_SERVICE_TOKEN = os.getenv("QCH_SERVICE_TOKEN", "")
+QCH_REQUEST_TIMEOUT_SECONDS = float(os.getenv("QCH_REQUEST_TIMEOUT_SECONDS", "10"))
+QCH_SUBCONTAINER_NETWORK = os.getenv("QCH_SUBCONTAINER_NETWORK", "")
+IBKR_GATEWAY_IMAGE = os.getenv("IBKR_GATEWAY_IMAGE", "")
+GLOBAL_KILL_SWITCH = os.getenv("GLOBAL_KILL_SWITCH", "false").lower() == "true"
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_CLIENT_ID = os.getenv("KAFKA_CLIENT_ID", "finflock-backend")
+KAFKA_ENABLED = os.getenv("KAFKA_ENABLED", "false").lower() == "true"
+MARKET_PRICE_STALE_SECONDS = int(os.getenv("MARKET_PRICE_STALE_SECONDS", "300"))
+WARMUP_SAFETY_BARS = int(os.getenv("WARMUP_SAFETY_BARS", "5"))
+WARMUP_TIMEOUT_SECONDS = int(os.getenv("WARMUP_TIMEOUT_SECONDS", "300"))
+MARKET_CONSUMER_HEARTBEAT_STALE_SECONDS = int(os.getenv("MARKET_CONSUMER_HEARTBEAT_STALE_SECONDS", "30"))
+KAFKA_LAG_DEGRADED_THRESHOLD = int(os.getenv("KAFKA_LAG_DEGRADED_THRESHOLD", "1000"))
+KAFKA_HEALTH_STALE_SECONDS = int(os.getenv("KAFKA_HEALTH_STALE_SECONDS", "60"))
+OUTBOX_PUBLISHER_HEARTBEAT_STALE_SECONDS = int(
+    os.getenv("OUTBOX_PUBLISHER_HEARTBEAT_STALE_SECONDS", "30")
+)
+EXECUTION_REQUIRED_KAFKA_TOPICS = tuple(
+    value.strip()
+    for value in os.getenv(
+        "EXECUTION_REQUIRED_KAFKA_TOPICS",
+        "market.raw.v1,market.canonical.v1,market.bars.v1,market.indicators.v1,"
+        "market.quality.v1,instrument.registry.v1,strategy.inputs.v1,"
+        "strategy.targets.v1,portfolio.rebalance.planned.v1,risk.decisions.v1,"
+        "orders.events.v1,executions.events.v1,reconciliation.events.v1,"
+        "system.health.v1,dead-letter.v1",
+    ).split(",")
+    if value.strip()
+)
+EXECUTION_ACTIVATION_PREFLIGHT_ENABLED = (
+    os.getenv("EXECUTION_ACTIVATION_PREFLIGHT_ENABLED", "true").lower() == "true"
+)
+APPEND_SLASH = False
+FLINK_REST_URL = os.getenv("FLINK_REST_URL", "http://localhost:8081")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
+FINNHUB_BASE_URL = os.getenv("FINNHUB_BASE_URL", "https://finnhub.io/api/v1").rstrip("/")
+FINNHUB_API_KEY_OVERRIDE_ENABLED = os.getenv("FINNHUB_API_KEY_OVERRIDE_ENABLED", "false").lower() == "true"
+FINNHUB_REQUEST_TIMEOUT_SECONDS = int(os.getenv("FINNHUB_REQUEST_TIMEOUT_SECONDS", "15"))
+FINNHUB_MAX_RETRIES = int(os.getenv("FINNHUB_MAX_RETRIES", "2"))
+FINNHUB_ENCRYPTION_KEY = os.getenv("FINNHUB_ENCRYPTION_KEY", "")
+FINNHUB_OPERATION_THROTTLE_LIMIT = int(os.getenv("FINNHUB_OPERATION_THROTTLE_LIMIT", "30"))
+MARKET_DATA_FALLBACK_ENABLED = os.getenv("MARKET_DATA_FALLBACK_ENABLED", "false").lower() == "true"
+FINNHUB_HISTORICAL_FALLBACK_ENABLED = os.getenv("FINNHUB_HISTORICAL_FALLBACK_ENABLED", "false").lower() == "true"
+FINNHUB_LIVE_FALLBACK_ENABLED = os.getenv("FINNHUB_LIVE_FALLBACK_ENABLED", "false").lower() == "true"
+FINNHUB_AUTO_FAILBACK_ENABLED = os.getenv("FINNHUB_AUTO_FAILBACK_ENABLED", "false").lower() == "true"
+IBKR_MARKET_DATA_FAILOVER_GRACE_SECONDS = int(os.getenv("IBKR_MARKET_DATA_FAILOVER_GRACE_SECONDS", "15"))
+FINNHUB_LIVE_STALE_SECONDS = int(os.getenv("FINNHUB_LIVE_STALE_SECONDS", "15"))
+FINNHUB_WS_URL = os.getenv("FINNHUB_WS_URL", "wss://ws.finnhub.io").rstrip("/")
+FINNHUB_WS_RECONNECT_MAX_SECONDS = int(os.getenv("FINNHUB_WS_RECONNECT_MAX_SECONDS", "30"))
+FINNHUB_ALLOWED_LATENESS_SECONDS = int(os.getenv("FINNHUB_ALLOWED_LATENESS_SECONDS", "2"))
+FINNHUB_WS_RECONCILE_SECONDS = int(os.getenv("FINNHUB_WS_RECONCILE_SECONDS", "2"))
+PRIMARY_RECOVERY_CONFIRMATION_EVENTS = int(os.getenv("PRIMARY_RECOVERY_CONFIRMATION_EVENTS", "3"))
+PRIMARY_PROBE_RETRY_SECONDS = int(os.getenv("PRIMARY_PROBE_RETRY_SECONDS", "30"))
+FINNHUB_MAPPING_REVALIDATE_SECONDS = int(os.getenv("FINNHUB_MAPPING_REVALIDATE_SECONDS", "86400"))
+FINNHUB_SUPPORTED_ASSET_CLASSES = tuple(
+    value.strip().upper() for value in os.getenv("FINNHUB_SUPPORTED_ASSET_CLASSES", "STK").split(",") if value.strip()
+)
+GATEWAY_HTTP_TIMEOUT_SECONDS = float(os.getenv("GATEWAY_HTTP_TIMEOUT_SECONDS", "10"))
+LOCAL_PAPER_GATEWAY_URL = os.getenv("LOCAL_PAPER_GATEWAY_URL", "").strip()
+LOCAL_PAPER_GATEWAY_SERVICE_TOKEN = os.getenv(
+    "LOCAL_PAPER_GATEWAY_SERVICE_TOKEN", ""
+).strip()
+LOCAL_PAPER_GATEWAY_NOVNC_PASSWORD = os.getenv(
+    "LOCAL_PAPER_GATEWAY_NOVNC_PASSWORD", ""
+)
+LOCAL_PAPER_GATEWAY_CONTAINER_NAME = os.getenv(
+    "LOCAL_PAPER_GATEWAY_CONTAINER_NAME", "paper-ibkr-gateway"
+).strip()
+GATEWAY_COMMAND_POLL_INTERVAL_SECONDS = float(os.getenv("GATEWAY_COMMAND_POLL_INTERVAL_SECONDS", "0.25"))
+GATEWAY_COMMAND_TIMEOUT_DEFAULT_SECONDS = float(os.getenv("GATEWAY_COMMAND_TIMEOUT_DEFAULT_SECONDS", "20"))
+GATEWAY_COMMAND_TIMEOUT_SEARCH_CONTRACTS_SECONDS = float(
+    os.getenv("GATEWAY_COMMAND_TIMEOUT_SEARCH_CONTRACTS_SECONDS", "15")
+)
+GATEWAY_COMMAND_TIMEOUT_QUALIFY_SECONDS = float(os.getenv("GATEWAY_COMMAND_TIMEOUT_QUALIFY_SECONDS", "20"))
+GATEWAY_COMMAND_TIMEOUT_HISTORICAL_DATA_SECONDS = float(
+    os.getenv("GATEWAY_COMMAND_TIMEOUT_HISTORICAL_DATA_SECONDS", "60")
+)
+GATEWAY_COMMAND_TIMEOUT_HISTORICAL_SCHEDULE_SECONDS = float(
+    os.getenv("GATEWAY_COMMAND_TIMEOUT_HISTORICAL_SCHEDULE_SECONDS", "30")
+)
+GATEWAY_SAFE_COMMAND_RETRIES = max(0, int(os.getenv("GATEWAY_SAFE_COMMAND_RETRIES", "1")))
+GATEWAY_CONTRACT_SEARCH_MAX_RESULTS = max(1, min(50, int(os.getenv("GATEWAY_CONTRACT_SEARCH_MAX_RESULTS", "12"))))
+GATEWAY_IBKR_REQUEST_TIMEOUT_SEARCH_CONTRACTS_SECONDS = max(
+    1, int(os.getenv("GATEWAY_IBKR_REQUEST_TIMEOUT_SEARCH_CONTRACTS_SECONDS", "12"))
+)
+GATEWAY_IBKR_REQUEST_TIMEOUT_QUALIFY_SECONDS = max(
+    1, int(os.getenv("GATEWAY_IBKR_REQUEST_TIMEOUT_QUALIFY_SECONDS", "15"))
+)
+OPTIMIZATION_THROTTLE_LIMIT = int(os.getenv("OPTIMIZATION_THROTTLE_LIMIT", "30"))
+EXPENSIVE_OPERATION_THROTTLE_WINDOW_SECONDS = int(os.getenv("EXPENSIVE_OPERATION_THROTTLE_WINDOW_SECONDS", "60"))
+OUTBOX_RETENTION_DAYS = int(os.getenv("OUTBOX_RETENTION_DAYS", "30"))
+BROKER_SNAPSHOT_RETENTION_DAYS = int(os.getenv("BROKER_SNAPSHOT_RETENTION_DAYS", "30"))
+STREAM_HEALTH_RETENTION_DAYS = int(os.getenv("STREAM_HEALTH_RETENTION_DAYS", "30"))
+OPERATIONAL_COMPACTION_BATCH_SIZE = int(os.getenv("OPERATIONAL_COMPACTION_BATCH_SIZE", "1000"))
+RECOMMENDATION_CONFIG = RecommendationSystemConfiguration.from_environment(
+    os.environ,
+    default_artifact_root=BASE_DIR / "research_artifacts",
+)
+RESEARCH_ENABLED = RECOMMENDATION_CONFIG.research_enabled
+RECOMMENDATION_SYSTEM_ENABLED = RECOMMENDATION_CONFIG.recommendation_system_enabled
+RECOMMENDATION_UNIVERSE_KEY = RECOMMENDATION_CONFIG.universe_key
+RECOMMENDATION_MAX_STOCKS = RECOMMENDATION_CONFIG.maximum_stocks
+RECOMMENDATION_MIN_STOCKS = RECOMMENDATION_CONFIG.minimum_stocks
+RECOMMENDATION_CANDIDATE_POOL_SIZE = RECOMMENDATION_CONFIG.candidate_pool_size
+RECOMMENDATION_MAX_STRATEGIES_PER_STOCK = RECOMMENDATION_CONFIG.maximum_strategies_per_stock
+RESEARCH_DAILY_LOOKBACK_YEARS = RECOMMENDATION_CONFIG.daily_lookback_years
+RESEARCH_INTRADAY_LOOKBACK_DAYS = RECOMMENDATION_CONFIG.intraday_lookback_days
+RESEARCH_MINIMUM_DAILY_BARS = RECOMMENDATION_CONFIG.minimum_daily_bars
+RESEARCH_SCORE_MAX_AGE_DAYS = RECOMMENDATION_CONFIG.score_max_age_days
+RESEARCH_STALE_SCORE_FALLBACK_DAYS = RECOMMENDATION_CONFIG.stale_score_fallback_days
+RECOMMENDATION_SNAPSHOT_MAX_AGE_HOURS = RECOMMENDATION_CONFIG.snapshot_max_age_hours
+RESEARCH_MAX_PARALLEL_DATA_TASKS = RECOMMENDATION_CONFIG.maximum_parallel_data_tasks
+RESEARCH_MAX_PARALLEL_BACKTEST_TASKS = RECOMMENDATION_CONFIG.maximum_parallel_backtest_tasks
+RESEARCH_BUNDLE_PATH = os.getenv(
+    "RESEARCH_BUNDLE_PATH", str(BASE_DIR / "research_bundle")
+)
+RESEARCH_ARTIFACT_ROOT = str(RECOMMENDATION_CONFIG.artifact_root)
+RESEARCH_RECOMMENDATION_MAX_AGE_DAYS = max(1, RECOMMENDATION_SNAPSHOT_MAX_AGE_HOURS // 24)
+RESEARCH_TASK_ROUTES = {
+    "apps.research.tasks.refresh_universe_mapping": {"queue": "research_mapping"},
+    "apps.research.tasks.refresh_research_pipeline": {"queue": "research_daily_data"},
+    "apps.research.tasks.refresh_intraday_data": {"queue": "research_intraday_data"},
+    "apps.research.tasks.refresh_fundamentals": {"queue": "research_fundamentals"},
+    "apps.research.tasks.refresh_events": {"queue": "research_events"},
+    "apps.research.tasks.calculate_features": {"queue": "research_features"},
+    "apps.research.tasks.schedule_research_experiments": {"queue": "celery"},
+    "apps.research.tasks.dispatch_research_experiments": {"queue": "celery"},
+    "apps.research.tasks.run_single_asset_experiment": {"queue": "research_single_asset"},
+    "apps.research.tasks.run_cross_sectional_experiment": {"queue": "research_cross_sectional"},
+    "apps.research.tasks.run_allocator_experiment": {"queue": "research_allocators"},
+    "apps.research.tasks.run_overlay_experiment": {"queue": "research_overlays"},
+    "apps.research.tasks.run_event_experiment": {"queue": "research_cross_sectional"},
+    "apps.research.tasks.run_pair_experiment": {"queue": "research_pairs"},
+    "apps.research.tasks.score_current_candidates": {"queue": "research_scoring"},
+    "apps.research.tasks.warm_recommendation_cache": {"queue": "recommendation_cache"},
+    "apps.research.tasks.generate_recommendation_batch": {"queue": "recommendations"},
+}
+STRATEGY_EVALUATION_TASK_ROUTES = {
+    "apps.strategies.tasks.activate_strategy_instance": {"queue": "strategy_evaluation"},
+    "apps.strategies.tasks.execute_strategy_evaluation_jobs": {"queue": "strategy_evaluation"},
+    "apps.strategies.tasks.recover_strategy_evaluation_jobs": {"queue": "strategy_evaluation"},
+}
+REBALANCING_TASK_ROUTES = {
+    "apps.rebalancing.tasks.coordinate_portfolio_targets": {"queue": "target_coordination"},
+    "apps.rebalancing.tasks.recover_incomplete_rebalances": {"queue": "target_coordination"},
+}
+EXECUTION_TASK_ROUTES = {
+    "apps.execution.tasks.execute_order_intents": {"queue": "intent_execution"},
+    "apps.execution.tasks.recover_order_intents": {"queue": "intent_execution"},
+    "apps.execution.tasks.dispatch_broker_commands": {"queue": "broker_commands"},
+    "apps.execution.tasks.recover_broker_commands": {"queue": "broker_commands"},
+}
+CELERY_TASK_ROUTES = {
+    **RESEARCH_TASK_ROUTES,
+    **STRATEGY_EVALUATION_TASK_ROUTES,
+    **REBALANCING_TASK_ROUTES,
+    **EXECUTION_TASK_ROUTES,
+}
