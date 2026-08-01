@@ -1,6 +1,35 @@
+import logging
+
 from apps.core.views import method_guard, response
 
+from .flink_diagnostics import collect_flink_diagnostics
 from .readiness import collect_execution_readiness
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _staff_required(request):
+    user = getattr(request, "user", None)
+    if not user or not user.is_authenticated:
+        return response(
+            status=401,
+            error={
+                "code": "AUTHENTICATION_REQUIRED",
+                "message": "An authenticated staff session is required.",
+                "details": {},
+            },
+        )
+    if not user.is_active or not user.is_staff:
+        return response(
+            status=403,
+            error={
+                "code": "ADMIN_REQUIRED",
+                "message": "An active staff administrator account is required.",
+                "details": {},
+            },
+        )
+    return None
 
 
 def readiness(request):
@@ -44,4 +73,26 @@ def diagnostics(request):
                 ],
                 "signals": {},
             }
+        )
+
+
+def flink_diagnostics(request):
+    """Inspect internal Flink state without exposing the internal REST service."""
+    invalid = method_guard(request, "GET")
+    if invalid:
+        return invalid
+    unauthorized = _staff_required(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        return response(collect_flink_diagnostics())
+    except Exception:
+        LOGGER.exception("Unexpected failure while collecting Flink diagnostics")
+        return response(
+            status=503,
+            error={
+                "code": "FLINK_DIAGNOSTICS_FAILED",
+                "message": "Flink diagnostics could not be collected safely.",
+                "details": {},
+            },
         )

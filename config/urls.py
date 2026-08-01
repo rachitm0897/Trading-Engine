@@ -43,6 +43,7 @@ new_api = [
     path("streaming/health/",streaming_views.health),path("streaming/topics/",streaming_views.topics),
     path("execution/readiness/",execution_views.readiness),
     path("execution/diagnostics/",execution_views.diagnostics),
+    path("execution/flink-diagnostics/",execution_views.flink_diagnostics),
     path("streaming/consumer-lag/",streaming_views.consumer_lag),path("streaming/dead-letter/",streaming_views.dead_letter),
     path("streaming/replay/",streaming_views.replay),path("streaming/replay/<int:replay_id>/",streaming_views.replay_status),
     path("allocations/policies/",allocation_views.policies),path("allocations/flows/",allocation_views.flows),
