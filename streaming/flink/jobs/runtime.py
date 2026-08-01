@@ -1,3 +1,4 @@
+import logging
 import os
 from pyflink.common import SimpleStringSchema
 from pyflink.datastream import StreamExecutionEnvironment
@@ -10,6 +11,31 @@ from pyflink.datastream.connectors.kafka import (
 from pyflink.datastream.connectors.kafka import KafkaRecordSerializationSchema
 
 from jobs.identity import starting_offset_policy
+from jobs.python_worker import ARCHIVE_MODE, WorkerPythonConfig, safe_path_for_log
+
+
+LOGGER = logging.getLogger("pyflink-job-runtime")
+
+
+def configure_worker_python(env, job_name, environ=None):
+    """Embed and select the worker-side Python runtime for a submitted graph."""
+    config = WorkerPythonConfig.from_environment(environ)
+    config.validate()
+    if config.runtime_mode == ARCHIVE_MODE:
+        env.add_python_archive(str(config.archive_path), config.archive_target)
+    env.set_python_executable(config.executable)
+    LOGGER.info(
+        "Configured worker Python for job '%s': mode=%s executable=%s "
+        "archive_configured=%s archive_target=%s",
+        job_name,
+        config.runtime_mode,
+        safe_path_for_log(config.executable),
+        config.archive_configured,
+        safe_path_for_log(config.archive_target)
+        if config.archive_configured
+        else None,
+    )
+    return config
 
 
 def _offset_initializer(policy):
@@ -22,6 +48,7 @@ def _offset_initializer(policy):
 
 def environment(job_name):
     env = StreamExecutionEnvironment.get_execution_environment()
+    configure_worker_python(env, job_name)
     env.enable_checkpointing(int(os.getenv("FLINK_CHECKPOINT_INTERVAL_MS", "30000")))
     env.get_checkpoint_config().set_checkpoint_timeout(int(os.getenv("FLINK_CHECKPOINT_TIMEOUT_MS", "120000")))
     env.set_parallelism(int(os.getenv("FLINK_PARALLELISM", "1")))

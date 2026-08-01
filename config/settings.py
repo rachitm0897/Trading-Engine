@@ -235,6 +235,29 @@ EXECUTION_ACTIVATION_PREFLIGHT_ENABLED = (
 )
 APPEND_SLASH = False
 FLINK_REST_URL = os.getenv("FLINK_REST_URL", "http://localhost:8081")
+PYFLINK_CLIENT_EXECUTABLE = os.getenv(
+    "PYFLINK_CLIENT_EXECUTABLE", "/opt/pyflink-venv/bin/python"
+)
+FLINK_PYTHON_RUNTIME_MODE = os.getenv(
+    "FLINK_PYTHON_RUNTIME_MODE", "archive"
+).strip().lower()
+FLINK_PYTHON_ARCHIVE = os.getenv(
+    "FLINK_PYTHON_ARCHIVE",
+    "/opt/flink-python-runtime/flink-python-runtime.zip",
+)
+FLINK_PYTHON_ARCHIVE_TARGET = os.getenv(
+    "FLINK_PYTHON_ARCHIVE_TARGET", "pyenv"
+)
+FLINK_PYTHON_EXECUTABLE = os.getenv(
+    "FLINK_PYTHON_EXECUTABLE", "pyenv/bin/python"
+)
+FLINK_AUTO_REPAIR_PYTHON_EXECUTABLE_FAILURE = (
+    os.getenv("FLINK_AUTO_REPAIR_PYTHON_EXECUTABLE_FAILURE", "true").lower()
+    == "true"
+)
+FLINK_BOOTSTRAP_STATUS_PATH = os.getenv(
+    "FLINK_BOOTSTRAP_STATUS_PATH", "/tmp/flink-job-bootstrap-status.json"
+)
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 FINNHUB_BASE_URL = os.getenv("FINNHUB_BASE_URL", "https://finnhub.io/api/v1").rstrip("/")
 FINNHUB_API_KEY_OVERRIDE_ENABLED = os.getenv("FINNHUB_API_KEY_OVERRIDE_ENABLED", "false").lower() == "true"

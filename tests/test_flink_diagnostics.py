@@ -64,6 +64,11 @@ def test_sanitize_flink_rest_url_removes_credentials_path_and_query():
             "Python executable /opt/venv/bin/python was not found",
             "PYTHON_EXECUTABLE_MISSING",
         ),
+        (
+            'java.io.IOException: Cannot run program "python":\n'
+            "error=2, No such file or directory",
+            "PYTHON_EXECUTABLE_MISSING",
+        ),
         ("ModuleNotFoundError: No module named 'numpy'", "PYTHON_DEPENDENCY_MISSING"),
         ("PyFlink worker process exited unexpectedly", "PYFLINK_WORKER_FAILURE"),
         ("Failed to start Python worker process", "PYFLINK_WORKER_FAILURE"),
@@ -92,6 +97,12 @@ def test_collects_relevant_jobs_and_redacts_diagnostics(settings):
     )
     settings.FLINK_DIAGNOSTICS_HTTP_TIMEOUT_SECONDS = 4
     settings.EXECUTION_REQUIRED_FLINK_JOBS = ("required-job",)
+    settings.PYFLINK_CLIENT_EXECUTABLE = "/opt/pyflink-venv/bin/python"
+    settings.FLINK_PYTHON_RUNTIME_MODE = "archive"
+    settings.FLINK_PYTHON_ARCHIVE = "/opt/flink-python-runtime/runtime.zip"
+    settings.FLINK_PYTHON_ARCHIVE_TARGET = "pyenv"
+    settings.FLINK_PYTHON_EXECUTABLE = "pyenv/bin/python"
+    settings.FLINK_AUTO_REPAIR_PYTHON_EXECUTABLE_FAILURE = True
     session = FakeSession(
         {
             "/internal/overview": FakeResponse(
@@ -215,6 +226,17 @@ def test_collects_relevant_jobs_and_redacts_diagnostics(settings):
     assert job["checkpoint_age_seconds"] == 30.0
     assert result["summary"]["probable_cause"] == "PYTHON_DEPENDENCY_MISSING"
     assert result["summary"]["required_jobs_not_running"] == ["required-job"]
+    assert result["python_runtime"] == {
+        "client_executable": "/opt/pyflink-venv/bin/python",
+        "worker_runtime_mode": "archive",
+        "worker_executable": "pyenv/bin/python",
+        "archive_configured": True,
+        "archive_target": "pyenv",
+        "automatic_repair_enabled": True,
+    }
+    assert job["probable_cause"] == "PYTHON_DEPENDENCY_MISSING"
+    assert job["automatic_repair_eligible"] is False
+    assert job["repair_attempt_result"] is None
     assert not any("healthy999" in path for path, _ in session.calls)
     assert {timeout for _, timeout in session.calls} == {4.0}
 
@@ -265,6 +287,67 @@ def test_partial_endpoint_failures_are_reported_per_job(settings):
     assert result["summary"]["probable_cause"] is None
 
 
+def test_known_missing_python_job_reports_repair_eligibility_and_result(
+    settings,
+    tmp_path,
+):
+    settings.FLINK_REST_URL = "http://flink-jobmanager:8081"
+    settings.EXECUTION_REQUIRED_FLINK_JOBS = ("required-job",)
+    settings.FLINK_AUTO_REPAIR_PYTHON_EXECUTABLE_FAILURE = True
+    status_path = tmp_path / "repair-status.json"
+    status_path.write_text(
+        '{"jobs":{"required-job":{"result":"CANCEL_REQUESTED",'
+        '"classification":"PYTHON_EXECUTABLE_MISSING",'
+        '"old_job_id":"abc123","observed_at":"2026-08-01T12:00:00+00:00"}}}',
+        encoding="utf-8",
+    )
+    settings.FLINK_BOOTSTRAP_STATUS_PATH = str(status_path)
+    session = FakeSession(
+        {
+            "/overview": FakeResponse(
+                {
+                    "taskmanagers": 1,
+                    "slots-total": 4,
+                    "slots-available": 3,
+                }
+            ),
+            "/taskmanagers": FakeResponse({"taskmanagers": []}),
+            "/jobs/overview": FakeResponse(
+                {
+                    "jobs": [
+                        {
+                            "jid": "abc123",
+                            "name": "required-job",
+                            "state": "RESTARTING",
+                        }
+                    ]
+                }
+            ),
+            "/jobs/abc123": FakeResponse(
+                {
+                    "jid": "abc123",
+                    "name": "required-job",
+                    "state": "RESTARTING",
+                }
+            ),
+            "/jobs/abc123/exceptions": FakeResponse(
+                {
+                    "root-exception": 'Cannot run program "python": No such file or directory'
+                }
+            ),
+            "/jobs/abc123/checkpoints": FakeResponse({"history": []}),
+        }
+    )
+
+    result = collect_flink_diagnostics(session=session)
+    job = result["jobs"][0]
+
+    assert job["probable_cause"] == "PYTHON_EXECUTABLE_MISSING"
+    assert job["automatic_repair_eligible"] is True
+    assert job["repair_attempt_result"]["result"] == "CANCEL_REQUESTED"
+    assert job["repair_attempt_result"]["old_job_id"] == "abc123"
+
+
 def test_unreachable_jobmanager_returns_controlled_diagnostics(settings):
     settings.FLINK_REST_URL = "http://flink-jobmanager:8081"
     session = FakeSession(
@@ -287,7 +370,11 @@ def test_unreachable_jobmanager_returns_controlled_diagnostics(settings):
     }
 
 
-def test_flink_diagnostics_is_publicly_callable(client, monkeypatch):
+def test_flink_diagnostics_requires_staff_authentication(
+    client,
+    monkeypatch,
+    django_user_model,
+):
     endpoint = "/api/v1/execution/flink-diagnostics/"
     collector_calls = []
     monkeypatch.setattr(
@@ -295,6 +382,17 @@ def test_flink_diagnostics_is_publicly_callable(client, monkeypatch):
         lambda: collector_calls.append(True) or {"reachable": True},
     )
 
+    unauthenticated = client.get(endpoint)
+
+    assert unauthenticated.status_code == 401
+    assert collector_calls == []
+
+    user = django_user_model.objects.create_user(
+        username="flink-operator",
+        password="test-password",
+        is_staff=True,
+    )
+    client.force_login(user)
     result = client.get(endpoint)
 
     assert result.status_code == 200
@@ -302,11 +400,21 @@ def test_flink_diagnostics_is_publicly_callable(client, monkeypatch):
     assert collector_calls == [True]
 
 
-def test_endpoint_hides_unexpected_collector_error(client, monkeypatch):
+def test_endpoint_hides_unexpected_collector_error(
+    client,
+    monkeypatch,
+    django_user_model,
+):
     def fail():
         raise RuntimeError("password=do-not-return")
 
     monkeypatch.setattr("apps.execution.views.collect_flink_diagnostics", fail)
+    user = django_user_model.objects.create_user(
+        username="flink-error-operator",
+        password="test-password",
+        is_staff=True,
+    )
+    client.force_login(user)
     response = client.get("/api/v1/execution/flink-diagnostics/")
 
     assert response.status_code == 503

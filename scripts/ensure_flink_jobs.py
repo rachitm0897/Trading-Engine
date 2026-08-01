@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import re
 import shutil
@@ -11,7 +12,8 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Mapping, Sequence
 from urllib.parse import urlsplit
@@ -23,6 +25,14 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env", override=False)
+
+from streaming.flink.jobs.python_worker import (  # noqa: E402
+    TASKMANAGER_PATH_MODE,
+    WorkerPythonConfig,
+    WorkerPythonConfigurationError,
+    is_missing_python_executable_failure,
+    safe_path_for_log,
+)
 
 LOGGER = logging.getLogger("flink-job-bootstrap")
 
@@ -51,6 +61,71 @@ JOB_ID_PATTERN = re.compile(r"\bJobID\s+([0-9a-fA-F]{32})\b")
 KAFKA_CONNECTOR_JAR = Path(
     "/opt/flink/lib/flink-sql-connector-kafka-3.3.0-1.20.jar"
 )
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(password|passwd|pwd|token|secret|credential|authorization|"
+    r"api[_-]?key)(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;&]+)"
+)
+
+
+def _safe_exception_summary(value: str | None, limit: int = 1_000) -> str:
+    if not value:
+        return "no root exception was returned"
+    redacted = _SECRET_ASSIGNMENT.sub(r"\1\2[REDACTED]", str(value))
+    redacted = re.sub(
+        r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+",
+        "Bearer [REDACTED]",
+        redacted,
+    )
+    if len(redacted) > limit:
+        return redacted[: limit - 3] + "..."
+    return redacted
+
+
+class RepairStatusStore:
+    """Persist only bounded, non-secret repair outcomes for diagnostics."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.jobs: dict[str, dict[str, object]] = {}
+
+    def reset(self) -> None:
+        self.jobs = {}
+        self._write()
+
+    def record(
+        self,
+        job_name: str,
+        result: str,
+        *,
+        old_job_id: str | None = None,
+        replacement_job_id: str | None = None,
+    ) -> None:
+        row: dict[str, object] = {
+            "result": result,
+            "classification": "PYTHON_EXECUTABLE_MISSING",
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if old_job_id:
+            row["old_job_id"] = old_job_id
+        if replacement_job_id:
+            row["replacement_job_id"] = replacement_job_id
+        self.jobs[job_name] = row
+        self._write()
+
+    def _write(self) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_name(self.path.name + ".tmp")
+            temporary.write_text(
+                json.dumps({"jobs": self.jobs}, sort_keys=True),
+                encoding="utf-8",
+            )
+            os.replace(temporary, self.path)
+        except OSError as exc:
+            LOGGER.warning(
+                "Could not persist the bounded Flink repair status (%s)",
+                type(exc).__name__,
+            )
 
 
 class BootstrapError(RuntimeError):
@@ -67,6 +142,16 @@ class FlinkUnavailable(BootstrapError):
 
 class JobTerminalError(BootstrapError):
     pass
+
+
+class JobRestartingError(BootstrapError):
+    def __init__(self, job: "Job", root_exception: str | None) -> None:
+        self.job = job
+        self.root_exception = root_exception
+        super().__init__(
+            f"Flink job '{job.name}' ({job.job_id}) returned to RESTARTING: "
+            f"{_safe_exception_summary(root_exception)}"
+        )
 
 
 @dataclass(frozen=True)
@@ -106,6 +191,16 @@ class BootstrapConfig:
     poll_interval_seconds: float
     max_attempts: int
     rest_timeout_seconds: float
+    worker_python: WorkerPythonConfig = field(
+        default_factory=lambda: WorkerPythonConfig(
+            runtime_mode=TASKMANAGER_PATH_MODE,
+            executable="/usr/bin/python",
+        )
+    )
+    auto_repair_python_executable_failure: bool = True
+    cancel_timeout_seconds: float = 120
+    checkpoint_timeout_seconds: float = 120
+    repair_status_path: Path = Path("/tmp/flink-job-bootstrap-status.json")
 
     @classmethod
     def from_environment(cls) -> "BootstrapConfig":
@@ -121,6 +216,10 @@ class BootstrapConfig:
         start_timeout = _positive_float("FLINK_JOB_START_TIMEOUT_SECONDS", 120)
         poll_interval = _positive_float("FLINK_JOB_POLL_INTERVAL_SECONDS", 2)
         max_attempts = _positive_integer("FLINK_JOB_BOOTSTRAP_MAX_ATTEMPTS", 30)
+        cancel_timeout = _positive_float("FLINK_JOB_CANCEL_TIMEOUT_SECONDS", 120)
+        checkpoint_timeout = _nonnegative_float(
+            "FLINK_JOB_CHECKPOINT_TIMEOUT_SECONDS", 120
+        )
         configured_binary = os.getenv("FLINK_BIN", "").strip()
         flink_binary = configured_binary or shutil.which("flink") or "/opt/flink/bin/flink"
         return cls(
@@ -143,6 +242,18 @@ class BootstrapConfig:
             poll_interval_seconds=poll_interval,
             max_attempts=max_attempts,
             rest_timeout_seconds=min(submission_timeout, 10.0),
+            worker_python=WorkerPythonConfig.from_environment(),
+            auto_repair_python_executable_failure=_environment_bool(
+                "FLINK_AUTO_REPAIR_PYTHON_EXECUTABLE_FAILURE", True
+            ),
+            cancel_timeout_seconds=cancel_timeout,
+            checkpoint_timeout_seconds=checkpoint_timeout,
+            repair_status_path=Path(
+                os.getenv(
+                    "FLINK_BOOTSTRAP_STATUS_PATH",
+                    "/tmp/flink-job-bootstrap-status.json",
+                )
+            ),
         )
 
     def validate(self) -> None:
@@ -150,6 +261,8 @@ class BootstrapConfig:
             raise ConfigurationError(
                 "DATABASE_URL is required for the distributed Flink bootstrap lock"
             )
+        if not self.repair_status_path.is_absolute():
+            raise ConfigurationError("FLINK_BOOTSTRAP_STATUS_PATH must be absolute")
         if len(set(self.required_jobs)) != len(self.required_jobs):
             raise ConfigurationError(
                 "EXECUTION_REQUIRED_FLINK_JOBS contains duplicate names"
@@ -183,6 +296,10 @@ class BootstrapConfig:
                 "Flink Kafka connector JAR was not found at "
                 f"'{self.kafka_connector_jar}'"
             )
+        try:
+            self.worker_python.validate()
+        except WorkerPythonConfigurationError as exc:
+            raise ConfigurationError(str(exc)) from exc
 
 
 def _environment_bool(name: str, default: bool) -> bool:
@@ -205,6 +322,17 @@ def _positive_float(name: str, default: float) -> float:
         raise ConfigurationError(f"{name} must be a number") from exc
     if value <= 0:
         raise ConfigurationError(f"{name} must be greater than zero")
+    return value
+
+
+def _nonnegative_float(name: str, default: float) -> float:
+    raw = os.getenv(name, str(default))
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be a number") from exc
+    if value < 0:
+        raise ConfigurationError(f"{name} must be zero or greater")
     return value
 
 
@@ -313,6 +441,42 @@ class FlinkRestClient:
             )
         return Job(job_id=resolved_id, name=name, state=state)
 
+    def root_exception(self, job_id: str) -> str | None:
+        payload = self._get_json(
+            f"/jobs/{job_id}/exceptions",
+            allow_not_found=True,
+        )
+        if payload is None:
+            return None
+        root = payload.get("root-exception") or payload.get("root_exception")
+        if root:
+            return str(root)
+        history = payload.get("all-exceptions") or payload.get("all_exceptions") or []
+        for item in history:
+            if not isinstance(item, Mapping):
+                continue
+            value = item.get("exception") or item.get("stacktrace")
+            if value:
+                return str(value)
+        return None
+
+    def cancel_job(self, job_id: str) -> None:
+        try:
+            response = self.session.patch(
+                self.base_url + f"/jobs/{job_id}",
+                params={"mode": "cancel"},
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except requests.Timeout as exc:
+            raise FlinkUnavailable("Flink job cancellation timed out") from exc
+        except requests.RequestException as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            suffix = f" (HTTP {status})" if status is not None else ""
+            raise FlinkUnavailable(
+                f"Flink job cancellation failed with {type(exc).__name__}{suffix}"
+            ) from exc
+
     def latest_completed_checkpoint(self, job_id: str) -> CompletedCheckpoint | None:
         payload = self._get_json(
             f"/jobs/{job_id}/checkpoints",
@@ -331,8 +495,6 @@ class FlinkRestClient:
         checkpoints = []
         for item in candidates:
             external_path = str(item.get("external_path") or "").strip()
-            if not external_path:
-                continue
             try:
                 checkpoint_id = int(item.get("id"))
                 completed_at = int(
@@ -500,6 +662,15 @@ def wait_for_job(
                 last_state = observed.state
             if observed.state == RUNNING_STATE:
                 return observed
+            if observed.state == "RESTARTING":
+                root_exception = client.root_exception(observed.job_id)
+                LOGGER.error(
+                    "Flink job '%s' (%s) returned to RESTARTING; root exception: %s",
+                    observed.name,
+                    observed.job_id,
+                    _safe_exception_summary(root_exception),
+                )
+                raise JobRestartingError(observed, root_exception)
             if observed.state in TERMINAL_STATES:
                 raise JobTerminalError(
                     f"Flink job '{observed.name}' ({observed.job_id}) reached "
@@ -514,14 +685,185 @@ def wait_for_job(
         sleep(min(config.poll_interval_seconds, remaining))
 
 
+def wait_for_terminal_state(
+    client: FlinkRestClient,
+    job: Job,
+    config: BootstrapConfig,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> Job:
+    deadline = monotonic() + config.cancel_timeout_seconds
+    last_state = job.state
+    while True:
+        try:
+            observed = client.get_job(job.job_id)
+        except FlinkUnavailable:
+            observed = None
+            last_state = "REST_UNAVAILABLE"
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise BootstrapError(
+                    f"Timed out confirming cancellation of Flink job '{job.name}' "
+                    f"({job.job_id}); final observation was {last_state}"
+                )
+            sleep(min(config.poll_interval_seconds, remaining))
+            continue
+        if observed is None:
+            return Job(job.job_id, job.name, "CANCELED")
+        if observed.name != job.name:
+            raise BootstrapError(
+                f"Flink job ID {job.job_id} changed name during cancellation"
+            )
+        last_state = observed.state
+        if observed.state in TERMINAL_STATES:
+            return observed
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise BootstrapError(
+                f"Timed out waiting for Flink job '{job.name}' ({job.job_id}) to "
+                f"reach a terminal state; final state was {last_state}"
+            )
+        sleep(min(config.poll_interval_seconds, remaining))
+
+
+def wait_for_completed_checkpoint(
+    client: FlinkRestClient,
+    job: Job,
+    config: BootstrapConfig,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> CompletedCheckpoint | None:
+    if config.checkpoint_timeout_seconds == 0:
+        LOGGER.warning(
+            "Completed-checkpoint wait is disabled for newly submitted job '%s'",
+            job.name,
+        )
+        return None
+    deadline = monotonic() + config.checkpoint_timeout_seconds
+    while True:
+        try:
+            observed = client.get_job(job.job_id)
+        except FlinkUnavailable:
+            observed = None
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise BootstrapError(
+                    f"Timed out reaching Flink while waiting for newly submitted "
+                    f"job '{job.name}' ({job.job_id}) to complete a checkpoint"
+                )
+            sleep(min(config.poll_interval_seconds, remaining))
+            continue
+        if observed is None or observed.state != RUNNING_STATE:
+            final_state = "NOT_FOUND" if observed is None else observed.state
+            root = client.root_exception(job.job_id) if observed is not None else None
+            raise BootstrapError(
+                f"Flink job '{job.name}' ({job.job_id}) stopped running while waiting "
+                f"for a completed checkpoint; state={final_state}; root exception: "
+                f"{_safe_exception_summary(root)}"
+            )
+        try:
+            checkpoint = client.latest_completed_checkpoint(job.job_id)
+        except FlinkUnavailable:
+            checkpoint = None
+        if checkpoint is not None:
+            LOGGER.info(
+                "Flink job '%s' (%s) completed checkpoint %s",
+                job.name,
+                job.job_id,
+                checkpoint.checkpoint_id,
+            )
+            return checkpoint
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise BootstrapError(
+                f"Timed out waiting for newly submitted Flink job '{job.name}' "
+                f"({job.job_id}) to complete a checkpoint"
+            )
+        sleep(min(config.poll_interval_seconds, remaining))
+
+
+def repair_restarting_job(
+    client: FlinkRestClient,
+    config: BootstrapConfig,
+    job: Job,
+    root_exception: str | None = None,
+    *,
+    reporter: Callable[..., None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> CompletedCheckpoint | None:
+    root_exception = root_exception or client.root_exception(job.job_id)
+    safe_root = _safe_exception_summary(root_exception)
+    if not is_missing_python_executable_failure(root_exception):
+        raise BootstrapError(
+            f"Required Flink job '{job.name}' ({job.job_id}) is RESTARTING for an "
+            f"unrecognized cause; it will not be canceled automatically. Root "
+            f"exception: {safe_root}"
+        )
+    if not config.auto_repair_python_executable_failure:
+        raise BootstrapError(
+            f"Required Flink job '{job.name}' ({job.job_id}) has the known missing "
+            "Python executable failure, but automatic repair is disabled"
+        )
+
+    checkpoint = client.latest_completed_checkpoint(job.job_id)
+    if reporter:
+        reporter(job.name, "CANCEL_REQUESTED", old_job_id=job.job_id)
+    LOGGER.warning(
+        "Canceling required Flink job '%s' (%s) after confirming "
+        "PYTHON_EXECUTABLE_MISSING",
+        job.name,
+        job.job_id,
+    )
+    client.cancel_job(job.job_id)
+    terminal = wait_for_terminal_state(client, job, config, sleep=sleep)
+    LOGGER.info(
+        "Affected Flink job '%s' (%s) reached terminal state %s",
+        job.name,
+        job.job_id,
+        terminal.state,
+    )
+    if reporter:
+        reporter(job.name, "CANCELED", old_job_id=job.job_id)
+    return checkpoint
+
+
 def ensure_job(
     client: FlinkRestClient,
     config: BootstrapConfig,
     required_name: str,
     *,
     submit: Callable[[BootstrapConfig, str, str | None], str] = submit_python_job,
+    reporter: Callable[..., None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Job:
+    repair_job: Job | None = None
+    repair_checkpoint: CompletedCheckpoint | None = None
+
+    def finish_repair(running: Job) -> Job:
+        if repair_job is None:
+            return running
+        try:
+            wait_for_completed_checkpoint(client, running, config, sleep=sleep)
+        except BootstrapError:
+            if reporter:
+                reporter(
+                    required_name,
+                    "REPLACEMENT_UNHEALTHY",
+                    old_job_id=repair_job.job_id,
+                    replacement_job_id=running.job_id,
+                )
+            raise
+        if reporter:
+            reporter(
+                required_name,
+                "REPAIRED",
+                old_job_id=repair_job.job_id,
+                replacement_job_id=running.job_id,
+            )
+        return running
+
     for attempt in range(1, config.max_attempts + 1):
         # This REST re-query occurs immediately before every possible submission.
         try:
@@ -545,7 +887,7 @@ def ensure_job(
                 required_name,
                 decision.job.job_id,
             )
-            return decision.job
+            return finish_repair(decision.job)
         if decision.action == "wait":
             LOGGER.info(
                 "Required Flink job '%s' already exists in non-terminal state %s; "
@@ -554,7 +896,41 @@ def ensure_job(
                 decision.job.state,
             )
             try:
-                return wait_for_job(client, decision.job, config, sleep=sleep)
+                if decision.job.state == "RESTARTING":
+                    raise JobRestartingError(
+                        decision.job,
+                        client.root_exception(decision.job.job_id),
+                    )
+                running = wait_for_job(client, decision.job, config, sleep=sleep)
+                return finish_repair(running)
+            except JobRestartingError as exc:
+                repair_job = exc.job
+                repair_checkpoint = repair_restarting_job(
+                    client,
+                    config,
+                    exc.job,
+                    exc.root_exception,
+                    reporter=reporter,
+                    sleep=sleep,
+                )
+                # Query the complete inventory again immediately before deciding
+                # whether a replacement is safe to submit.
+                jobs = client.list_jobs()
+                decision = submission_decision(jobs, required_name)
+                if decision.action == "satisfied":
+                    LOGGER.info(
+                        "A healthy concurrent replacement for '%s' is already RUNNING",
+                        required_name,
+                    )
+                    return finish_repair(decision.job)
+                if decision.action == "wait":
+                    if attempt == config.max_attempts:
+                        raise BootstrapError(
+                            f"Required Flink job '{required_name}' still has a "
+                            "non-terminal instance after controlled cancellation"
+                        )
+                    sleep(config.poll_interval_seconds)
+                    continue
             except JobTerminalError:
                 if attempt == config.max_attempts:
                     raise
@@ -568,7 +944,11 @@ def ensure_job(
         terminal_matches = [
             job for job in decision.matches if job.state in TERMINAL_STATES
         ]
-        restore_checkpoint = None
+        restore_checkpoint = (
+            repair_checkpoint
+            if repair_checkpoint is not None and repair_checkpoint.external_path
+            else None
+        )
         if terminal_matches:
             LOGGER.info(
                 "Required Flink job '%s' has only terminal instances (%s); "
@@ -579,8 +959,10 @@ def ensure_job(
             retained = []
             for terminal_job in terminal_matches:
                 checkpoint = client.latest_completed_checkpoint(terminal_job.job_id)
-                if checkpoint is not None:
+                if checkpoint is not None and checkpoint.external_path:
                     retained.append((checkpoint, terminal_job))
+            if restore_checkpoint is not None and repair_job is not None:
+                retained.append((restore_checkpoint, repair_job))
             if retained:
                 restore_checkpoint, checkpoint_job = max(
                     retained,
@@ -616,6 +998,12 @@ def ensure_job(
                 restore_checkpoint.external_path if restore_checkpoint else None,
             )
         except BootstrapError as exc:
+            if reporter and repair_job is not None:
+                reporter(
+                    required_name,
+                    "RESUBMISSION_FAILED",
+                    old_job_id=repair_job.job_id,
+                )
             if attempt == config.max_attempts:
                 raise
             LOGGER.warning(
@@ -630,7 +1018,20 @@ def ensure_job(
         LOGGER.info("Submitted Flink job '%s' with job ID %s", required_name, job_id)
         submitted = Job(job_id=job_id, name=required_name, state="SUBMITTED")
         try:
-            return wait_for_job(client, submitted, config, sleep=sleep)
+            running = wait_for_job(client, submitted, config, sleep=sleep)
+            if repair_job is not None:
+                return finish_repair(running)
+            wait_for_completed_checkpoint(client, running, config, sleep=sleep)
+            return running
+        except JobRestartingError:
+            if reporter and repair_job is not None:
+                reporter(
+                    required_name,
+                    "REPLACEMENT_RESTARTING",
+                    old_job_id=repair_job.job_id,
+                    replacement_job_id=job_id,
+                )
+            raise
         except JobTerminalError:
             if attempt == config.max_attempts:
                 raise
@@ -717,10 +1118,26 @@ def ensure_required_flink_jobs(
 
     config.validate()
     LOGGER.info("Required Flink jobs: %s", ", ".join(config.required_jobs))
+    LOGGER.info(
+        "Python runtimes: client_executable=%s worker_mode=%s "
+        "worker_executable=%s archive_configured=%s archive_target=%s",
+        safe_path_for_log(config.python_client_executable),
+        config.worker_python.runtime_mode,
+        safe_path_for_log(config.worker_python.executable),
+        config.worker_python.archive_configured,
+        safe_path_for_log(config.worker_python.archive_target)
+        if config.worker_python.archive_configured
+        else None,
+    )
     client = client or FlinkRestClient(config.rest_url, config.rest_timeout_seconds)
+    status_store = RepairStatusStore(config.repair_status_path)
+    status_store.reset()
+
+    # Establish availability before taking the distributed mutation lock.
+    wait_for_flink(client, config, sleep=sleep)
 
     with lock(config):
-        initial_jobs = wait_for_flink(client, config, sleep=sleep)
+        initial_jobs = client.list_jobs()
         missing_jobs = [
             name
             for name in config.required_jobs
@@ -731,7 +1148,14 @@ def ensure_required_flink_jobs(
             ", ".join(missing_jobs) if missing_jobs else "none",
         )
         for name in config.required_jobs:
-            ensure_job(client, config, name, submit=submit, sleep=sleep)
+            ensure_job(
+                client,
+                config,
+                name,
+                submit=submit,
+                reporter=status_store.record,
+                sleep=sleep,
+            )
 
         final_jobs = client.list_jobs()
         LOGGER.info("Final Flink jobs: %s", _format_jobs(final_jobs))

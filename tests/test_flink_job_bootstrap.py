@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import subprocess
+import zipfile
 from contextlib import contextmanager
+from dataclasses import replace
 
 import pytest
 
@@ -16,7 +18,9 @@ from scripts.ensure_flink_jobs import (
     ensure_required_flink_jobs,
     submission_decision,
     submit_python_job,
+    wait_for_completed_checkpoint,
 )
+from streaming.flink.jobs.python_worker import WorkerPythonConfig
 
 
 def config_for(tmp_path, *, required_jobs=("market-normalization-v2",), attempts=3):
@@ -29,6 +33,11 @@ def config_for(tmp_path, *, required_jobs=("market-normalization-v2",), attempts
     python_client.write_text("", encoding="utf-8")
     connector_jar = tmp_path / "flink-sql-connector-kafka.jar"
     connector_jar.write_text("", encoding="utf-8")
+    worker_archive = tmp_path / "flink-python-runtime.zip"
+    with zipfile.ZipFile(worker_archive, "w") as archive:
+        info = zipfile.ZipInfo("bin/python")
+        info.external_attr = 0o100755 << 16
+        archive.writestr(info, b"portable-python")
     return BootstrapConfig(
         enabled=True,
         rest_url="http://flink-jobmanager:8081",
@@ -44,11 +53,26 @@ def config_for(tmp_path, *, required_jobs=("market-normalization-v2",), attempts
         poll_interval_seconds=0.001,
         max_attempts=attempts,
         rest_timeout_seconds=2,
+        worker_python=WorkerPythonConfig(
+            runtime_mode="archive",
+            executable="pyenv/bin/python",
+            archive_path=worker_archive,
+            archive_target="pyenv",
+        ),
+        cancel_timeout_seconds=1,
+        checkpoint_timeout_seconds=0,
+        repair_status_path=tmp_path / "flink-bootstrap-status.json",
     )
 
 
 class FakeClient:
-    def __init__(self, overviews, details=None, checkpoints=None):
+    def __init__(
+        self,
+        overviews,
+        details=None,
+        checkpoints=None,
+        root_exceptions=None,
+    ):
         self.overviews = list(overviews)
         self.details = {
             job_id: list(observations)
@@ -56,6 +80,8 @@ class FakeClient:
         }
         self.list_calls = 0
         self.checkpoints = checkpoints or {}
+        self.root_exceptions = root_exceptions or {}
+        self.cancellations = []
 
     def list_jobs(self):
         self.list_calls += 1
@@ -71,6 +97,12 @@ class FakeClient:
 
     def latest_completed_checkpoint(self, job_id):
         return self.checkpoints.get(job_id)
+
+    def root_exception(self, job_id):
+        return self.root_exceptions.get(job_id)
+
+    def cancel_job(self, job_id):
+        self.cancellations.append(job_id)
 
 
 def test_rest_discovery_reads_overview_and_job_details():
@@ -169,6 +201,37 @@ def test_submission_decision_prefers_running_and_blocks_on_transitional_jobs():
     decision = submission_decision([failed, initializing, running], name)
     assert decision.action == "satisfied"
     assert decision.job == running
+
+
+def test_rest_cancellation_uses_flink_cancel_mode():
+    class Response:
+        def raise_for_status(self):
+            return None
+
+    class Session:
+        def __init__(self):
+            self.calls = []
+
+        def patch(self, url, params, timeout):
+            self.calls.append((url, params, timeout))
+            return Response()
+
+    session = Session()
+    client = FlinkRestClient(
+        "http://flink-jobmanager:8081",
+        3,
+        session=session,
+    )
+
+    client.cancel_job("a" * 32)
+
+    assert session.calls == [
+        (
+            "http://flink-jobmanager:8081/jobs/" + "a" * 32,
+            {"mode": "cancel"},
+            3,
+        )
+    ]
 
 
 def test_unknown_required_job_fails_configuration_validation(tmp_path):
@@ -367,6 +430,130 @@ def test_full_bootstrap_is_idempotent_across_repeated_runs(tmp_path):
 
     assert first == second == [client.job]
     assert submissions == [name]
+
+
+def test_restarting_job_with_known_missing_python_is_canceled_and_replaced(tmp_path):
+    config = config_for(tmp_path)
+    name = config.required_jobs[0]
+    old = Job("2" * 32, name, "RESTARTING")
+    canceled = Job(old.job_id, name, "CANCELED")
+    replacement = Job("3" * 32, name, "RUNNING")
+
+    class RepairClient:
+        current = old
+
+        def __init__(self):
+            self.cancellations = []
+
+        def list_jobs(self):
+            return [self.current]
+
+        def get_job(self, job_id):
+            if job_id == old.job_id and self.current.state == "CANCELLING":
+                self.current = canceled
+            return self.current
+
+        def root_exception(self, job_id):
+            assert job_id == old.job_id
+            return 'java.io.IOException: Cannot run program "python": error=2, No such file or directory'
+
+        def latest_completed_checkpoint(self, _job_id):
+            return None
+
+        def cancel_job(self, job_id):
+            self.cancellations.append(job_id)
+            self.current = Job(job_id, name, "CANCELLING")
+
+    client = RepairClient()
+    submissions = []
+    reports = []
+
+    def submit(_config, required_name, restore_path):
+        submissions.append((required_name, restore_path))
+        client.current = replacement
+        return replacement.job_id
+
+    result = ensure_job(
+        client,
+        config,
+        name,
+        submit=submit,
+        reporter=lambda *args, **kwargs: reports.append((args, kwargs)),
+        sleep=lambda _: None,
+    )
+
+    assert result == replacement
+    assert client.cancellations == [old.job_id]
+    assert submissions == [(name, None)]
+    assert [item[0][1] for item in reports] == [
+        "CANCEL_REQUESTED",
+        "CANCELED",
+        "REPAIRED",
+    ]
+
+
+def test_restarting_job_with_unknown_cause_is_not_canceled(tmp_path):
+    config = config_for(tmp_path)
+    name = config.required_jobs[0]
+    old = Job("4" * 32, name, "RESTARTING")
+    client = FakeClient(
+        [[old]],
+        root_exceptions={old.job_id: "Kafka broker connection timed out"},
+    )
+
+    with pytest.raises(BootstrapError, match="will not be canceled automatically"):
+        ensure_job(client, config, name, sleep=lambda _: None)
+
+    assert client.cancellations == []
+
+
+def test_known_python_repair_can_be_disabled(tmp_path):
+    config = config_for(tmp_path)
+    config = replace(
+        config,
+        auto_repair_python_executable_failure=False,
+    )
+    name = config.required_jobs[0]
+    old = Job("5" * 32, name, "RESTARTING")
+    client = FakeClient(
+        [[old]],
+        root_exceptions={
+            old.job_id: 'Cannot run program "python": No such file or directory'
+        },
+    )
+
+    with pytest.raises(BootstrapError, match="automatic repair is disabled"):
+        ensure_job(client, config, name, sleep=lambda _: None)
+
+    assert client.cancellations == []
+
+
+def test_new_running_job_waits_for_first_completed_checkpoint(tmp_path):
+    config = replace(config_for(tmp_path), checkpoint_timeout_seconds=1)
+    job = Job("6" * 32, config.required_jobs[0], "RUNNING")
+    checkpoint = CompletedCheckpoint(9, "", 123456)
+
+    class CheckpointClient:
+        observations = iter([None, checkpoint])
+
+        def get_job(self, job_id):
+            assert job_id == job.job_id
+            return job
+
+        def latest_completed_checkpoint(self, job_id):
+            assert job_id == job.job_id
+            return next(self.observations)
+
+    sleeps = []
+    result = wait_for_completed_checkpoint(
+        CheckpointClient(),
+        job,
+        config,
+        sleep=sleeps.append,
+    )
+
+    assert result == checkpoint
+    assert sleeps == [config.poll_interval_seconds]
 
 
 def test_postgresql_lock_waits_then_releases(tmp_path):

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone as datetime_timezone
+from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
@@ -76,6 +78,58 @@ def _redact_text(value: Any, limit: int) -> str | None:
     if len(text) > limit:
         return text[: max(0, limit - 3)] + "..."
     return text
+
+
+def _safe_runtime_path(value: Any) -> str | None:
+    text = _redact_text(value, 500)
+    if text is None:
+        return None
+    return text.replace("\r", "").replace("\n", "")
+
+
+def _repair_status() -> dict[str, dict[str, Any]]:
+    """Read only whitelisted fields from the bounded bootstrap status file."""
+    configured = getattr(
+        settings,
+        "FLINK_BOOTSTRAP_STATUS_PATH",
+        "/tmp/flink-job-bootstrap-status.json",
+    )
+    try:
+        path = Path(str(configured))
+        if not path.is_file() or path.stat().st_size > 65_536:
+            return {}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return {}
+    jobs = payload.get("jobs") if isinstance(payload, Mapping) else None
+    if not isinstance(jobs, Mapping):
+        return {}
+    allowed_results = {
+        "CANCEL_REQUESTED",
+        "CANCELED",
+        "REPAIRED",
+        "RESUBMISSION_FAILED",
+        "REPLACEMENT_RESTARTING",
+        "REPLACEMENT_UNHEALTHY",
+    }
+    result: dict[str, dict[str, Any]] = {}
+    for name, value in jobs.items():
+        if not isinstance(name, str) or not isinstance(value, Mapping):
+            continue
+        repair_result = str(value.get("result") or "")
+        if repair_result not in allowed_results:
+            continue
+        row: dict[str, Any] = {
+            "result": repair_result,
+            "classification": "PYTHON_EXECUTABLE_MISSING",
+            "observed_at": _redact_text(value.get("observed_at"), 100),
+        }
+        for field in ("old_job_id", "replacement_job_id"):
+            identifier = str(value.get(field) or "")
+            if identifier and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", identifier):
+                row[field] = identifier
+        result[name] = row
+    return result
 
 
 def _validated_parts(value: Any) -> SplitResult:
@@ -269,6 +323,9 @@ def _job_summary(item: Mapping[str, Any], required_jobs: set[str]) -> dict[str, 
         "checkpoint_age_seconds": None,
         "restart_count": None,
         "failure_count": None,
+        "probable_cause": None,
+        "automatic_repair_eligible": False,
+        "repair_attempt_result": None,
         "endpoint_errors": [],
     }
 
@@ -478,9 +535,9 @@ _CAUSE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "PYTHON_EXECUTABLE_MISSING",
         (
-            r"python[^\n]{0,100}(?:executable|binary)[^\n]{0,60}(?:not found|missing)",
-            r"cannot run program[^\n]{0,100}python[^\n]{0,60}no such file",
-            r"python[^\n]{0,100}no such file or directory",
+            r"python[\s\S]{0,100}(?:executable|binary)[\s\S]{0,60}(?:not found|missing)",
+            r"cannot run program[\s\S]{0,100}python[\s\S]{0,80}no such file",
+            r"python[\s\S]{0,140}no such file or directory",
         ),
     ),
     (
@@ -572,8 +629,34 @@ def collect_flink_diagnostics(
         "EXECUTION_REQUIRED_FLINK_JOBS", DEFAULT_REQUIRED_FLINK_JOBS
     )
     configured_url = getattr(settings, "FLINK_REST_URL", "")
+    runtime_mode = str(
+        getattr(settings, "FLINK_PYTHON_RUNTIME_MODE", "archive")
+    ).strip().lower()
+    archive_path = str(getattr(settings, "FLINK_PYTHON_ARCHIVE", "") or "").strip()
+    auto_repair_enabled = bool(
+        getattr(settings, "FLINK_AUTO_REPAIR_PYTHON_EXECUTABLE_FAILURE", True)
+    )
+    repair_status = _repair_status()
     result: dict[str, Any] = {
         "flink_rest_url": sanitize_flink_rest_url(configured_url),
+        "python_runtime": {
+            "client_executable": _safe_runtime_path(
+                getattr(settings, "PYFLINK_CLIENT_EXECUTABLE", "")
+            ),
+            "worker_runtime_mode": runtime_mode,
+            "worker_executable": _safe_runtime_path(
+                getattr(settings, "FLINK_PYTHON_EXECUTABLE", "")
+            ),
+            "archive_configured": runtime_mode == "archive" and bool(archive_path),
+            "archive_target": (
+                _safe_runtime_path(
+                    getattr(settings, "FLINK_PYTHON_ARCHIVE_TARGET", "")
+                )
+                if runtime_mode == "archive" and archive_path
+                else None
+            ),
+            "automatic_repair_enabled": auto_repair_enabled,
+        },
         "reachable": False,
         "cluster": {
             "flink_version": None,
@@ -758,6 +841,16 @@ def collect_flink_diagnostics(
             checkpoints = request(f"/jobs/{job_id}/checkpoints", job=row)
             if checkpoints is not None:
                 row.update(_checkpoint_details(checkpoints, now))
+            row["probable_cause"] = classify_probable_cause(
+                [row["root_exception"]]
+            )
+            row["automatic_repair_eligible"] = bool(
+                auto_repair_enabled
+                and row["required"]
+                and row["state"] == "RESTARTING"
+                and row["probable_cause"] == "PYTHON_EXECUTABLE_MISSING"
+            )
+            row["repair_attempt_result"] = repair_status.get(row["name"])
             result["jobs"].append(row)
 
     summary = result["summary"]

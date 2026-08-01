@@ -58,6 +58,25 @@ def flink_diagnostics(request):
     invalid = method_guard(request, "GET")
     if invalid:
         return invalid
+    user = getattr(request, "user", None)
+    if not user or not user.is_authenticated:
+        return response(
+            status=401,
+            error={
+                "code": "AUTHENTICATION_REQUIRED",
+                "message": "Administrator authentication is required.",
+                "details": {},
+            },
+        )
+    if not user.is_active or not user.is_staff:
+        return response(
+            status=403,
+            error={
+                "code": "ADMIN_REQUIRED",
+                "message": "A staff administrator account is required.",
+                "details": {},
+            },
+        )
     try:
         return response(collect_flink_diagnostics())
     except Exception:
