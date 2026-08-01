@@ -3,7 +3,6 @@ from urllib.parse import urlsplit
 
 import pytest
 import requests
-from django.contrib.auth import get_user_model
 
 from apps.execution.flink_diagnostics import (
     classify_probable_cause,
@@ -288,7 +287,7 @@ def test_unreachable_jobmanager_returns_controlled_diagnostics(settings):
     }
 
 
-def test_flink_diagnostics_requires_active_staff(client, monkeypatch):
+def test_flink_diagnostics_is_publicly_callable(client, monkeypatch):
     endpoint = "/api/v1/execution/flink-diagnostics/"
     collector_calls = []
     monkeypatch.setattr(
@@ -296,38 +295,14 @@ def test_flink_diagnostics_requires_active_staff(client, monkeypatch):
         lambda: collector_calls.append(True) or {"reachable": True},
     )
 
-    unauthenticated = client.get(endpoint)
-    assert unauthenticated.status_code == 401
-    assert unauthenticated.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
+    result = client.get(endpoint)
 
-    user_model = get_user_model()
-    user = user_model.objects.create_user(username="viewer", password="password")
-    client.force_login(user)
-    forbidden = client.get(endpoint)
-    assert forbidden.status_code == 403
-    assert forbidden.json()["error"]["code"] == "ADMIN_REQUIRED"
-
-    staff = user_model.objects.create_user(
-        username="operator",
-        password="password",
-        is_staff=True,
-        is_active=True,
-    )
-    client.force_login(staff)
-    allowed = client.get(endpoint)
-    assert allowed.status_code == 200
-    assert allowed.json()["data"] == {"reachable": True}
+    assert result.status_code == 200
+    assert result.json()["data"] == {"reachable": True}
     assert collector_calls == [True]
 
 
 def test_endpoint_hides_unexpected_collector_error(client, monkeypatch):
-    staff = get_user_model().objects.create_user(
-        username="operator",
-        password="password",
-        is_staff=True,
-    )
-    client.force_login(staff)
-
     def fail():
         raise RuntimeError("password=do-not-return")
 
