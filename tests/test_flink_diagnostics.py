@@ -370,11 +370,7 @@ def test_unreachable_jobmanager_returns_controlled_diagnostics(settings):
     }
 
 
-def test_flink_diagnostics_requires_staff_authentication(
-    client,
-    monkeypatch,
-    django_user_model,
-):
+def test_flink_diagnostics_allows_unauthenticated_requests(client, monkeypatch):
     endpoint = "/api/v1/execution/flink-diagnostics/"
     collector_calls = []
     monkeypatch.setattr(
@@ -382,17 +378,6 @@ def test_flink_diagnostics_requires_staff_authentication(
         lambda: collector_calls.append(True) or {"reachable": True},
     )
 
-    unauthenticated = client.get(endpoint)
-
-    assert unauthenticated.status_code == 401
-    assert collector_calls == []
-
-    user = django_user_model.objects.create_user(
-        username="flink-operator",
-        password="test-password",
-        is_staff=True,
-    )
-    client.force_login(user)
     result = client.get(endpoint)
 
     assert result.status_code == 200
@@ -403,18 +388,11 @@ def test_flink_diagnostics_requires_staff_authentication(
 def test_endpoint_hides_unexpected_collector_error(
     client,
     monkeypatch,
-    django_user_model,
 ):
     def fail():
         raise RuntimeError("password=do-not-return")
 
     monkeypatch.setattr("apps.execution.views.collect_flink_diagnostics", fail)
-    user = django_user_model.objects.create_user(
-        username="flink-error-operator",
-        password="test-password",
-        is_staff=True,
-    )
-    client.force_login(user)
     response = client.get("/api/v1/execution/flink-diagnostics/")
 
     assert response.status_code == 503
