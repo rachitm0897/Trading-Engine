@@ -114,7 +114,8 @@ function FinnhubPanel({status, onChanged}: {status: FinnhubProviderStatus; onCha
   })
   const test = useMutation({
     mutationFn: () => request<FinnhubProviderStatus>('data-providers/finnhub/test/', mutationOptions('POST', {symbol: 'AAPL', api_key: apiKey || undefined}, true)),
-    onSettled: async () => {setApiKey(''); await onChanged()},
+    // ponytail: keep the typed key so Save stays reachable after a test; it is still never persisted here.
+    onSettled: async () => {await onChanged()},
   })
   const close = () => {setApiKey(''); save.reset(); test.reset(); setOpen(false)}
   return <div className="page-stack">
@@ -139,7 +140,8 @@ function FinnhubPanel({status, onChanged}: {status: FinnhubProviderStatus; onCha
         {status.environment_configured && <p className="inline-note">The environment key remains authoritative unless database override is explicitly enabled on the backend.</p>}
         {save.isError && <ErrorState title="Finnhub key was not saved" error={save.error} compact />}
         {test.isError && <ErrorState title="Finnhub key test failed" error={test.error} compact />}
-        {test.data?.connected && <div className="inline-success"><StatusBadge status="CONNECTED" />Finnhub key test passed using the {(test.data.source || test.data.effective_source).toLowerCase()} credential.</div>}
+        {test.data?.connected && <div className="inline-success"><StatusBadge status="CONNECTED" />Finnhub key test passed using the {(test.data.source || test.data.effective_source).toLowerCase()} credential. Not saved yet — use Save key to store it.</div>}
+        {save.isSuccess && <div className="inline-success"><StatusBadge status="SAVED" tone="positive" />Finnhub key encrypted and saved. Effective source is now {save.data.effective_source.toLowerCase()}.</div>}
         <footer><button type="button" className="button-quiet" onClick={close}>Close</button><button type="button" className="button-secondary" disabled={test.isPending || save.isPending} onClick={() => test.mutate()}><RefreshCw />{test.isPending ? 'Testing…' : 'Test key'}</button><button type="submit" className="button-primary" disabled={!apiKey.trim() || save.isPending || test.isPending}><KeyRound />{save.isPending ? 'Saving…' : 'Save key'}</button></footer>
       </form>
     </div>}
