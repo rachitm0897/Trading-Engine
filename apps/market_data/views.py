@@ -90,8 +90,11 @@ def configure(request):
         config.encrypted_api_key = encrypt_api_key(api_key)
         config.api_key_last_four = api_key[-4:]
         config.enabled = True
+        # ponytail: a saved key is meant to be used; default to overriding the environment key.
+        config.override_environment = bool(payload.get("override_environment", True))
         config.updated_by = _actor(request)
-        config.save(update_fields=["encrypted_api_key", "api_key_last_four", "enabled", "updated_by", "updated_at"])
+        config.save(update_fields=["encrypted_api_key", "api_key_last_four", "enabled",
+                                   "override_environment", "updated_by", "updated_at"])
         AuditEvent.objects.get_or_create(
             idempotency_key=f"finnhub-config:{key}",
             defaults={
