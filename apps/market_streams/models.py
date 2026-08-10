@@ -41,6 +41,35 @@ class MarketDataSubscription(models.Model):
         indexes=[models.Index(fields=["state","updated_at"],name="market_sub_state_idx")]
 
 
+class MarketDataConsumerLease(models.Model):
+    """Temporary, persisted demand for a routed market-data subscription."""
+
+    CONSUMER_TYPES = [(value, value) for value in ["MANUAL", "WATCHLIST", "MONITORING", "RISK"]]
+    gateway_session = models.ForeignKey(
+        "broker_gateway.BrokerGatewaySession", on_delete=models.CASCADE, related_name="market_data_leases"
+    )
+    instrument = models.ForeignKey(
+        "instruments.Instrument", on_delete=models.PROTECT, related_name="market_data_leases"
+    )
+    timeframe = models.CharField(max_length=16, default="1m")
+    consumer_type = models.CharField(max_length=16, choices=CONSUMER_TYPES)
+    lease_key = models.CharField(max_length=128)
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=["gateway_session", "consumer_type", "lease_key"],
+            name="unique_market_consumer_lease",
+        )]
+        indexes = [
+            models.Index(fields=["gateway_session", "instrument", "timeframe", "expires_at"],
+                         name="market_lease_demand_idx"),
+            models.Index(fields=["expires_at"], name="market_lease_expiry_idx"),
+        ]
+
+
 class MarketDataProviderTransition(models.Model):
     subscription = models.ForeignKey(MarketDataSubscription, on_delete=models.PROTECT, related_name="provider_transitions")
     instrument = models.ForeignKey("instruments.Instrument", on_delete=models.PROTECT)

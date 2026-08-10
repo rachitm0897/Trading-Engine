@@ -1,11 +1,12 @@
 import uuid
+from datetime import timedelta
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from apps.broker_gateway.client import GatewayClient,GatewayError
 from apps.strategies.models import StrategyInstance
 from apps.strategies.plugins import get_plugin
-from .models import MarketDataSubscription
+from .models import MarketDataConsumerLease,MarketDataSubscription
 
 
 def _requirements(instrument,timeframe,gateway_session=None):
@@ -28,10 +29,46 @@ def _requirements(instrument,timeframe,gateway_session=None):
     return instances,required+int(getattr(settings,"WARMUP_SAFETY_BARS",5)) if instances else 0
 
 
+def subscription_demand(instrument,timeframe,gateway_session=None,at=None):
+    """Return strategy requirements and all unexpired persisted consumer demand."""
+    instances,history=_requirements(instrument,timeframe,gateway_session)
+    leases=MarketDataConsumerLease.objects.filter(
+        instrument=instrument,timeframe=timeframe,expires_at__gt=at or timezone.now())
+    if gateway_session is not None:leases=leases.filter(gateway_session=gateway_session)
+    return instances,history,leases.count()
+
+
+def acquire_consumer_lease(*,gateway_session,instrument,timeframe,consumer_type,lease_key,ttl_seconds):
+    """Idempotently create/refresh demand and reconcile both old and new routes."""
+    now=timezone.now();expires_at=now+timedelta(seconds=ttl_seconds)
+    with transaction.atomic():
+        existing=MarketDataConsumerLease.objects.select_for_update().filter(
+            gateway_session=gateway_session,consumer_type=consumer_type,lease_key=lease_key).first()
+        old_route=(existing.instrument,existing.timeframe) if existing else None
+        lease,created=MarketDataConsumerLease.objects.update_or_create(
+            gateway_session=gateway_session,consumer_type=consumer_type,lease_key=lease_key,
+            defaults={"instrument":instrument,"timeframe":timeframe,"expires_at":expires_at})
+    if old_route and old_route!=(instrument,timeframe):
+        reconcile_market_subscription(*old_route,gateway_session=gateway_session)
+    subscription=reconcile_market_subscription(instrument,timeframe,gateway_session=gateway_session)
+    return lease,subscription,created
+
+
+def release_consumer_lease(*,gateway_session,consumer_type,lease_key):
+    with transaction.atomic():
+        lease=MarketDataConsumerLease.objects.select_for_update().filter(
+            gateway_session=gateway_session,consumer_type=consumer_type,lease_key=lease_key).first()
+        if lease is None:return False,None
+        instrument,timeframe=lease.instrument,lease.timeframe
+        lease.delete()
+    subscription=reconcile_market_subscription(instrument,timeframe,gateway_session=gateway_session)
+    return True,subscription
+
+
 def refresh_market_subscription_counts(subscription):
-    instances,history=_requirements(
+    instances,history,lease_count=subscription_demand(
         subscription.instrument,subscription.timeframe,subscription.gateway_session)
-    subscription.consumer_count=len(instances)
+    subscription.consumer_count=len(instances)+lease_count
     subscription.required_history_bars=history
     subscription.save(update_fields=["consumer_count","required_history_bars","updated_at"])
     return subscription
@@ -41,7 +78,8 @@ def reconcile_market_subscription(instrument,timeframe,gateway=None,force=False,
     contract=getattr(instrument,"broker_contract",None)
     if not contract:raise ValueError("Instrument does not have a qualified IBKR contract")
     gateway_session=gateway_session or getattr(gateway,"gateway_session",None)
-    instances,history=_requirements(instrument,timeframe,gateway_session);count=len(instances)
+    instances,history,lease_count=subscription_demand(instrument,timeframe,gateway_session)
+    count=len(instances)+lease_count
     if gateway is None:
         if gateway_session is None:raise ValueError("A broker gateway session is required for market-data subscription routing")
         client=GatewayClient(gateway_session,require_commands=True)
@@ -109,6 +147,9 @@ def restore_market_subscriptions(gateway=None,gateway_session=None):
         instances=instances.filter(portfolio__gateway_session=gateway_session)
         subscriptions=subscriptions.filter(gateway_session=gateway_session)
     pairs=set(instances.values_list("instrument_id","timeframe"))
+    leases=MarketDataConsumerLease.objects.filter(expires_at__gt=timezone.now())
+    if gateway_session is not None:leases=leases.filter(gateway_session=gateway_session)
+    pairs.update(leases.values_list("instrument_id","timeframe"))
     pairs.update(subscriptions.values_list("instrument_id","timeframe"))
     from apps.instruments.models import Instrument
     for instrument_id,timeframe in pairs:

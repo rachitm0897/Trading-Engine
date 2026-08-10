@@ -277,6 +277,70 @@ def positions(request):
         rows.append({"id":item.pk,"portfolio_id":item.portfolio_id,"portfolio":item.portfolio.name,"account_id":item.portfolio.account.account_id,"instrument_id":item.instrument_id,"symbol":item.instrument.symbol,"asset_class":item.instrument.asset_class,"currency":item.instrument.currency,"quantity":item.quantity,"average_cost":item.average_cost,"market_price":price,"broker_market_price":item.market_price,"market_price_provider":provider,"market_price_source":source,"market_value":item.quantity*price,"updated_at":item.updated_at})
     return response(rows)
 
+
+def _manual_quote_row(lease,subscription):
+    state=getattr(lease.instrument,"market_state",None)
+    now=timezone.now()
+    latest=state.latest_event_at if state else None
+    age=max(0,(now-latest).total_seconds()) if latest else None
+    usable=bool(state and state.is_execution_usable(now))
+    return {
+        "lease_key":lease.lease_key,"lease_expires_at":lease.expires_at,
+        "gateway_session_id":str(lease.gateway_session_id),"instrument_id":lease.instrument_id,
+        "timeframe":lease.timeframe,"subscription_state":subscription.state if subscription else "MISSING",
+        "subscription_provider":subscription.active_provider if subscription else None,
+        "market_state":state.status if state else "MISSING","execution_usable":usable,
+        "reference_price":state.reference_price if state else None,
+        "provider":state.reference_price_provider if state else "",
+        "source":state.reference_price_source if state else "",
+        "latest_event_at":latest,"age_seconds":age,
+        "display_status":"READY" if usable else "WAITING_FOR_LIVE_MARKET_PRICE",
+    }
+
+
+def manual_order_quote(request):
+    """Acquire, inspect, refresh, or release a temporary manual quote lease."""
+    invalid=method_guard(request,"GET","POST","DELETE")
+    if invalid:return invalid
+    from apps.instruments.models import Instrument
+    from apps.market_streams.models import MarketDataConsumerLease,MarketDataSubscription
+    from apps.portfolios.models import TradingPortfolio
+    try:
+        payload=json.loads(request.body or b"{}") if request.method in {"POST","DELETE"} else request.GET
+        lease_key=str(payload.get("lease_key") or "").strip()
+        if not lease_key or len(lease_key)>128:raise ValueError("lease_key is required and must be at most 128 characters")
+        portfolio=TradingPortfolio.objects.select_related("gateway_session").get(pk=payload["portfolio_id"])
+        if not portfolio.gateway_session_id:raise ValueError("Portfolio is not bound to a Gateway session")
+        session=portfolio.gateway_session
+        if request.method=="DELETE":
+            from apps.market_streams.subscriptions import release_consumer_lease
+            released,subscription=release_consumer_lease(
+                gateway_session=session,consumer_type="MANUAL",lease_key=lease_key)
+            return response({"lease_key":lease_key,"released":released,
+                "subscription_state":subscription.state if subscription else None})
+        if request.method=="GET":
+            lease=MarketDataConsumerLease.objects.select_related("instrument__market_state").get(
+                gateway_session=session,consumer_type="MANUAL",lease_key=lease_key,
+                expires_at__gt=timezone.now())
+            subscription=MarketDataSubscription.objects.filter(
+                gateway_session=session,instrument=lease.instrument,timeframe=lease.timeframe).first()
+            return response(_manual_quote_row(lease,subscription))
+        instrument=Instrument.objects.select_related("broker_contract","market_state").get(pk=payload["instrument_id"])
+        if not instrument.active or not instrument.tradable:raise ValueError("Instrument must be active and tradable")
+        timeframe=str(payload.get("timeframe") or settings.MANUAL_MARKET_DATA_TIMEFRAME)
+        from apps.market_streams.subscriptions import acquire_consumer_lease
+        lease,subscription,_=acquire_consumer_lease(
+            gateway_session=session,instrument=instrument,timeframe=timeframe,consumer_type="MANUAL",
+            lease_key=lease_key,ttl_seconds=settings.MANUAL_MARKET_DATA_LEASE_SECONDS)
+        lease.instrument=instrument
+        row=_manual_quote_row(lease,subscription)
+        return response(row,status=200 if row["execution_usable"] else 202)
+    except MarketDataConsumerLease.DoesNotExist:
+        return response(status=404,error={"code":"MANUAL_QUOTE_LEASE_NOT_FOUND",
+            "message":"The manual quote lease does not exist or has expired","details":{}})
+    except (json.JSONDecodeError,KeyError,ValueError,TradingPortfolio.DoesNotExist,Instrument.DoesNotExist) as exc:
+        return response(status=400,error={"code":"INVALID_MANUAL_QUOTE_REQUEST","message":str(exc),"details":{}})
+
 def rebalances(request):
     invalid=method_guard(request,"GET")
     if invalid:return invalid
