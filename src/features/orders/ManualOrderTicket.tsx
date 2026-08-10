@@ -66,14 +66,15 @@ export function ManualOrderTicket({
   const position = positions.find((item) => item.instrument_id === instrument?.id)
   const executionMode = executionModeForSession(session)
   const requiresLiveReference = draft.orderType === 'MKT' || draft.orderType === 'STP'
-  const quoteReady = quote?.instrument_id === instrument?.id && quote.execution_usable
+  const readyQuote = quote && quote.instrument_id === instrument?.id && quote.execution_usable ? quote : null
+  const quoteReady = readyQuote !== null
   const blockers = [
     ...manualOrderBlockingReasons({session, account, portfolio}, allowLiveTrading),
     ...(instrument && requiresLiveReference && !quoteReady
       ? ['Wait for a fresh persisted live market price before submitting this order.']
       : []),
   ]
-  const trustedReferencePrice = quoteReady ? quote.reference_price : null
+  const trustedReferencePrice = readyQuote?.reference_price ?? null
   const estimatedNotional = estimateManualOrderNotional(draft, trustedReferencePrice)
   const busy = pending || polling
 
@@ -132,8 +133,8 @@ export function ManualOrderTicket({
       </label>
       {instrument && <div className="manual-order-estimate" role="status" aria-label="Execution market price">
         <span>Execution market price</span>
-        <strong>{quoteReady ? formatMoney(quote.reference_price, instrument.currency) : quotePending ? 'Requesting live price…' : 'Not ready'}</strong>
-        <small>{quoteReady ? `${quote.provider} · ${quote.source} · ${Math.round(quote.age_seconds || 0)}s old` : quote?.display_status || 'Waiting for a trusted persisted quote'}</small>
+        <strong>{readyQuote ? formatMoney(readyQuote.reference_price, instrument.currency) : quotePending ? 'Requesting live price…' : 'Not ready'}</strong>
+        <small>{readyQuote ? `${readyQuote.provider} · ${readyQuote.source} · ${Math.round(readyQuote.age_seconds || 0)}s old` : quote?.display_status || 'Waiting for a trusted persisted quote'}</small>
       </div>}
       <label>Side
         <select aria-label="Side" value={draft.side} onChange={(event) => update('side', event.target.value as ManualOrderDraft['side'])} aria-invalid={Boolean(validationErrors.side)}><option>BUY</option><option>SELL</option></select>
