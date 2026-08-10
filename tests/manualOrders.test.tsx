@@ -9,6 +9,7 @@ import type {
   BrokerSessionAccount,
   Instrument,
   ManualOrderIntentStatus,
+  ManualOrderQuoteStatus,
   Order,
   Portfolio,
   Position,
@@ -17,6 +18,7 @@ import {ManualOrderTicket} from '../src/features/orders/ManualOrderTicket'
 import {OrdersActivityPage} from '../src/features/orders/OrdersActivityPage'
 import {
   buildManualOrderPayload,
+  estimateManualOrderNotional,
   initialManualOrderDraft,
   type ManualOrderDraft,
   type ManualOrderPayload,
@@ -114,6 +116,23 @@ const queuedResult: ManualOrderIntentStatus = {
   retryable: false,
   message: 'Manual order intent accepted for asynchronous execution',
 }
+const readyQuote: ManualOrderQuoteStatus = {
+  lease_key: 'manual-ticket-test',
+  lease_expires_at: now,
+  gateway_session_id: session.id,
+  instrument_id: instrument.id,
+  timeframe: '1m',
+  subscription_state: 'ACTIVE',
+  subscription_provider: 'IBKR',
+  market_state: 'FRESH',
+  execution_usable: true,
+  reference_price: '126.50',
+  provider: 'IBKR',
+  source: 'ibkr_live',
+  latest_event_at: now,
+  age_seconds: 2,
+  display_status: 'READY',
+}
 
 function renderTicket(overrides: Partial<React.ComponentProps<typeof ManualOrderTicket>> = {}) {
   const onSubmit = vi.fn()
@@ -128,6 +147,10 @@ function renderTicket(overrides: Partial<React.ComponentProps<typeof ManualOrder
     pollTimedOut={false}
     error={null}
     allowLiveTrading={true}
+    quote={readyQuote}
+    quotePending={false}
+    quoteError={null}
+    onInstrumentChange={vi.fn()}
     onSubmit={onSubmit}
     {...overrides}
   />)
@@ -190,10 +213,41 @@ test('omits populated but irrelevant price fields after order type changes', () 
   })
 })
 
+test('uses the same conservative stop-order reference as backend risk', () => {
+  const stop = {...initialManualOrderDraft, orderType: 'STP' as const, quantity: '2', stopPrice: '120'}
+  const stopLimit = {...initialManualOrderDraft, orderType: 'STP_LMT' as const, quantity: '2', stopPrice: '125', limitPrice: '121'}
+  expect(estimateManualOrderNotional(stop, '126.50')).toBe(253)
+  expect(estimateManualOrderNotional(stopLimit, '126.50')).toBe(250)
+})
+
 test('disables submission without an eligible portfolio and shows the reason', () => {
   renderTicket({portfolio: null})
   expect(screen.getByRole('button', {name: 'Review manual order'})).toBeDisabled()
   expect(screen.getByText('Select an eligible portfolio.')).toBeInTheDocument()
+})
+
+test('blocks market submission until the backend reports a fresh persisted live price', async () => {
+  const user = userEvent.setup()
+  const onSubmit = renderTicket({quote: undefined, quotePending: true})
+  await user.selectOptions(screen.getByLabelText('Instrument'), String(instrument.id))
+  await user.type(screen.getByLabelText('Quantity'), '1')
+  expect(screen.getByText('Requesting live price…')).toBeInTheDocument()
+  expect(screen.getByText('Wait for a fresh persisted live market price before submitting this order.')).toBeInTheDocument()
+  expect(screen.getByRole('button', {name: 'Review manual order'})).toBeDisabled()
+  expect(onSubmit).not.toHaveBeenCalled()
+})
+
+test('uses the execution-safe quote instead of the position snapshot in confirmation', async () => {
+  const user = userEvent.setup()
+  renderTicket()
+  await user.selectOptions(screen.getByLabelText('Instrument'), String(instrument.id))
+  await user.type(screen.getByLabelText('Quantity'), '2')
+  expect(screen.getByLabelText('Execution market price')).toHaveTextContent('$126.50')
+  await user.click(screen.getByRole('button', {name: 'Review manual order'}))
+  const dialog = screen.getByRole('dialog', {name: 'Confirm PAPER manual order'})
+  expect(within(dialog).getByText('Market order · current reference $126.50')).toBeInTheDocument()
+  expect(within(dialog).getByText('$253.00')).toBeInTheDocument()
+  expect(within(dialog).queryByText(/125\.25/)).not.toBeInTheDocument()
 })
 
 test('disables submission for an unavailable Gateway route and shows every blocker', () => {
@@ -338,6 +392,8 @@ function installMockApi(options: MockApiOptions = {}) {
     if (path === 'portfolios') return envelope([portfolio])
     if (path === 'instruments') return envelope([instrument])
     if (path === 'positions') return envelope([position])
+    if (path === 'orders/manual-quote' && method === 'POST') return envelope(readyQuote)
+    if (path === 'orders/manual-quote' && method === 'DELETE') return envelope({released: true})
     if (path === 'orders') return envelope(currentOrders)
     if (path === 'executions') return envelope([])
     if (path === 'audit') return envelope([])
@@ -365,7 +421,9 @@ async function openAndConfirmPageTicket(user: ReturnType<typeof userEvent.setup>
   if (toggle.getAttribute('aria-expanded') !== 'true') await user.click(toggle)
   await user.selectOptions(screen.getByLabelText('Instrument'), String(instrument.id))
   await user.type(screen.getByLabelText('Quantity'), '1.23456789')
-  await user.click(screen.getByRole('button', {name: 'Review manual order'}))
+  const review = screen.getByRole('button', {name: 'Review manual order'})
+  await waitFor(() => expect(review).toBeEnabled())
+  await user.click(review)
   const button = within(screen.getByRole('dialog', {name: 'Confirm PAPER manual order'})).getByRole('button', {name: 'Confirm PAPER order'})
   if (doubleClick) await user.dblClick(button)
   else await user.click(button)

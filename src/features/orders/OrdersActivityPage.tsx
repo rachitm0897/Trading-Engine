@@ -3,7 +3,7 @@ import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {ExternalLink, Filter, Search, X} from 'lucide-react'
 import {ApiError, mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
-import type {Execution, ManualOrderIntentStatus, Order, OrderDetail, OrderStatusHistory} from '../../api/types'
+import type {Execution, ManualOrderIntentStatus, ManualOrderQuoteStatus, Order, OrderDetail, OrderStatusHistory} from '../../api/types'
 import {ActivityTimeline} from '../../components/ActivityTimeline'
 import {FillProgress} from '../../components/FillProgress'
 import {ConfirmActionDialog, DataTable, DetailDrawer, EmptyState, ErrorState, Freshness, PageHeader, Skeleton, StatusBadge, TerminalPanel, formatDateTime, formatMoney, formatNumber} from '../../components/ui'
@@ -22,10 +22,15 @@ export function OrdersActivityPage() {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null)
   const [manualResult, setManualResult] = useState<ManualOrderIntentStatus>()
+  const [manualInstrumentId, setManualInstrumentId] = useState<number | null>(null)
   const [activeIntent, setActiveIntent] = useState<{intentId: number; startedAt: number} | null>(null)
   const [pollTimedOut, setPollTimedOut] = useState(false)
   const manualSubmissionInFlight = useRef(false)
   const surfacedManualOrder = useRef('')
+  const manualQuoteLeaseKey = useMemo(
+    () => `manual-ticket-${crypto.randomUUID()}`,
+    [selectedPortfolioId, manualInstrumentId],
+  )
   const desktopInspector = useDesktopInspector()
   const orders = useQuery(queries.orders({portfolioId: selectedPortfolioId, status, symbol}))
   const executions = useQuery(queries.executions({portfolioId: selectedPortfolioId, symbol}))
@@ -38,6 +43,20 @@ export function OrdersActivityPage() {
     ...queries.manualOrderIntent(activeIntent?.intentId),
     refetchInterval: activeIntent && !pollTimedOut ? 1_000 : false,
     refetchOnWindowFocus: false,
+  })
+  const manualQuote = useQuery({
+    queryKey: ['manual-order-quote', selectedPortfolioId ?? 'none', manualInstrumentId ?? 'none'],
+    queryFn: ({signal}) => request<ManualOrderQuoteStatus>('orders/manual-quote/', {
+      ...mutationOptions('POST', {
+        portfolio_id: selectedPortfolioId,
+        instrument_id: manualInstrumentId,
+        lease_key: manualQuoteLeaseKey,
+      }),
+      signal,
+    }),
+    enabled: Boolean(selectedPortfolioId && manualInstrumentId),
+    refetchInterval: 15_000,
+    retry: (failureCount, error) => failureCount < 2 && error instanceof ApiError && (error.status === 0 || error.status >= 500),
   })
   const rows = useMemo(() => (orders.data || []).filter((order) => !search || `${order.internal_id} ${order.broker_order_id} ${order.symbol} ${order.side}`.toLowerCase().includes(search.toLowerCase())), [orders.data, search])
 
@@ -105,6 +124,16 @@ export function OrdersActivityPage() {
     })()
   }, [manualResult?.internal_id])
 
+  useEffect(() => {
+    return () => {
+      if (!selectedPortfolioId || !manualInstrumentId) return
+      void request('orders/manual-quote/', mutationOptions('DELETE', {
+        portfolio_id: selectedPortfolioId,
+        lease_key: manualQuoteLeaseKey,
+      })).catch(() => undefined)
+    }
+  }, [selectedPortfolioId, manualInstrumentId, manualQuoteLeaseKey])
+
   const submitManualOrder = (payload: ManualOrderPayload) => {
     if (manualSubmissionInFlight.current || createOrder.isPending || activeIntent) return
     manualSubmissionInFlight.current = true
@@ -157,6 +186,10 @@ export function OrdersActivityPage() {
       error={createOrder.error || manualIntentStatus.error}
       result={manualResult}
       allowLiveTrading={system.data?.allow_live_trading === true}
+      quote={manualQuote.data}
+      quotePending={manualQuote.isPending || manualQuote.isFetching}
+      quoteError={manualQuote.error}
+      onInstrumentChange={setManualInstrumentId}
       onSubmit={submitManualOrder}
     /></TerminalPanel>
     {!desktopInspector && <OrderDrawer order={selectedOrder} detail={orderDetail.data} detailLoading={orderDetail.isLoading} executions={(executions.data || []).filter((fill) => fill.order_id === selectedOrder?.internal_id)} modifying={modify.isPending} error={modify.error || cancel.error || orderDetail.error} onClose={() => setSelectedOrder(null)} onModify={(payload) => selectedOrder && modify.mutate({order: selectedOrder, payload})} onCancel={() => selectedOrder && setCancelOrder(selectedOrder)} />}

@@ -137,8 +137,9 @@ export function manualOrderBlockingReasons(
 export function estimateManualOrderNotional(draft: ManualOrderDraft, marketPrice?: string | number | null) {
   const quantity = Number(draft.quantity)
   let price: number | null = null
-  if (draft.orderType === 'LMT' || draft.orderType === 'STP_LMT') price = Number(draft.limitPrice)
-  else if (draft.orderType === 'STP') price = Number(draft.stopPrice)
+  if (draft.orderType === 'LMT') price = Number(draft.limitPrice)
+  else if (draft.orderType === 'STP_LMT') price = Math.max(Number(draft.limitPrice), Number(draft.stopPrice))
+  else if (draft.orderType === 'STP') price = Math.max(Number(draft.stopPrice), Number(marketPrice))
   else if (marketPrice !== null && marketPrice !== undefined) price = Number(marketPrice)
   if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(price) || (price ?? 0) <= 0) return null
   const notional = quantity * (price as number)

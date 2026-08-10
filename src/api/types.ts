@@ -198,6 +198,24 @@ export interface ManualOrderIntentStatus {
   broker_command?: BrokerCommandSummary | null
 }
 
+export interface ManualOrderQuoteStatus {
+  lease_key: string
+  lease_expires_at: string
+  gateway_session_id: string
+  instrument_id: number
+  timeframe: string
+  subscription_state: string
+  subscription_provider: string | null
+  market_state: string
+  execution_usable: boolean
+  reference_price: DecimalValue
+  provider: string
+  source: string
+  latest_event_at: string | null
+  age_seconds: number | null
+  display_status: string
+}
+
 export interface Execution {
   id: number
   order_id: string

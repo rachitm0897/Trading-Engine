@@ -5,6 +5,7 @@ import type {
   ExecutionMode,
   Instrument,
   ManualOrderIntentStatus,
+  ManualOrderQuoteStatus,
   Position,
 } from '../../api/types'
 import {StatusBadge, formatMoney, formatNumber} from '../../components/ui'
@@ -33,6 +34,10 @@ interface ManualOrderTicketProps extends ManualOrderSelection {
   error: unknown
   result?: ManualOrderIntentStatus
   allowLiveTrading: boolean
+  quote?: ManualOrderQuoteStatus
+  quotePending: boolean
+  quoteError: unknown
+  onInstrumentChange: (instrumentId: number | null) => void
   onSubmit: (payload: ManualOrderPayload) => void
 }
 
@@ -48,6 +53,10 @@ export function ManualOrderTicket({
   error,
   result,
   allowLiveTrading,
+  quote,
+  quotePending,
+  quoteError,
+  onInstrumentChange,
   onSubmit,
 }: ManualOrderTicketProps) {
   const [draft, setDraft] = useState<ManualOrderDraft>(initialManualOrderDraft)
@@ -56,8 +65,16 @@ export function ManualOrderTicket({
   const instrument = instruments.find((item) => item.id === Number(draft.instrumentId)) || null
   const position = positions.find((item) => item.instrument_id === instrument?.id)
   const executionMode = executionModeForSession(session)
-  const blockers = manualOrderBlockingReasons({session, account, portfolio}, allowLiveTrading)
-  const estimatedNotional = estimateManualOrderNotional(draft, position?.market_price)
+  const requiresLiveReference = draft.orderType === 'MKT' || draft.orderType === 'STP'
+  const quoteReady = quote?.instrument_id === instrument?.id && quote.execution_usable
+  const blockers = [
+    ...manualOrderBlockingReasons({session, account, portfolio}, allowLiveTrading),
+    ...(instrument && requiresLiveReference && !quoteReady
+      ? ['Wait for a fresh persisted live market price before submitting this order.']
+      : []),
+  ]
+  const trustedReferencePrice = quoteReady ? quote.reference_price : null
+  const estimatedNotional = estimateManualOrderNotional(draft, trustedReferencePrice)
   const busy = pending || polling
 
   const update = <K extends keyof ManualOrderDraft>(field: K, value: ManualOrderDraft[K]) => {
@@ -68,6 +85,11 @@ export function ManualOrderTicket({
       delete next[field]
       return next
     })
+  }
+  const changeInstrument = (value: string) => {
+    update('instrumentId', value)
+    const instrumentId = Number(value)
+    onInstrumentChange(value && Number.isSafeInteger(instrumentId) ? instrumentId : null)
   }
   const changeOrderType = (orderType: ManualOrderType) => {
     setDraft((current) => ({
@@ -102,12 +124,17 @@ export function ManualOrderTicket({
     {blockers.length > 0 && <div className="manual-order-blockers" role="status"><strong>Submission unavailable</strong><ul>{blockers.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
     <form className="form-grid four-columns manual-order-form" onSubmit={submit} noValidate>
       <label>Instrument
-        <select aria-label="Instrument" value={draft.instrumentId} onChange={(event) => update('instrumentId', event.target.value)} aria-invalid={Boolean(validationErrors.instrumentId)}>
+        <select aria-label="Instrument" value={draft.instrumentId} onChange={(event) => changeInstrument(event.target.value)} aria-invalid={Boolean(validationErrors.instrumentId)}>
           <option value="">Choose</option>
           {instruments.map((item) => <option key={item.id} value={item.id} disabled={!item.active || !item.tradable}>{item.symbol} · {item.exchange}{!item.active ? ' · inactive' : !item.tradable ? ' · not tradable' : ''}</option>)}
         </select>
         {validationErrors.instrumentId && <span className="field-error">{validationErrors.instrumentId}</span>}
       </label>
+      {instrument && <div className="manual-order-estimate" role="status" aria-label="Execution market price">
+        <span>Execution market price</span>
+        <strong>{quoteReady ? formatMoney(quote.reference_price, instrument.currency) : quotePending ? 'Requesting live price…' : 'Not ready'}</strong>
+        <small>{quoteReady ? `${quote.provider} · ${quote.source} · ${Math.round(quote.age_seconds || 0)}s old` : quote?.display_status || 'Waiting for a trusted persisted quote'}</small>
+      </div>}
       <label>Side
         <select aria-label="Side" value={draft.side} onChange={(event) => update('side', event.target.value as ManualOrderDraft['side'])} aria-invalid={Boolean(validationErrors.side)}><option>BUY</option><option>SELL</option></select>
         {validationErrors.side && <span className="field-error">{validationErrors.side}</span>}
@@ -140,7 +167,7 @@ export function ManualOrderTicket({
       <button className="button-primary form-submit" disabled={busy || blockers.length > 0}><SlidersHorizontal />{pending ? 'Submitting…' : polling ? 'Awaiting OMS…' : 'Review manual order'}</button>
     </form>
     <p className="manual-order-risk-note"><ShieldCheck />Final quantity may be resized by the common pre-trade risk pipeline.</p>
-    <ManualOrderError error={error} />
+    <ManualOrderError error={error || quoteError} />
     {result && <ManualOrderResult result={result} polling={polling} pollTimedOut={pollTimedOut} />}
     {pollTimedOut && !result?.internal_id && <div className="inline-warning" role="status"><AlertTriangle /><div><strong>Status polling timed out</strong><p>The intent was not submitted again. Refresh Orders & Activity or check the intent ID below.</p></div></div>}
     {confirmation && executionMode && <ManualOrderConfirmation
@@ -150,8 +177,8 @@ export function ManualOrderTicket({
       mode={executionMode}
       accountName={account?.account_id || 'Not selected'}
       portfolioName={portfolio?.name || 'Not selected'}
-      referencePrice={position?.market_price}
-      estimatedNotional={estimateManualOrderNotional(confirmation, position?.market_price)}
+      referencePrice={trustedReferencePrice}
+      estimatedNotional={estimateManualOrderNotional(confirmation, trustedReferencePrice)}
       pending={pending}
       onClose={() => setConfirmation(null)}
       onConfirm={confirm}
