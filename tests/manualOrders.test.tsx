@@ -482,10 +482,42 @@ test('a later OMS result refreshes the blotter and opens the existing order deta
     }),
   })
   await openAndConfirmPageTicket(userEvent.setup())
-  expect(await screen.findByText('Manual order entered OMS.')).toBeInTheDocument()
+  expect(await screen.findByText('BROKER_PENDING')).toBeInTheDocument()
   expect(await screen.findByRole('button', {name: 'manual-order'})).toBeInTheDocument()
   const drawer = await screen.findByRole('dialog', {name: 'NVDA BUY'})
   expect(within(drawer).getByText('MANUAL')).toBeInTheDocument()
   expect(within(drawer).getByText('CAPITAL')).toBeInTheDocument()
   expect(within(drawer).getByRole('button', {name: 'Cancel order'})).toBeEnabled()
+})
+
+test('continues polling after OMS creation and surfaces the terminal broker outcome', async () => {
+  let polls = 0
+  renderOrdersPage({
+    intent: () => {
+      polls += 1
+      return polls < 2 ? {
+        ...queuedResult,
+        operation_status: 'QUEUED',
+        internal_id: 'manual-order-001',
+        status: 'QUEUED',
+        approved_quantity: '1.23456789',
+        filled_quantity: '0',
+        broker_command: {id: 8, command_type: 'PLACE', status: 'PENDING', attempt_count: 0, gateway_command_id: null},
+      } : {
+        ...queuedResult,
+        operation_status: 'QUEUED',
+        internal_id: 'manual-order-001',
+        status: 'FILLED',
+        approved_quantity: '1.23456789',
+        filled_quantity: '1.23456789',
+        broker_order_id: '991',
+        broker_command: {id: 8, command_type: 'PLACE', status: 'ACKNOWLEDGED', attempt_count: 1, gateway_command_id: '71'},
+      }
+    },
+  })
+  await openAndConfirmPageTicket(userEvent.setup())
+  expect(await screen.findByText('BROKER_PENDING')).toBeInTheDocument()
+  await waitFor(() => expect(polls).toBeGreaterThanOrEqual(2), {timeout: 3_000})
+  expect(await screen.findByText(/broker order/)).toHaveTextContent('991')
+  expect(screen.getAllByText('FILLED').length).toBeGreaterThan(0)
 })

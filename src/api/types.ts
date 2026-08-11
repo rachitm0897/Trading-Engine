@@ -184,17 +184,28 @@ export interface BrokerCommandSummary {
   status: string
   attempt_count: number
   gateway_command_id: string | null
+  broker_order_id?: string
+  broker_permanent_id?: string
+  last_error?: string
+  uncertainty_reason?: string
 }
 
 export interface ManualOrderIntentStatus {
   intent_id: number
   origin: string
   operation_status: string
+  operation_error?: string
   retryable: boolean
+  attempt_count?: number
   message: string
   internal_id?: string
   status?: string
   approved_quantity?: DecimalValue
+  broker_order_id?: string
+  broker_permanent_id?: string
+  filled_quantity?: DecimalValue
+  average_fill_price?: DecimalValue
+  fill_count?: number
   broker_command?: BrokerCommandSummary | null
 }
 

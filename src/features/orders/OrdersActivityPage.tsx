@@ -84,7 +84,7 @@ export function OrdersActivityPage() {
     onSuccess: (result) => {
       setManualResult(result)
       setPollTimedOut(false)
-      if (!result.internal_id && !isManualIntentTerminal(result)) {
+      if (!isManualIntentTerminal(result)) {
         setActiveIntent({intentId: result.intent_id, startedAt: Date.now()})
       } else {
         setActiveIntent(null)
@@ -104,19 +104,19 @@ export function OrdersActivityPage() {
 
   useEffect(() => {
     if (!activeIntent) return
+    if (manualResult?.internal_id) return
     const remaining = Math.max(0, 90_000 - (Date.now() - activeIntent.startedAt))
     const timeout = window.setTimeout(() => {
       setPollTimedOut(true)
       setActiveIntent(null)
     }, remaining)
     return () => window.clearTimeout(timeout)
-  }, [activeIntent])
+  }, [activeIntent, manualResult?.internal_id])
 
   useEffect(() => {
     const internalId = manualResult?.internal_id
     if (!internalId || surfacedManualOrder.current === internalId) return
     surfacedManualOrder.current = internalId
-    setActiveIntent(null)
     void (async () => {
       await refresh()
       const detail = await queryClient.fetchQuery(queries.orderDetail(internalId))

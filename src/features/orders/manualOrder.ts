@@ -157,6 +157,6 @@ export function manualOrderResultKind(result: ManualOrderIntentStatus): ManualOr
 
 export function isManualIntentTerminal(result?: ManualOrderIntentStatus) {
   if (!result) return false
-  if (result.internal_id) return true
-  return ['RISK_REJECTED', 'FAILED'].includes(result.operation_status)
+  if (['RISK_REJECTED', 'FAILED'].includes(result.operation_status)) return true
+  return Boolean(result.internal_id && ['FILLED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(result.status || ''))
 }

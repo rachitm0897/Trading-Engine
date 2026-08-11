@@ -249,7 +249,7 @@ function ManualOrderResult({result, polling, pollTimedOut}: {result: ManualOrder
   const kind = manualOrderResultKind(result)
   if (kind === 'OMS') return <div className="manual-order-result inline-success" role="status">
     <StatusBadge status={result.status || result.operation_status} />
-    <div><strong>Manual order entered OMS.</strong><p>Internal order <code>{result.internal_id}</code> · intent <code>{result.intent_id}</code> · origin {result.origin}</p><p>Current status: {result.status} · approved quantity: {formatNumber(result.approved_quantity)}</p>{result.broker_command && <p>Broker command: {result.broker_command.command_type} · {result.broker_command.status}</p>}</div>
+    <div><strong>{manualOrderLifecycleLabel(result)}</strong><p>Intent <code>{result.intent_id}</code> · internal order <code>{result.internal_id}</code>{result.broker_order_id ? <> · broker order <code>{result.broker_order_id}</code></> : ''}</p><p>Approved: {formatNumber(result.approved_quantity)} · filled: {formatNumber(result.filled_quantity)} · current status: {result.status}{polling ? ' · tracking broker lifecycle' : ''}</p>{result.broker_command && <p>Broker command: {result.broker_command.command_type} · {result.broker_command.status} · attempts {result.broker_command.attempt_count}{result.broker_command.last_error ? ` · ${result.broker_command.last_error}` : ''}</p>}{result.operation_error && <p>{result.operation_error}</p>}</div>
   </div>
   if (kind === 'HELD') return <div className="manual-order-result inline-warning" role="status">
     <AlertTriangle /><div><strong>HELD · {result.operation_status}</strong><p>{result.message}</p><p>Intent <code>{result.intent_id}</code> · origin {result.origin} · the system will retry: {result.retryable ? 'yes' : 'no'}{polling ? ' · polling durable status' : ''}</p></div>
@@ -260,6 +260,12 @@ function ManualOrderResult({result, polling, pollTimedOut}: {result: ManualOrder
   return <div className="manual-order-result manual-order-queued" role="status">
     <StatusBadge status={result.operation_status} /><div><strong>Manual order accepted and queued for risk and execution.</strong><p>Intent <code>{result.intent_id}</code> · origin {result.origin}</p><p>Operation: {result.operation_status} · retryable: {result.retryable ? 'yes' : 'no'}{polling ? ' · polling durable status' : pollTimedOut ? ' · polling stopped' : ''}</p><p>{result.message}</p></div>
   </div>
+}
+
+function manualOrderLifecycleLabel(result: ManualOrderIntentStatus) {
+  if (result.status === 'QUEUED' && result.broker_command) return 'BROKER_PENDING'
+  if (result.status === 'QUEUED') return 'OMS_QUEUED'
+  return result.status || result.operation_status
 }
 
 function ManualOrderError({error}: {error: unknown}) {
