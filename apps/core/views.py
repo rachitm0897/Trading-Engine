@@ -164,7 +164,9 @@ def _manual_intent_row(intent):
         "intent_id": intent.pk,
         "origin": intent.origin,
         "operation_status": intent.operation_status,
+        "operation_error": intent.operation_error,
         "retryable": intent.retryable,
+        "attempt_count": intent.attempt_count,
         "message": intent.operation_error or "Manual order intent accepted for asynchronous execution",
     }
     if hasattr(intent, "order"):
@@ -173,6 +175,11 @@ def _manual_intent_row(intent):
             "internal_id": intent.order.internal_id,
             "status": intent.order.status,
             "approved_quantity": intent.order.quantity,
+            "broker_order_id": intent.order.broker_order_id,
+            "broker_permanent_id": intent.order.broker_permanent_id,
+            "filled_quantity": intent.order.filled_quantity,
+            "average_fill_price": intent.order.average_fill_price,
+            "fill_count": intent.order.fills.count(),
             "broker_command": command_summary(command) if command else None,
         })
     return data
@@ -200,7 +207,9 @@ def manual_order_intent_status(request, intent_id):
     from apps.oms.models import OrderIntent
 
     try:
-        intent = OrderIntent.objects.select_related("order").get(
+        intent = OrderIntent.objects.select_related("order").prefetch_related(
+            "order__broker_commands", "order__fills"
+        ).get(
             pk=intent_id,
             origin=OrderIntent.Origin.MANUAL,
         )

@@ -217,6 +217,7 @@ class InstrumentMarketState(models.Model):
             return False
         source = str(self.reference_price_source or "").strip().lower()
         return source not in {
+            "ibkr_historical",
             "finnhub_historical",
             "historical",
             "warmup",

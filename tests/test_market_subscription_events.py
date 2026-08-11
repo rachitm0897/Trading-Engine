@@ -1,5 +1,6 @@
 import pytest
 import responses
+import uuid
 from datetime import timedelta
 from django.utils import timezone
 from apps.audit.models import OutboxEvent
@@ -32,6 +33,80 @@ def test_gateway_raw_market_event_enters_transactional_outbox():
     subscription.refresh_from_db()
     assert subscription.state=="ACTIVE" and subscription.last_event_at is not None
     assert OutboxEvent.objects.filter(topic="market.raw.v1").count()==1
+
+
+def test_legacy_ibkr_bootstrap_bar_is_published_as_warmup():
+    instrument=Instrument.objects.create(symbol="BOOT",exchange="SMART",currency="USD")
+    BrokerContract.objects.create(instrument=instrument,conid=778)
+    subscription=MarketDataSubscription.objects.create(
+        instrument=instrument,conid=778,timeframe="1m",consumer_count=1,
+        state="SUBSCRIBING",active_provider="IBKR",
+    )
+    payload={
+        "source_event_id":"778:1m:2026-07-13T00:00:00+00:00",
+        "subscription_key":f"{instrument.pk}:1m","instrument_id":instrument.pk,
+        "conid":778,"symbol":"BOOT","timeframe":"1m",
+        "event_time":"2026-07-13T00:00:00+00:00",
+        "window_start":"2026-07-13T00:00:00+00:00",
+        "window_end":"2026-07-13T00:01:00+00:00","event_kind":"BAR",
+        "open":"100","high":"101","low":"99","close":"100.5","volume":"10",
+        "is_final":True,"provider":"IBKR","source":"ibkr_historical",
+        "provider_generation":str(subscription.provider_generation),
+    }
+
+    process_snapshot({"event_type":"market.raw","payload":payload})
+
+    event=OutboxEvent.objects.get(topic="market.raw.v1")
+    assert event.payload["processing_mode"]=="WARMUP"
+
+
+def test_explicit_live_ibkr_event_remains_live():
+    instrument=Instrument.objects.create(symbol="LIVE",exchange="SMART",currency="USD")
+    BrokerContract.objects.create(instrument=instrument,conid=779)
+    subscription=MarketDataSubscription.objects.create(
+        instrument=instrument,conid=779,timeframe="1m",consumer_count=1,
+        state="SUBSCRIBING",active_provider="IBKR",
+    )
+    payload={
+        "source_event_id":"779:live","subscription_key":f"{instrument.pk}:1m",
+        "instrument_id":instrument.pk,"conid":779,"symbol":"LIVE","timeframe":"5s",
+        "event_time":"2026-07-13T00:00:05+00:00","window_start":"2026-07-13T00:00:00+00:00",
+        "window_end":"2026-07-13T00:00:05+00:00","event_kind":"BAR",
+        "open":"100","high":"101","low":"99","close":"100.5","volume":"10",
+        "is_final":True,"provider":"IBKR","source":"ibkr_live","processing_mode":"LIVE",
+        "provider_generation":str(subscription.provider_generation),
+    }
+
+    process_snapshot({"event_type":"market.raw","payload":payload})
+
+    event=OutboxEvent.objects.get(topic="market.raw.v1")
+    assert event.payload["processing_mode"]=="LIVE"
+
+
+def test_new_provider_generation_republishes_same_bootstrap_window():
+    instrument=Instrument.objects.create(symbol="EPOCH",exchange="SMART",currency="USD")
+    BrokerContract.objects.create(instrument=instrument,conid=780)
+    subscription=MarketDataSubscription.objects.create(
+        instrument=instrument,conid=780,timeframe="1m",consumer_count=1,
+        state="SUBSCRIBING",active_provider="IBKR",
+    )
+    payload={
+        "source_event_id":"780:bootstrap","subscription_key":f"{instrument.pk}:1m",
+        "instrument_id":instrument.pk,"conid":780,"symbol":"EPOCH","timeframe":"1m",
+        "event_time":"2026-07-13T00:00:00+00:00","window_start":"2026-07-13T00:00:00+00:00",
+        "window_end":"2026-07-13T00:01:00+00:00","event_kind":"BAR",
+        "open":"100","high":"101","low":"99","close":"100.5","volume":"10",
+        "is_final":True,"provider":"IBKR","source":"ibkr_historical",
+        "provider_generation":str(subscription.provider_generation),
+    }
+    process_snapshot({"event_type":"market.raw","payload":payload})
+    subscription.provider_generation=uuid.uuid4()
+    subscription.save(update_fields=["provider_generation","updated_at"])
+    payload={**payload,"provider_generation":str(subscription.provider_generation)}
+
+    process_snapshot({"event_type":"market.raw","payload":payload})
+
+    assert OutboxEvent.objects.filter(topic="market.raw.v1").count()==2
 
 
 def test_async_ibkr_market_error_blocks_strategy_with_exact_reason():

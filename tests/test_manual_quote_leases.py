@@ -133,3 +133,17 @@ def test_quote_status_exposes_fresh_canonical_price(client,settings,monkeypatch)
     data=result.json()["data"]
     assert result.status_code==200 and data["execution_usable"] is True
     assert data["reference_price"]=="296.10000000" and data["display_status"]=="READY"
+
+
+def test_recent_ibkr_historical_price_is_not_execution_usable(client,settings,monkeypatch):
+    portfolio,_,instrument=_case(settings,"HISTORICAL")
+    _gateway(monkeypatch)
+    InstrumentMarketState.objects.create(
+        instrument=instrument,status="FRESH",reference_price="296.10",latest_event_at=timezone.now(),
+        stale_after_seconds=300,reference_price_provider="IBKR",reference_price_source="ibkr_historical")
+
+    result=_quote(client,portfolio,instrument)
+
+    data=result.json()["data"]
+    assert result.status_code==202 and data["execution_usable"] is False
+    assert data["display_status"]=="WAITING_FOR_LIVE_MARKET_PRICE"

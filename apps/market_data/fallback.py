@@ -146,7 +146,11 @@ def _unblock_strategies(subscription):
 
 def _canonical_outbox_key(payload):
     if str(payload.get("event_kind") or "").upper() == "BAR":
-        return f"market-raw-window:{payload['instrument_id']}:{payload['timeframe']}:{payload['window_start']}"
+        return (
+            f"market-raw-window:{payload['instrument_id']}:{payload['timeframe']}:"
+            f"{payload.get('processing_mode', 'LIVE')}:{payload.get('provider_generation', '')}:"
+            f"{payload['window_start']}"
+        )
     return f"market-raw-event:{payload['instrument_id']}:{payload['source_event_id']}"
 
 
@@ -182,6 +186,19 @@ def _event_time(value):
     if result is None:
         raise ValueError("Market event has an invalid timestamp")
     return result
+
+
+def _provider_processing_mode(payload):
+    """Preserve producer mode, but classify legacy provider history as warm-up."""
+    from apps.event_bus.identity import processing_mode
+
+    supplied = payload.get("processing_mode")
+    if supplied not in (None, ""):
+        return processing_mode(supplied)
+    source = str(payload.get("source") or "").strip().lower()
+    if source in {"ibkr_historical", "finnhub_historical", "historical"}:
+        return "WARMUP"
+    return processing_mode(None)
 
 
 def publish_provider_event(payload, *, received_at=None):
@@ -223,8 +240,7 @@ def publish_provider_event(payload, *, received_at=None):
         except (ValueError,TypeError,AttributeError):
             _metric_increment("events_dropped",provider=provider,reason="GENERATION_INVALID")
             return {"accepted":False,"reason":"GENERATION_INVALID"}
-        from apps.event_bus.identity import processing_mode
-        try:mode=processing_mode(payload.get("processing_mode"))
+        try:mode=_provider_processing_mode(payload)
         except ValueError:
             _metric_increment("events_dropped",provider=provider,reason="PROCESSING_MODE_INVALID")
             return {"accepted":False,"reason":"PROCESSING_MODE_INVALID"}

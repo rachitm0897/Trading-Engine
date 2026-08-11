@@ -990,4 +990,8 @@ def command_summary(command):
         "status": command.status,
         "attempt_count": command.attempt_count,
         "gateway_command_id": command.gateway_command_id,
+        "broker_order_id": command.broker_order_id,
+        "broker_permanent_id": command.broker_permanent_id,
+        "last_error": command.last_error,
+        "uncertainty_reason": command.uncertainty_reason,
     }
