@@ -100,3 +100,19 @@ def test_order_filters_keep_array_envelope_and_add_pagination_meta(client, portf
     assert body["ok"] and isinstance(body["data"], list) and len(body["data"]) == 1
     assert body["data"][0]["status"] == "FILLED"
     assert body["meta"] == {"count": 1, "limit": 1, "offset": 0}
+
+
+def test_slashless_portfolio_series_and_orders_are_supported(client, portfolio, instrument):
+    intent = OrderIntent.objects.create(
+        portfolio=portfolio, instrument=instrument, side="BUY", quantity=1,
+        idempotency_key="slashless-order", reference_price=100,
+    )
+    Order.objects.create(intent=intent, internal_id="slashless-order", status="QUEUED", quantity=1)
+
+    series = client.get(f"/api/v1/portfolios/series?portfolio={portfolio.pk}")
+    orders = client.get("/api/v1/orders?limit=250")
+
+    assert series.status_code == 200, series.content
+    assert series.json()["ok"]
+    assert orders.status_code == 200, orders.content
+    assert orders.json()["data"][0]["internal_id"] == "slashless-order"

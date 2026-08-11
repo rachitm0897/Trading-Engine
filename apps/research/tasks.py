@@ -234,6 +234,11 @@ def score_current_candidates():
 def warm_recommendation_cache():
     if not settings.RECOMMENDATION_SYSTEM_ENABLED:
         return {"status": "DISABLED"}
+    from .models import ResearchDatasetVersion
+    if not ResearchDatasetVersion.objects.filter(status="ACTIVE").exists():
+        # A fresh deployment can legitimately run beat before research bootstrap.
+        # Treat that state as not ready instead of failing a scheduled Celery task.
+        return {"status": "WAITING_FOR_ACTIVE_DATASET"}
     from .services.recommendation_cache import warm_all_recommendation_caches
     with _bounded_lock("recommendation-cache", timeout=3 * 3600) as acquired:
         return warm_all_recommendation_caches() if acquired else {"status": "LOCKED"}

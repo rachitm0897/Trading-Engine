@@ -213,3 +213,11 @@ def test_acceptance_creates_no_instance_or_rebalance_and_fixed_weight_survives_p
     assert result["stocks"][0]["local_weight"] == "0.15000000"
     assert run.final_target_weights["stocks"][str(member.instrument_id)] == "0.15000000"
     assert StrategyInstance.objects.count() == 0 and RebalanceRun.objects.count() == 0
+
+
+def test_recommendation_cache_waits_cleanly_for_research_bootstrap(settings):
+    from apps.research.tasks import warm_recommendation_cache
+
+    settings.RECOMMENDATION_SYSTEM_ENABLED = True
+
+    assert warm_recommendation_cache.run() == {"status": "WAITING_FOR_ACTIVE_DATASET"}
