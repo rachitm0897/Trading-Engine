@@ -10,6 +10,7 @@ from apps.broker_gateway.client import (
     GatewayError,
     GatewayTransportError,
 )
+from apps.broker_gateway.crypto import BrokerCredentialError
 from apps.execution.dispatch import (
     claim_next_broker_command,
     dispatch_broker_command,
@@ -273,6 +274,29 @@ def test_gateway_restart_holds_then_recovers_without_losing_command(settings):
     available = FakeGateway()
     assert dispatch_broker_command(command.pk, available) == "ACKNOWLEDGED"
     assert available.place_calls == 1
+
+
+def test_gateway_credential_failure_holds_broker_command_instead_of_leaving_it_claimed(
+    settings, monkeypatch
+):
+    order, command = _claimed_place(settings)
+    monkeypatch.setattr(
+        "apps.execution.dispatch.GatewayClient",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            BrokerCredentialError("Stored broker credential cannot be decrypted")
+        ),
+    )
+
+    assert dispatch_broker_command(command.pk) == "RETRY"
+
+    command.refresh_from_db()
+    order.refresh_from_db()
+    order.intent.refresh_from_db()
+    assert command.status == BrokerCommand.Status.RETRY
+    assert command.last_error == "Stored broker credential cannot be decrypted"
+    assert order.status == "BROKER_BLOCKED"
+    assert order.intent.operation_status == "BROKER_BLOCKED"
+    assert order.intent.operation_error == command.last_error
 
 
 def test_definitive_gateway_rejection_records_failure_consistently(settings):

@@ -13,6 +13,7 @@ from apps.broker_gateway.client import (
     GatewayError,
     GatewayTransportError,
 )
+from apps.broker_gateway.crypto import BrokerCredentialError
 from apps.core.idempotency import IdempotencyConflict, canonical_request_hash
 from apps.execution.modes import (
     ExecutionMode,
@@ -512,7 +513,7 @@ def reconcile_uncertain_command(command_id, client=None):
     client = client or GatewayClient(command.gateway_session, purpose="read")
     try:
         state = client.order_state(command.internal_order_id) or {}
-    except GatewayError as exc:
+    except (GatewayError, BrokerCredentialError) as exc:
         _mark_uncertain(
             command.pk,
             f"Gateway state unavailable during uncertain-command reconciliation: {exc}",
@@ -564,7 +565,7 @@ def dispatch_broker_command(command_id, client=None):
     try:
         client = client or GatewayClient(command.gateway_session, purpose="command")
         _final_dispatch_checks(command, client)
-    except (GatewayError, ValueError) as exc:
+    except (GatewayError, BrokerCredentialError, ValueError) as exc:
         _schedule_retry(command.pk, str(exc))
         return "RETRY"
     if not _begin_sending(command.pk):
@@ -821,7 +822,7 @@ def execute_order_intent(intent_id):
         return None
     try:
         state = GatewayClient.for_portfolio(intent.portfolio).health()
-    except GatewayError as exc:
+    except (GatewayError, BrokerCredentialError) as exc:
         OrderIntent.objects.filter(pk=intent.pk).update(
             operation_status="PENDING",
             operation_error=str(exc)[:1000],

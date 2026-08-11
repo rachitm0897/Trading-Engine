@@ -12,6 +12,7 @@ from django.utils import timezone
 from apps.accounts.models import BrokerAccount
 from apps.audit.models import AuditEvent, OperationAttempt
 from apps.broker_gateway.client import GatewayClient, GatewayError
+from apps.broker_gateway.crypto import BrokerCredentialError
 from apps.execution.dispatch import (
     claim_next_broker_command,
     dispatch_broker_command,
@@ -226,6 +227,36 @@ def test_existing_intent_worker_creates_oms_order_and_broker_command(
     attempt = OperationAttempt.objects.get(operation_type="ORDER_INTENT", operation_id=str(intent.pk))
     assert attempt.status == "COMPLETED"
     assert attempt.result == {"order_id": order.internal_id, "broker_command_id": command.pk}
+
+
+def test_manual_intent_records_gateway_credential_failure_instead_of_staying_claimed(
+    client, settings, monkeypatch
+):
+    _, portfolio, _, instrument = _manual_case(settings)
+    _disable_task_enqueue(monkeypatch)
+    accepted = _post(client, _payload(portfolio, instrument), "manual-bad-gateway-token")
+    monkeypatch.setattr(
+        GatewayClient,
+        "for_portfolio",
+        classmethod(lambda cls, portfolio: (_ for _ in ()).throw(
+            BrokerCredentialError("Stored broker credential cannot be decrypted")
+        )),
+    )
+
+    assert process_order_intents(limit=1) == {"claimed": 1, "commands_created": 0}
+
+    intent = OrderIntent.objects.get(pk=accepted.json()["data"]["intent_id"])
+    assert intent.operation_status == "PENDING"
+    assert intent.retryable is True
+    assert intent.operation_error == "Stored broker credential cannot be decrypted"
+    assert not Order.objects.exists()
+    assert not BrokerCommand.objects.exists()
+    attempt = OperationAttempt.objects.get(
+        operation_type="ORDER_INTENT", operation_id=str(intent.pk)
+    )
+    assert attempt.status == "FAILED"
+    assert attempt.retryable is True
+    assert attempt.error == intent.operation_error
 
 
 def test_manual_intent_flows_through_broker_command_worker_to_gateway(
