@@ -26,6 +26,7 @@ from apps.instruments.models import Instrument
 from apps.market_streams.models import InstrumentMarketState
 from apps.oms.models import Order, OrderIntent
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
+from apps.reconciliation.models import ReconciliationBreak, ReconciliationRun
 from apps.risk.models import CapitalReservation
 from tests.managed_gateway import bind_managed_gateway
 
@@ -129,6 +130,28 @@ def test_manual_intent_status_reports_durable_pending_state(client, settings, mo
 
     assert status.status_code == 200
     assert status.json()["data"] == accepted.json()["data"]
+
+
+def test_old_gateway_session_break_does_not_hold_current_session_intent(
+    client, settings, monkeypatch
+):
+    account, portfolio, current_session, instrument = _manual_case(settings)
+    old_portfolio = TradingPortfolio.objects.create(name="Retired live route", account=account)
+    old_session = bind_managed_gateway(old_portfolio, settings)
+    old_run = ReconciliationRun.objects.create(
+        broker_account=account, gateway_session=old_session, status="BLOCKED"
+    )
+    ReconciliationBreak.objects.create(
+        run=old_run, category="GATEWAY", severity="CRITICAL", material=True
+    )
+    _disable_task_enqueue(monkeypatch)
+    _healthy_gateway(monkeypatch)
+    accepted = _post(client, _payload(portfolio, instrument), "current-session-risk")
+
+    command = execute_order_intent(accepted.json()["data"]["intent_id"])
+
+    assert command is not None
+    assert command.gateway_session_id == current_session.pk
 
 
 def test_manual_intent_status_reports_real_oms_order_and_command(client, settings, monkeypatch):

@@ -370,6 +370,9 @@ def _final_dispatch_checks(command, client):
         run__broker_account=intent.portfolio.account,
         material=True,
         resolved=False,
+    ).filter(
+        Q(run__gateway_session=session)
+        | Q(run__gateway_session__isnull=True)
     ).exists():
         raise GatewayError("Final dispatch blocked until broker reconciliation is clean")
     if (

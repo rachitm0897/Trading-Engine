@@ -12,6 +12,12 @@ python scripts/ensure_database.py
 echo "Running Django migrations..."
 python manage.py migrate --noinput
 
+if [ "${CLEANUP_DATABASE_ON_START:-false}" = "true" ]; then
+  echo "CLEANUP_DATABASE_ON_START=true: deleting all database rows..."
+  python manage.py flush --noinput
+  echo "Database rows deleted. Set CLEANUP_DATABASE_ON_START=false before the next restart."
+fi
+
 echo "Checking required Kafka topics..."
 python scripts/ensure_kafka_topics.py
 

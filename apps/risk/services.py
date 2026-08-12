@@ -190,6 +190,9 @@ def evaluate_intent(intent, gateway_state=None):
         return "REJECTED", Decimal(0), checks
     account_breaks = ReconciliationBreak.objects.filter(
         run__broker_account=account, material=True, resolved=False
+    ).filter(
+        Q(run__gateway_session=intent.portfolio.gateway_session)
+        | Q(run__gateway_session__isnull=True)
     ).exists()
     if not gateway_state.get("reconciled", False) or account_breaks:
         add("reconciliation", "HELD", "Broker account state is not reconciled", 0)
