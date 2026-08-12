@@ -1,6 +1,7 @@
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+import logging
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
@@ -17,6 +18,8 @@ from apps.core.idempotency import canonical_request_hash
 from apps.execution.modes import execution_mode_for_portfolio
 from .client import GatewayClient
 from .models import BrokerPositionSnapshot, BrokerSessionAccount, BrokerSyncCursor
+
+logger = logging.getLogger(__name__)
 
 TERMINAL={"FILLED","CANCELLED","REJECTED","EXPIRED"}
 STATUS_MAP={
@@ -477,11 +480,32 @@ def sync_events(client, gateway_session=None, connection_generation=None):
     for event in events:
         if event["id"] <= cursor.last_sequence:
             continue
+        event_type=str(event.get("event_type") or "")
+        order_event=event_type.startswith("order.") or event_type.startswith("execution.") or event_type in {
+            "command.place_order.completed","command.modify_order.completed",
+            "command.cancel_order.completed","command.failed","snapshot.open_orders",
+            "snapshot.completed_orders","snapshot.executions",
+        }
+        if order_event:
+            logger.info(
+                "order_execution stage=broker_event_received session_id=%s event_id=%s event_type=%s",
+                gateway_session.pk if gateway_session else "", event.get("id"), event_type,
+            )
         try:
             process_snapshot(event,gateway_session)
         except Exception as exc:
             BrokerSyncCursor.objects.filter(pk=cursor.pk).update(last_error=str(exc)[:1000])
+            if order_event:
+                logger.exception(
+                    "order_execution stage=broker_event_failed session_id=%s event_id=%s event_type=%s",
+                    gateway_session.pk if gateway_session else "", event.get("id"), event_type,
+                )
             raise
+        if order_event:
+            logger.info(
+                "order_execution stage=broker_event_applied session_id=%s event_id=%s event_type=%s",
+                gateway_session.pk if gateway_session else "", event.get("id"), event_type,
+            )
         with transaction.atomic():
             cursor=BrokerSyncCursor.objects.select_for_update().get(pk=cursor.pk)
             if event["id"] > cursor.last_sequence:

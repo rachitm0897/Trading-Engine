@@ -1,12 +1,16 @@
 from dataclasses import dataclass
 import hashlib
 import json
+import logging
 import time
 
 import requests
 from django.conf import settings
 
 from .crypto import decrypt_secret
+
+
+logger = logging.getLogger(__name__)
 
 
 class GatewayError(RuntimeError):
@@ -184,6 +188,11 @@ class GatewayClient:
         timeout = float(timeout if timeout is not None else settings.GATEWAY_HTTP_TIMEOUT_SECONDS)
         safe = method.upper() == "GET" or bool(idempotency_key)
         for attempt in range(retries + 1):
+            started = time.monotonic()
+            logger.info(
+                "gateway_http stage=request_start session_id=%s method=%s path=%s attempt=%s timeout_seconds=%s",
+                self.route.session_id, method.upper(), path.lstrip("/"), attempt + 1, timeout,
+            )
             try:
                 response = self.http.request(
                     method,
@@ -193,6 +202,11 @@ class GatewayClient:
                     **kwargs,
                 )
                 if response.status_code >= 500 and safe and attempt < retries:
+                    logger.warning(
+                        "gateway_http stage=request_retry session_id=%s method=%s path=%s attempt=%s status_code=%s duration_ms=%s",
+                        self.route.session_id, method.upper(), path.lstrip("/"), attempt + 1,
+                        response.status_code, round((time.monotonic() - started) * 1000),
+                    )
                     time.sleep(0.05 * (2 ** attempt))
                     continue
                 if 400 <= response.status_code < 500:
@@ -221,13 +235,36 @@ class GatewayClient:
                         code=str(error.get("code") or "GATEWAY_ERROR") if isinstance(error, dict) else "GATEWAY_ERROR",
                         details=error.get("details") if isinstance(error, dict) else None,
                     )
+                logger.info(
+                    "gateway_http stage=request_succeeded session_id=%s method=%s path=%s attempt=%s status_code=%s duration_ms=%s",
+                    self.route.session_id, method.upper(), path.lstrip("/"), attempt + 1,
+                    response.status_code, round((time.monotonic() - started) * 1000),
+                )
                 return body.get("data")
+            except GatewayError as exc:
+                logger.warning(
+                    "gateway_http stage=request_rejected session_id=%s method=%s path=%s attempt=%s duration_ms=%s status_code=%s error_code=%s error=%s",
+                    self.route.session_id, method.upper(), path.lstrip("/"), attempt + 1,
+                    round((time.monotonic() - started) * 1000), exc.http_status or "",
+                    exc.code, str(exc),
+                )
+                raise
             except requests.RequestException as exc:
                 if not safe or attempt >= retries:
+                    logger.error(
+                        "gateway_http stage=request_failed session_id=%s method=%s path=%s attempt=%s duration_ms=%s error_type=%s",
+                        self.route.session_id, method.upper(), path.lstrip("/"), attempt + 1,
+                        round((time.monotonic() - started) * 1000), type(exc).__name__,
+                    )
                     raise GatewayTransportError(
                         "Broker gateway request failed",
                         details={"operation": path.lstrip("/"), "cause": exc.__class__.__name__},
                     ) from exc
+                logger.warning(
+                    "gateway_http stage=request_retry session_id=%s method=%s path=%s attempt=%s duration_ms=%s error_type=%s",
+                    self.route.session_id, method.upper(), path.lstrip("/"), attempt + 1,
+                    round((time.monotonic() - started) * 1000), type(exc).__name__,
+                )
                 time.sleep(0.05 * (2 ** attempt))
 
     def health(self):

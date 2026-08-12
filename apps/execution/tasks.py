@@ -1,3 +1,4 @@
+import logging
 import socket
 
 from celery import shared_task
@@ -11,8 +12,12 @@ from .dispatch import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def _run_with_heartbeat(role, callback):
     worker = socket.gethostname()
+    logger.info("order_execution stage=worker_task_start role=%s worker=%s", role, worker)
     record_worker_heartbeat(role, status="RUNNING", worker=worker)
     try:
         result = callback()
@@ -23,11 +28,19 @@ def _run_with_heartbeat(role, callback):
             worker=worker,
             details={"error": str(exc)[:255]},
         )
+        logger.exception(
+            "order_execution stage=worker_task_failed role=%s worker=%s error_type=%s",
+            role, worker, type(exc).__name__,
+        )
         raise
     record_worker_heartbeat(
         role,
         worker=worker,
         details={"last_result": result},
+    )
+    logger.info(
+        "order_execution stage=worker_task_completed role=%s worker=%s result=%s",
+        role, worker, result,
     )
     return result
 

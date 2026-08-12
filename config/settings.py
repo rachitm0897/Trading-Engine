@@ -72,6 +72,33 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = (*default_headers, "idempotency-key")
 CSRF_TRUSTED_ORIGINS = [x.strip() for x in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if x.strip()]
 REST_FRAMEWORK = {"DEFAULT_AUTHENTICATION_CLASSES": [], "DEFAULT_PERMISSION_CLASSES": []}
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "order_console": {
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+        },
+    },
+    "loggers": {
+        "apps.execution": {
+            "handlers": ["order_console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.broker_gateway.client": {
+            "handlers": ["order_console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.broker_gateway.sync": {
+            "handlers": ["order_console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/1")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")

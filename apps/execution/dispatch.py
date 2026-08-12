@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from datetime import timedelta
 
 from django.conf import settings
@@ -27,6 +28,9 @@ from apps.reconciliation.models import ReconciliationBreak
 from apps.risk.services import _matching_kill_switches, evaluate_intent
 
 from .models import BrokerCommand
+
+
+logger = logging.getLogger(__name__)
 
 
 GATEWAY_TYPES = {
@@ -558,27 +562,69 @@ def dispatch_broker_command(command_id, client=None):
         "order__intent__instrument",
         "order__intent__strategy_instance",
     ).get(pk=command_id)
+    logger.info(
+        "order_execution stage=broker_command_loaded command_id=%s intent_id=%s internal_id=%s command_type=%s status=%s attempt=%s",
+        command.pk, command.order.intent_id, command.internal_order_id,
+        command.command_type, command.status, command.attempt_count,
+    )
     if command.status != BrokerCommand.Status.CLAIMED:
+        logger.info(
+            "order_execution stage=broker_command_skipped command_id=%s status=%s",
+            command.pk, command.status,
+        )
         return command.status
     if command.uncertainty_reason:
+        logger.info(
+            "order_execution stage=broker_reconciliation_start command_id=%s internal_id=%s",
+            command.pk, command.internal_order_id,
+        )
         return reconcile_uncertain_command(command.pk, client=client)
     try:
+        logger.info(
+            "order_execution stage=final_dispatch_checks_start command_id=%s internal_id=%s",
+            command.pk, command.internal_order_id,
+        )
         client = client or GatewayClient(command.gateway_session, purpose="command")
         _final_dispatch_checks(command, client)
+        logger.info(
+            "order_execution stage=final_dispatch_checks_succeeded command_id=%s internal_id=%s",
+            command.pk, command.internal_order_id,
+        )
     except (GatewayError, BrokerCredentialError, ValueError) as exc:
         _schedule_retry(command.pk, str(exc))
+        logger.warning(
+            "order_execution stage=final_dispatch_checks_failed command_id=%s internal_id=%s error_type=%s error=%s",
+            command.pk, command.internal_order_id, type(exc).__name__, str(exc),
+        )
         return "RETRY"
     if not _begin_sending(command.pk):
-        return BrokerCommand.objects.get(pk=command.pk).status
+        status = BrokerCommand.objects.get(pk=command.pk).status
+        logger.warning(
+            "order_execution stage=broker_send_not_started command_id=%s internal_id=%s status=%s",
+            command.pk, command.internal_order_id, status,
+        )
+        return status
     try:
+        logger.info(
+            "order_execution stage=gateway_send_start command_id=%s internal_id=%s command_type=%s",
+            command.pk, command.internal_order_id, command.command_type,
+        )
         response = _send(command, client)
     except GatewayCommandRejected as exc:
         _mark_failed(command.pk, str(exc))
+        logger.warning(
+            "order_execution stage=gateway_send_rejected command_id=%s internal_id=%s error_type=%s error=%s",
+            command.pk, command.internal_order_id, type(exc).__name__, str(exc),
+        )
         return "FAILED"
     except GatewayTransportError as exc:
         _mark_uncertain(
             command.pk,
             f"Gateway transport outcome is uncertain after send began: {exc}",
+        )
+        logger.error(
+            "order_execution stage=gateway_send_transport_failed command_id=%s internal_id=%s error_type=%s error=%s",
+            command.pk, command.internal_order_id, type(exc).__name__, str(exc),
         )
         return "UNCERTAIN"
     except GatewayError as exc:
@@ -586,8 +632,24 @@ def dispatch_broker_command(command_id, client=None):
             command.pk,
             f"Gateway rejected or lost the response after send began: {exc}",
         )
+        logger.error(
+            "order_execution stage=gateway_send_failed command_id=%s internal_id=%s error_type=%s error=%s",
+            command.pk, command.internal_order_id, type(exc).__name__, str(exc),
+        )
         return "UNCERTAIN"
+    except Exception:
+        logger.exception(
+            "order_execution stage=gateway_send_unexpected_error command_id=%s internal_id=%s",
+            command.pk, command.internal_order_id,
+        )
+        raise
     _acknowledge(command.pk, response or {})
+    acknowledged = BrokerCommand.objects.get(pk=command.pk)
+    logger.info(
+        "order_execution stage=broker_command_acknowledged command_id=%s internal_id=%s broker_order_id=%s gateway_command_id=%s",
+        command.pk, command.internal_order_id,
+        acknowledged.broker_order_id or "", acknowledged.gateway_command_id or "",
+    )
     return "ACKNOWLEDGED"
 
 
@@ -771,6 +833,7 @@ def recover_stuck_order_intents(now=None):
 
 
 def execute_order_intent(intent_id):
+    logger.info("order_execution stage=intent_execution_start intent_id=%s", intent_id)
     with transaction.atomic():
         claimed = OrderIntent.objects.select_for_update().get(pk=intent_id)
         if claimed.operation_status == "PENDING":
@@ -794,14 +857,34 @@ def execute_order_intent(intent_id):
         "instrument",
         "strategy_instance",
     ).get(pk=intent_id)
+    logger.info(
+        "order_execution stage=intent_loaded intent_id=%s status=%s attempt=%s portfolio_id=%s instrument_id=%s mode=%s",
+        intent.pk, intent.operation_status, intent.attempt_count,
+        intent.portfolio_id, intent.instrument_id, intent.mode,
+    )
     if intent.operation_status not in {"CLAIMED", "PENDING"}:
         if hasattr(intent, "order"):
-            return enqueue_place_command(intent.order)
+            command = enqueue_place_command(intent.order)
+            logger.info(
+                "order_execution stage=intent_idempotent_command_ready intent_id=%s internal_id=%s command_id=%s",
+                intent.pk, intent.order.internal_id, command.pk,
+            )
+            return command
+        logger.info(
+            "order_execution stage=intent_skipped intent_id=%s status=%s reason=terminal_or_ineligible_state",
+            intent.pk, intent.operation_status,
+        )
         return None
     if not intent.eligible:
+        logger.warning(
+            "order_execution stage=intent_skipped intent_id=%s status=%s reason=not_eligible",
+            intent.pk, intent.operation_status,
+        )
         return None
     try:
+        logger.info("order_execution stage=execution_mode_check_start intent_id=%s", intent.pk)
         require_portfolio_execution_mode(intent.portfolio, intent.mode)
+        logger.info("order_execution stage=execution_mode_check_succeeded intent_id=%s", intent.pk)
     except ValueError as exc:
         OrderIntent.objects.filter(pk=intent.pk).update(
             operation_status="FAILED",
@@ -819,9 +902,19 @@ def execute_order_intent(intent_id):
             error=str(exc)[:1000],
             completed_at=timezone.now(),
         )
+        logger.warning(
+            "order_execution stage=execution_mode_check_failed intent_id=%s error_type=%s error=%s",
+            intent.pk, type(exc).__name__, str(exc),
+        )
         return None
     try:
+        logger.info("order_execution stage=gateway_health_start intent_id=%s", intent.pk)
         state = GatewayClient.for_portfolio(intent.portfolio).health()
+        logger.info(
+            "order_execution stage=gateway_health_succeeded intent_id=%s connected=%s reconciled=%s mode=%s",
+            intent.pk, bool((state or {}).get("connected")),
+            bool((state or {}).get("reconciled")), (state or {}).get("mode") or "",
+        )
     except (GatewayError, BrokerCredentialError) as exc:
         OrderIntent.objects.filter(pk=intent.pk).update(
             operation_status="PENDING",
@@ -838,17 +931,73 @@ def execute_order_intent(intent_id):
             error=str(exc)[:1000],
             completed_at=timezone.now(),
         )
+        logger.warning(
+            "order_execution stage=gateway_health_failed intent_id=%s error_type=%s error=%s retryable=true",
+            intent.pk, type(exc).__name__, str(exc),
+        )
         return None
-    with transaction.atomic():
-        intent = OrderIntent.objects.select_for_update().get(pk=intent.pk)
-        decision, approved, checks = evaluate_intent(intent, state)
-        if decision not in {"APPROVED", "RESIZED"}:
-            retryable = decision == "HELD"
-            intent.operation_status = "PENDING" if retryable else "RISK_REJECTED"
-            intent.operation_error = (
-                checks[-1].reason if checks else "Order did not pass pre-trade risk"
+    try:
+        with transaction.atomic():
+            intent = OrderIntent.objects.select_for_update().get(pk=intent.pk)
+            logger.info("order_execution stage=risk_check_start intent_id=%s", intent.pk)
+            decision, approved, checks = evaluate_intent(intent, state)
+            logger.info(
+                "order_execution stage=risk_check_completed intent_id=%s decision=%s requested_quantity=%s approved_quantity=%s checks=%s",
+                intent.pk, decision, intent.quantity, approved, len(checks),
             )
-            intent.retryable = retryable
+            if decision not in {"APPROVED", "RESIZED"}:
+                retryable = decision == "HELD"
+                intent.operation_status = "PENDING" if retryable else "RISK_REJECTED"
+                intent.operation_error = (
+                    checks[-1].reason if checks else "Order did not pass pre-trade risk"
+                )
+                intent.retryable = retryable
+                intent.save(
+                    update_fields=[
+                        "operation_status",
+                        "operation_error",
+                        "retryable",
+                    ]
+                )
+                OperationAttempt.objects.filter(
+                    operation_type="ORDER_INTENT",
+                    operation_id=str(intent.pk),
+                    attempt_number=intent.attempt_count,
+                ).update(
+                    status="FAILED",
+                    retryable=retryable,
+                    error=intent.operation_error,
+                    completed_at=timezone.now(),
+                )
+                logger.warning(
+                    "order_execution stage=risk_check_blocked intent_id=%s decision=%s retryable=%s error=%s",
+                    intent.pk, decision, retryable, intent.operation_error,
+                )
+                return None
+            logger.info("order_execution stage=oms_order_create_start intent_id=%s", intent.pk)
+            order = create_order(intent, approved)
+            logger.info(
+                "order_execution stage=oms_order_created intent_id=%s internal_id=%s status=%s quantity=%s",
+                intent.pk, order.internal_id, order.status, order.quantity,
+            )
+            order = transition(
+                order,
+                "QUEUED",
+                "oms",
+                f"order:{order.internal_id}:queued",
+            )
+            logger.info(
+                "order_execution stage=broker_command_create_start intent_id=%s internal_id=%s",
+                intent.pk, order.internal_id,
+            )
+            command = enqueue_place_command(order)
+            logger.info(
+                "order_execution stage=broker_command_created intent_id=%s internal_id=%s command_id=%s status=%s",
+                intent.pk, order.internal_id, command.pk, command.status,
+            )
+            intent.operation_status = "QUEUED"
+            intent.operation_error = ""
+            intent.retryable = False
             intent.save(
                 update_fields=[
                     "operation_status",
@@ -861,41 +1010,22 @@ def execute_order_intent(intent_id):
                 operation_id=str(intent.pk),
                 attempt_number=intent.attempt_count,
             ).update(
-                status="FAILED",
-                retryable=retryable,
-                error=intent.operation_error,
+                status="COMPLETED",
+                retryable=False,
+                result={"order_id": order.internal_id, "broker_command_id": command.pk},
                 completed_at=timezone.now(),
             )
-            return None
-        order = create_order(intent, approved)
-        order = transition(
-            order,
-            "QUEUED",
-            "oms",
-            f"order:{order.internal_id}:queued",
+            logger.info(
+                "order_execution stage=intent_execution_completed intent_id=%s internal_id=%s command_id=%s",
+                intent.pk, order.internal_id, command.pk,
+            )
+            return command
+    except Exception:
+        logger.exception(
+            "order_execution stage=intent_execution_unexpected_error intent_id=%s",
+            intent_id,
         )
-        command = enqueue_place_command(order)
-        intent.operation_status = "QUEUED"
-        intent.operation_error = ""
-        intent.retryable = False
-        intent.save(
-            update_fields=[
-                "operation_status",
-                "operation_error",
-                "retryable",
-            ]
-        )
-        OperationAttempt.objects.filter(
-            operation_type="ORDER_INTENT",
-            operation_id=str(intent.pk),
-            attempt_number=intent.attempt_count,
-        ).update(
-            status="COMPLETED",
-            retryable=False,
-            result={"order_id": order.internal_id, "broker_command_id": command.pk},
-            completed_at=timezone.now(),
-        )
-        return command
+        raise
 
 
 def process_order_intents(limit=None):
