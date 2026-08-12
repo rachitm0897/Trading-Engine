@@ -284,6 +284,17 @@ def _record_broker_status(order,row,event_key,source="ibkr",target_override=None
         "original_broker_order_id":str(row.get("broker_order_id") or order.broker_order_id or ""),
         "advanced_override_codes":_advanced_override_codes(row)}
     occurred=parse_datetime(str(row.get("occurred_at") or "")) or timezone.now()
+    # A single IBKR rejection is reported through error/order-status callbacks
+    # and later repeated in open/completed-order snapshots.  Broker order id plus
+    # error code identifies that logical rejection across all of those sources.
+    if confirmation_candidate:
+        broker_order_id=details["original_broker_order_id"]
+        existing=order.status_history.filter(
+            reason_code=error_code,
+            details__original_broker_order_id=broker_order_id,
+        ).order_by("occurred_at","pk").first()
+        if existing:
+            return existing
     history,created=OrderStatusHistory.objects.get_or_create(event_key=event_key[:128],defaults={"order":order,
         "from_status":order.status,"to_status":"BROKER_BLOCKED" if confirmation_candidate else target or order.status,"source":source,"broker_status":broker_status,
         "reason_code":str(row.get("error_code") or "")[:64],"reason":_broker_reason(row),"details":details,
@@ -298,9 +309,9 @@ def _record_broker_status(order,row,event_key,source="ibkr",target_override=None
             operation_status="CONFIRMATION_REQUIRED",operation_error=warning,retryable=False,
         )
         logger.warning(
-            "order_execution stage=confirmation_required internal_id=%s broker_order_id=%s warning_code=%s warning=%s",
+            "order_execution stage=confirmation_required application_order_id=%s ibkr_order_id=%s warning_code=%s warning=%s advancedOrderRejectJson=%r override_codes=%s",
             order.internal_id, order.broker_order_id or row.get("broker_order_id") or "",
-            error_code, warning,
+            error_code, warning, row.get("advanced_reject"), details["advanced_override_codes"],
         )
         return history
     if target and target!="FILLED" and order.status not in TERMINAL and target in ALLOWED.get(order.status,set()):

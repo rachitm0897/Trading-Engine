@@ -102,6 +102,22 @@ def test_surveillance_confirmation_without_ibkr_override_cannot_resubmit(client,
     assert result.status_code==409
     assert not submitted_order.broker_commands.filter(command_type="PLACE").exists()
 
+def test_same_surveillance_rejection_is_deduplicated_across_callback_and_snapshot(submitted_order):
+    message="Security is under Surveillance Measure. Would you like to continue?"
+    common={"internal_id":submitted_order.internal_id,"broker_order_id":"885",
+        "broker_status":"Inactive","error_code":"201"}
+    process_snapshot({"event_type":"broker.order","payload":{**common,"source_event_id":"callback-error",
+        "error_message":f"Error 201, reqId 885: {message}"}})
+    process_snapshot({"event_type":"broker.order","payload":{**common,"source_event_id":"callback-status",
+        "error_message":message}})
+    process_snapshot({"event_type":"snapshot.completed_orders","payload":{"value":[{**common,
+        "error_message":f"Error 201, reqId 885: {message}","account":"DU-DIAGNOSTICS",
+        "symbol":"AAPL","asset_class":"STK","exchange":"SMART","currency":"USD"}],
+        "snapshot_key":"duplicate-warning"}})
+    histories=submitted_order.status_history.filter(reason_code="201",
+        details__original_broker_order_id="885")
+    assert histories.count()==1
+
 
 @responses.activate
 def test_operator_request_and_ibkr_cancel_confirmation_remain_distinct(client, submitted_order):
