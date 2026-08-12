@@ -149,14 +149,14 @@ export function estimateManualOrderNotional(draft: ManualOrderDraft, marketPrice
 export type ManualOrderResultKind = 'QUEUED' | 'HELD' | 'REJECTED' | 'OMS'
 
 export function manualOrderResultKind(result: ManualOrderIntentStatus): ManualOrderResultKind {
+  if (['RISK_REJECTED', 'FAILED', 'USER_CANCELLED'].includes(result.operation_status)) return 'REJECTED'
   if (result.internal_id) return 'OMS'
-  if (result.operation_status === 'RISK_REJECTED' || result.operation_status === 'FAILED') return 'REJECTED'
   if (result.retryable) return 'HELD'
   return 'QUEUED'
 }
 
 export function isManualIntentTerminal(result?: ManualOrderIntentStatus) {
   if (!result) return false
-  if (['RISK_REJECTED', 'FAILED'].includes(result.operation_status)) return true
+  if (['RISK_REJECTED', 'FAILED', 'USER_CANCELLED'].includes(result.operation_status)) return true
   return Boolean(result.internal_id && ['FILLED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(result.status || ''))
 }

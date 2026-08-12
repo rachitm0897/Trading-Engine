@@ -39,6 +39,9 @@ interface ManualOrderTicketProps extends ManualOrderSelection {
   quoteError: unknown
   onInstrumentChange: (instrumentId: number | null) => void
   onSubmit: (payload: ManualOrderPayload) => void
+  onWarningDecision?: (confirmed: boolean) => void
+  warningDecisionPending?: boolean
+  warningDecisionError?: unknown
 }
 
 export function ManualOrderTicket({
@@ -58,6 +61,9 @@ export function ManualOrderTicket({
   quoteError,
   onInstrumentChange,
   onSubmit,
+  onWarningDecision,
+  warningDecisionPending,
+  warningDecisionError,
 }: ManualOrderTicketProps) {
   const [draft, setDraft] = useState<ManualOrderDraft>(initialManualOrderDraft)
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
@@ -184,7 +190,30 @@ export function ManualOrderTicket({
       onClose={() => setConfirmation(null)}
       onConfirm={confirm}
     />}
+    {result?.confirmation?.required && <IbkrWarningConfirmation
+      warning={result.confirmation}
+      pending={warningDecisionPending === true}
+      onCancel={() => onWarningDecision?.(false)}
+      onConfirm={() => onWarningDecision?.(true)}
+    />}
+    {warningDecisionError && <ManualOrderError error={warningDecisionError} />}
   </>
+}
+
+function IbkrWarningConfirmation({warning, pending, onCancel, onConfirm}: {
+  warning: NonNullable<ManualOrderIntentStatus['confirmation']>
+  pending: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return <div className="dialog-layer" role="presentation">
+    <div className="confirm-dialog manual-order-confirmation" role="dialog" aria-modal="true" aria-labelledby="ibkr-warning-title" aria-describedby="ibkr-warning-message">
+      <header><AlertTriangle /><div><h2 id="ibkr-warning-title">IBKR confirmation required</h2><p>IBKR paused this order because it triggered a precautionary percentage constraint.</p></div></header>
+      <div className="inline-warning"><AlertTriangle /><div><strong>IBKR warning {warning.warning_code}</strong><p id="ibkr-warning-message">{warning.warning_message}</p>{warning.broker_order_id && <p>Broker order <code>{warning.broker_order_id}</code></p>}</div></div>
+      <p className="manual-order-risk-note">Continue Anyway resubmits the same IBKR order with percentage constraints overridden. All original order fields remain unchanged.</p>
+      <footer><button type="button" className="button-secondary" disabled={pending} onClick={onCancel}>{pending ? 'Updating…' : 'Cancel'}</button><button type="button" className="button-primary" disabled={pending} onClick={onConfirm}>{pending ? 'Resubmitting…' : 'Continue Anyway'}</button></footer>
+    </div>
+  </div>
 }
 
 function ContextValue({label, value, detail, critical = false}: {label: string; value: string; detail?: string; critical?: boolean}) {

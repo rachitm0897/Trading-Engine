@@ -326,6 +326,35 @@ test('confirms every Live routing detail before submitting', async () => {
   expect(onSubmit).toHaveBeenCalledOnce()
 })
 
+test('shows the exact IBKR percentage warning and sends one explicit decision', async () => {
+  const user = userEvent.setup()
+  const onWarningDecision = vi.fn()
+  renderTicket({
+    result: {
+      ...queuedResult,
+      operation_status: 'CONFIRMATION_REQUIRED',
+      operation_error: 'The order price exceeds the percentage constraint of 3%.',
+      internal_id: 'manual-order-001',
+      status: 'BROKER_BLOCKED',
+      broker_order_id: '881',
+      confirmation: {
+        required: true,
+        warning_code: '163',
+        warning_message: 'The order price exceeds the percentage constraint of 3%.',
+        broker_order_id: '881',
+      },
+    },
+    onWarningDecision,
+  })
+  const dialog = screen.getByRole('dialog', {name: 'IBKR confirmation required'})
+  expect(within(dialog).getByText('The order price exceeds the percentage constraint of 3%.')).toBeInTheDocument()
+  expect(within(dialog).getByText('IBKR warning 163')).toBeInTheDocument()
+  expect(within(dialog).getByText('881')).toBeInTheDocument()
+  await user.click(within(dialog).getByRole('button', {name: 'Continue Anyway'}))
+  expect(onWarningDecision).toHaveBeenCalledOnce()
+  expect(onWarningDecision).toHaveBeenCalledWith(true)
+})
+
 type MockApiOptions = {
   post?: (init?: RequestInit) => Promise<Response>
   intent?: () => ManualOrderIntentStatus

@@ -94,6 +94,20 @@ export function OrdersActivityPage() {
       manualSubmissionInFlight.current = false
     },
   })
+  const confirmOrder = useMutation({
+    mutationFn: ({intentId, confirmed}: {intentId: number; confirmed: boolean}) =>
+      request<ManualOrderIntentStatus>(
+        `orders/intents/${intentId}/confirmation/`,
+        mutationOptions('POST', {confirmed}, true, `ibkr-percentage-confirmation:${intentId}:${confirmed ? 'accept' : 'decline'}`),
+      ),
+    onSuccess: (result) => {
+      setManualResult(result)
+      setPollTimedOut(false)
+      if (isManualIntentTerminal(result)) setActiveIntent(null)
+      else setActiveIntent((current) => current || {intentId: result.intent_id, startedAt: Date.now()})
+      void refresh()
+    },
+  })
 
   useEffect(() => {
     const result = manualIntentStatus.data
@@ -191,6 +205,12 @@ export function OrdersActivityPage() {
       quoteError={manualQuote.error}
       onInstrumentChange={setManualInstrumentId}
       onSubmit={submitManualOrder}
+      onWarningDecision={(confirmed) => {
+        if (!manualResult?.confirmation?.required || confirmOrder.isPending) return
+        confirmOrder.mutate({intentId: manualResult.intent_id, confirmed})
+      }}
+      warningDecisionPending={confirmOrder.isPending}
+      warningDecisionError={confirmOrder.error}
     /></TerminalPanel>
     {!desktopInspector && <OrderDrawer order={selectedOrder} detail={orderDetail.data} detailLoading={orderDetail.isLoading} executions={(executions.data || []).filter((fill) => fill.order_id === selectedOrder?.internal_id)} modifying={modify.isPending} error={modify.error || cancel.error || orderDetail.error} onClose={() => setSelectedOrder(null)} onModify={(payload) => selectedOrder && modify.mutate({order: selectedOrder, payload})} onCancel={() => selectedOrder && setCancelOrder(selectedOrder)} />}
     <ConfirmActionDialog open={Boolean(cancelOrder)} title={`Cancel ${cancelOrder?.symbol || ''} order?`} description="Cancellation is submitted through OMS and Gateway. A fill may still arrive while the cancel is pending." confirmLabel="Request cancellation" pending={cancel.isPending} onClose={() => setCancelOrder(null)} onConfirm={(reason) => {if (cancelOrder) cancel.mutate({order: cancelOrder, reason})}} />

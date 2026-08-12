@@ -207,6 +207,12 @@ export interface ManualOrderIntentStatus {
   average_fill_price?: DecimalValue
   fill_count?: number
   broker_command?: BrokerCommandSummary | null
+  confirmation?: {
+    required: true
+    warning_code: string
+    warning_message: string
+    broker_order_id: string
+  }
 }
 
 export interface ManualOrderQuoteStatus {
