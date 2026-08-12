@@ -212,6 +212,7 @@ export interface ManualOrderIntentStatus {
     warning_code: string
     warning_message: string
     broker_order_id: string
+    can_confirm: boolean
   }
 }
 

@@ -326,31 +326,32 @@ test('confirms every Live routing detail before submitting', async () => {
   expect(onSubmit).toHaveBeenCalledOnce()
 })
 
-test('shows the exact IBKR percentage warning and sends one explicit decision', async () => {
+test('shows a cleaned IBKR surveillance warning and sends one explicit decision', async () => {
   const user = userEvent.setup()
   const onWarningDecision = vi.fn()
   renderTicket({
     result: {
       ...queuedResult,
       operation_status: 'CONFIRMATION_REQUIRED',
-      operation_error: 'The order price exceeds the percentage constraint of 3%.',
+      operation_error: 'Security is under Surveillance Measure.',
       internal_id: 'manual-order-001',
       status: 'BROKER_BLOCKED',
       broker_order_id: '881',
       confirmation: {
         required: true,
-        warning_code: '163',
-        warning_message: 'The order price exceeds the percentage constraint of 3%.',
+        warning_code: '201',
+        warning_message: 'Error 201, reqId 6: Order rejected - reason\\:<br>Security is under Surveillance Measure.\\<br>Would you like to continue?',
         broker_order_id: '881',
+        can_confirm: true,
       },
     },
     onWarningDecision,
   })
-  const dialog = screen.getByRole('dialog', {name: 'IBKR confirmation required'})
-  expect(within(dialog).getByText('The order price exceeds the percentage constraint of 3%.')).toBeInTheDocument()
-  expect(within(dialog).getByText('IBKR warning 163')).toBeInTheDocument()
+  const dialog = screen.getByRole('dialog', {name: 'IBKR Order Warning'})
+  expect(within(dialog).getByText(/Order rejected - reason:\s+Security is under Surveillance Measure/)).toBeInTheDocument()
+  expect(within(dialog).getByText('IBKR warning 201')).toBeInTheDocument()
   expect(within(dialog).getByText('881')).toBeInTheDocument()
-  await user.click(within(dialog).getByRole('button', {name: 'Continue Anyway'}))
+  await user.click(within(dialog).getByRole('button', {name: 'Continue'}))
   expect(onWarningDecision).toHaveBeenCalledOnce()
   expect(onWarningDecision).toHaveBeenCalledWith(true)
 })

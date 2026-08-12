@@ -206,12 +206,17 @@ function IbkrWarningConfirmation({warning, pending, onCancel, onConfirm}: {
   onCancel: () => void
   onConfirm: () => void
 }) {
+  const message = warning.warning_message
+    .replace(/\\?<br\s*\/?\s*>/gi, '\n')
+    .replace(/reason\\\s*:/gi, 'reason:')
+    .replace(/^Error\s+\d+\s*,\s*reqId\s+[-\d]+\s*:\s*/i, '')
+    .trim()
   return <div className="dialog-layer" role="presentation">
     <div className="confirm-dialog manual-order-confirmation" role="dialog" aria-modal="true" aria-labelledby="ibkr-warning-title" aria-describedby="ibkr-warning-message">
-      <header><AlertTriangle /><div><h2 id="ibkr-warning-title">IBKR confirmation required</h2><p>IBKR paused this order because it triggered a precautionary percentage constraint.</p></div></header>
-      <div className="inline-warning"><AlertTriangle /><div><strong>IBKR warning {warning.warning_code}</strong><p id="ibkr-warning-message">{warning.warning_message}</p>{warning.broker_order_id && <p>Broker order <code>{warning.broker_order_id}</code></p>}</div></div>
-      <p className="manual-order-risk-note">Continue Anyway resubmits the same IBKR order with percentage constraints overridden. All original order fields remain unchanged.</p>
-      <footer><button type="button" className="button-secondary" disabled={pending} onClick={onCancel}>{pending ? 'Updating…' : 'Cancel'}</button><button type="button" className="button-primary" disabled={pending} onClick={onConfirm}>{pending ? 'Resubmitting…' : 'Continue Anyway'}</button></footer>
+      <header><AlertTriangle /><div><h2 id="ibkr-warning-title">IBKR Order Warning</h2><p>IBKR requires your confirmation before this order can continue.</p></div></header>
+      <div className="inline-warning"><AlertTriangle /><div><strong>IBKR warning {warning.warning_code}</strong><p id="ibkr-warning-message" style={{whiteSpace: 'pre-line'}}>{message}</p>{warning.broker_order_id && <p>Broker order <code>{warning.broker_order_id}</code></p>}</div></div>
+      {!warning.can_confirm && <p className="manual-order-risk-note">IBKR did not provide a programmatic override code. Continue is disabled; review the Gateway configuration and captured advanced reject JSON.</p>}
+      <footer><button type="button" className="button-secondary" disabled={pending} onClick={onCancel}>{pending ? 'Updating…' : 'Cancel'}</button><button type="button" className="button-primary" disabled={pending || !warning.can_confirm} onClick={onConfirm}>{pending ? 'Resubmitting…' : 'Continue'}</button></footer>
     </div>
   </div>
 }
