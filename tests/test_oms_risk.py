@@ -41,6 +41,14 @@ def test_live_gateway_session_is_always_rejected(intent):
     decision,approved,_=evaluate_intent(intent,{"connected":True,"reconciled":True,"mode":"live"})
     assert decision=="REJECTED" and approved==0
 
+
+def test_cross_currency_order_is_rejected_without_trusted_fx_conversion(intent):
+    intent.instrument.currency="INR";intent.instrument.save(update_fields=["currency"])
+    decision,approved,checks=evaluate_intent(intent,{"connected":True,"reconciled":True,"mode":"paper"})
+    assert decision=="REJECTED" and approved==0
+    assert checks[-1].check_name=="currency_conversion"
+    assert checks[-1].details=={"instrument_currency":"INR","account_currency":"USD"}
+
 def test_partial_fill_is_idempotent_and_updates_ledgers(intent):
     order = create_order(intent); order.status="ACKNOWLEDGED"; order.save()
     event = {"execution_id":"E1", "quantity":"4", "price":"100", "commission":"1", "executed_at":timezone.now()}
@@ -48,6 +56,14 @@ def test_partial_fill_is_idempotent_and_updates_ledgers(intent):
     order.refresh_from_db()
     assert order.status == "PARTIALLY_FILLED" and order.filled_quantity == 4
     assert Fill.objects.count() == CashLedgerEntry.objects.count() == PositionLedgerEntry.objects.count() == 1
+
+
+def test_fill_without_broker_currency_uses_instrument_currency(intent):
+    intent.instrument.currency="INR";intent.instrument.save(update_fields=["currency"])
+    order=create_order(intent);order.status="ACKNOWLEDGED";order.save()
+    apply_execution(order,{"execution_id":"INR-FILL","quantity":"10","price":"125","commission":"2"})
+    assert Fill.objects.get(execution_id="INR-FILL").currency=="INR"
+    assert CashLedgerEntry.objects.get(reference="INR-FILL").currency=="INR"
 
 
 def test_partial_fills_update_weighted_average_cost(intent):

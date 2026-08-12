@@ -100,6 +100,17 @@ def test_mapping_recognizes_full_nyse_provider_exchange_name_without_mic():
     assert mapping.status=="VERIFIED" and mapping.provider_exchange=="NEW YORK STOCK EXCHANGE, INC."
 
 
+def test_mapping_recognizes_nse_mic_for_indian_stock():
+    instrument,_=canonical("KISSHT",conid=54321,primary_exchange="NSE")
+    instrument.currency="INR";instrument.save(update_fields=["currency"])
+    client=MappingClient(
+        candidates=[{"provider_symbol":"KISSHT","description":"Kissht","type":"Common Stock",
+                 "currency":"INR","mic":"XNSE","figi":"","isin":""}],
+        profile={"provider_symbol":"KISSHT","currency":"INR","provider_exchange":"NSE","country":"IN"})
+    mapping=verify_finnhub_mapping(instrument,client=client)
+    assert mapping.status=="VERIFIED" and mapping.exchange_mic=="XNSE"
+
+
 def test_non_stock_and_unverified_contracts_fail_closed(settings):
     settings.MARKET_DATA_FALLBACK_ENABLED = True
     settings.FINNHUB_LIVE_FALLBACK_ENABLED = True

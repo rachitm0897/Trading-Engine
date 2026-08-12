@@ -46,3 +46,19 @@ def test_existing_selected_conid_is_requalified_from_broker():
     assert command is None and resolved==instrument
     assert contract.qualified_at is not None and contract.primary_exchange=="ASX"
     assert contract.description=="BHP Group Limited"
+
+
+def test_indian_contract_uses_indian_currency_and_trading_calendar():
+    row={"symbol":"KISSHT","local_symbol":"KISSHT","conid":54321,"asset_class":"STK",
+         "exchange":"NSE","primary_exchange":"NSE","currency":"INR","description":"Kissht Limited"}
+
+    class IndianBroker:
+        def qualify_contract_exact(self,payload,key):return {**row,"qualified":True}
+
+    instrument,contract,command=resolve_instrument(
+        ticker=row["symbol"],asset_class=row["asset_class"],exchange=row["exchange"],
+        primary_exchange=row["primary_exchange"],currency=row["currency"],conid=row["conid"],
+        local_symbol=row["local_symbol"],description=row["description"],gateway=IndianBroker())
+    assert command is None and contract.conid==54321
+    assert instrument.currency=="INR" and instrument.primary_exchange=="NSE"
+    assert instrument.trading_calendar=="XNSE"

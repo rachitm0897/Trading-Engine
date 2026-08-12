@@ -22,6 +22,7 @@ from .models import BrokerPositionSnapshot, BrokerSessionAccount, BrokerSyncCurs
 logger = logging.getLogger(__name__)
 
 TERMINAL={"FILLED","CANCELLED","REJECTED","EXPIRED"}
+PERCENTAGE_CONFIRMATION_CODES={"109","163"}
 STATUS_MAP={
     "PendingSubmit":"SUBMITTED","ApiPending":"SUBMITTED","PreSubmitted":"ACKNOWLEDGED",
     "Submitted":"ACKNOWLEDGED","PendingCancel":"CANCEL_PENDING","ApiCancelled":"CANCELLED",
@@ -254,17 +255,46 @@ def _broker_reason(row):
 def _record_broker_status(order,row,event_key,source="ibkr",target_override=None):
     broker_status=str(row.get("broker_status") or row.get("status") or "")
     target=target_override or STATUS_MAP.get(broker_status)
+    error_code=str(row.get("error_code") or "").strip()
+    confirmation_candidate=(
+        error_code in PERCENTAGE_CONFIRMATION_CODES
+        and order.intent.origin==OrderIntent.Origin.MANUAL
+        and order.filled_quantity == 0
+        and not order.broker_commands.filter(
+            idempotency_key=f"broker:percentage-confirm:{order.internal_id}"
+        ).exists()
+    )
     details={"error_message":str(row.get("error_message") or ""),"why_held":str(row.get("why_held") or ""),
         "warning_text":str(row.get("warning_text") or ""),"advanced_reject":row.get("advanced_reject"),
         "trade_log":row.get("trade_log") or [],"broker_order_id":str(row.get("broker_order_id") or ""),
         "permanent_id":str(row.get("permanent_id") or "")}
     occurred=parse_datetime(str(row.get("occurred_at") or "")) or timezone.now()
-    history,_=OrderStatusHistory.objects.get_or_create(event_key=event_key[:128],defaults={"order":order,
-        "from_status":order.status,"to_status":target or order.status,"source":source,"broker_status":broker_status,
+    history,created=OrderStatusHistory.objects.get_or_create(event_key=event_key[:128],defaults={"order":order,
+        "from_status":order.status,"to_status":"BROKER_BLOCKED" if confirmation_candidate else target or order.status,"source":source,"broker_status":broker_status,
         "reason_code":str(row.get("error_code") or "")[:64],"reason":_broker_reason(row),"details":details,
         "occurred_at":occurred,"operator_requested":bool(row.get("operator_requested"))})
+    requires_confirmation=created and confirmation_candidate
+    if requires_confirmation:
+        warning=str(row.get("error_message") or row.get("warning_text") or row.get("why_held")
+            or f"IBKR precautionary warning {error_code}")[:1000]
+        if order.status not in TERMINAL and "BROKER_BLOCKED" in ALLOWED.get(order.status,set()):
+            order.status="BROKER_BLOCKED";order.save(update_fields=["status","updated_at"])
+        OrderIntent.objects.filter(pk=order.intent_id).update(
+            operation_status="CONFIRMATION_REQUIRED",operation_error=warning,retryable=False,
+        )
+        logger.warning(
+            "order_execution stage=confirmation_required internal_id=%s broker_order_id=%s warning_code=%s warning=%s",
+            order.internal_id, order.broker_order_id or row.get("broker_order_id") or "",
+            error_code, warning,
+        )
+        return history
     if target and target!="FILLED" and order.status not in TERMINAL and target in ALLOWED.get(order.status,set()):
         order.status=target;order.save(update_fields=["status","updated_at"])
+        logger.info(
+            "order_execution stage=broker_status internal_id=%s broker_order_id=%s warning_code=%s final_status=%s broker_status=%s",
+            order.internal_id, order.broker_order_id or row.get("broker_order_id") or "",
+            error_code, order.status, broker_status,
+        )
         if target in TERMINAL:
             from apps.risk.services import settle_order_reservation
             settle_order_reservation(order,target)

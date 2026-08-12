@@ -234,6 +234,18 @@ def evaluate_intent(intent, gateway_state=None):
         add("market_freshness", "REJECTED", str(exc), 0)
         return "REJECTED", Decimal(0), checks
 
+    instrument_currency = str(intent.instrument.currency or "").strip().upper()
+    account_currency = str(account.base_currency or "").strip().upper()
+    if instrument_currency != account_currency:
+        add(
+            "currency_conversion",
+            "REJECTED",
+            "Cross-currency risk conversion is unavailable; instrument and account base currencies must match",
+            0,
+            {"instrument_currency": instrument_currency, "account_currency": account_currency},
+        )
+        return "REJECTED", Decimal(0), checks
+
     if hasattr(intent, "sizing_decision"):
         sized = Decimal(intent.sizing_decision.approved_quantity)
         if sized <= 0:

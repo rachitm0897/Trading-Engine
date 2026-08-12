@@ -124,7 +124,9 @@ def reconcile_market_subscription(instrument,timeframe,gateway=None,force=False,
             subscription.save()
             session_key=str(gateway_session.pk) if gateway_session is not None else "explicit"
             payload={"subscription_key":f"{session_key}:{instrument.pk}:{timeframe}","instrument_id":instrument.pk,"conid":contract.conid,
-                "symbol":instrument.symbol,"asset_class":instrument.asset_class,"exchange":instrument.exchange,
+                "symbol":instrument.symbol,"local_symbol":contract.local_symbol,
+                "asset_class":instrument.asset_class,"exchange":instrument.exchange,
+                "primary_exchange":contract.primary_exchange,
                 "currency":instrument.currency,"timeframe":timeframe,"historical_bars":history,
                 "provider":"IBKR","provider_generation":str(subscription.provider_generation)}
             command_key=f"market-subscribe:{session_key}:{subscription.pk}:{subscription.request_id}";action="subscribe"

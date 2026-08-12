@@ -182,6 +182,17 @@ def _manual_intent_row(intent):
             "fill_count": intent.order.fills.count(),
             "broker_command": command_summary(command) if command else None,
         })
+        if intent.operation_status == "CONFIRMATION_REQUIRED":
+            warning = intent.order.status_history.filter(
+                reason_code__in=["109", "163"]
+            ).order_by("-occurred_at", "-pk").first()
+            if warning:
+                data["confirmation"] = {
+                    "required": True,
+                    "warning_code": warning.reason_code,
+                    "warning_message": intent.operation_error or warning.reason,
+                    "broker_order_id": intent.order.broker_order_id,
+                }
     return data
 
 
@@ -220,6 +231,35 @@ def manual_order_intent_status(request, intent_id):
             "details": {"intent_id": intent_id},
         })
     return response(_manual_intent_row(intent))
+
+
+@csrf_exempt
+def manual_order_confirmation(request, intent_id):
+    invalid = method_guard(request, "POST")
+    if invalid:
+        return invalid
+    key = request.headers.get("Idempotency-Key")
+    if not key:
+        return response(status=400, error={"code":"IDEMPOTENCY_KEY_REQUIRED","message":"Idempotency-Key header is required","details":{}})
+    from apps.execution.dispatch import command_summary, confirm_percentage_constraints, decline_percentage_constraints
+    from apps.oms.models import OrderIntent
+    try:
+        payload=json.loads(request.body or b"{}")
+        confirmed=payload.get("confirmed")
+        if not isinstance(confirmed, bool):
+            raise ValueError("confirmed must be true or false")
+        intent=OrderIntent.objects.select_related("order").get(pk=intent_id,origin=OrderIntent.Origin.MANUAL)
+        if confirmed:
+            command=confirm_percentage_constraints(intent.order)
+            intent.refresh_from_db()
+            return response({**_manual_intent_row(intent),"broker_command":command_summary(command)},status=202)
+        decline_percentage_constraints(intent.order)
+        intent.refresh_from_db()
+        return response(_manual_intent_row(intent))
+    except OrderIntent.DoesNotExist:
+        return response(status=404,error={"code":"MANUAL_ORDER_INTENT_NOT_FOUND","message":"Manual order intent was not found","details":{"intent_id":intent_id}})
+    except (json.JSONDecodeError,ValueError) as exc:
+        return response(status=409,error={"code":"ORDER_CONFIRMATION_INVALID","message":str(exc),"details":{"intent_id":intent_id}})
 
 
 @csrf_exempt

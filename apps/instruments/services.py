@@ -5,6 +5,23 @@ from apps.audit.models import OutboxEvent
 from .models import BrokerContract, Instrument
 
 
+TRADING_CALENDAR_BY_EXCHANGE = {
+    "NSE": "XNSE",
+    "XNSE": "XNSE",
+    "BSE": "XBOM",
+    "BOM": "XBOM",
+    "XBOM": "XBOM",
+}
+
+
+def trading_calendar_for(exchange, primary_exchange="", currency=""):
+    for value in (primary_exchange, exchange):
+        normalized = str(value or "").strip().upper()
+        if normalized in TRADING_CALENDAR_BY_EXCHANGE:
+            return TRADING_CALENDAR_BY_EXCHANGE[normalized]
+    return "XNSE" if str(currency or "").strip().upper() == "INR" else "XNYS"
+
+
 def _gateway(gateway=None,gateway_session=None):
     if gateway is not None:return gateway
     if gateway_session is None:
@@ -72,7 +89,8 @@ def resolve_instrument(*, instrument_id=None, ticker=None, asset_class="STK", ex
         instrument = choices.filter(exchange=exchange).first() or (choices.first() if not conid else None)
         if instrument is None:
             instrument = Instrument.objects.create(symbol=symbol, asset_class=asset_class, exchange=exchange,
-                primary_exchange=primary_exchange or "",currency=currency)
+                primary_exchange=primary_exchange or "",currency=currency,
+                trading_calendar=trading_calendar_for(exchange,primary_exchange,currency))
     if not instrument.active or not instrument.tradable:
         raise ValueError("Instrument is not active/tradable")
     contract = BrokerContract.objects.filter(instrument=instrument).first()
@@ -100,6 +118,15 @@ def record_qualified_contract(instrument, result):
     contract=BrokerContract.objects.update_or_create(instrument=instrument, defaults={"conid":int(result["conid"]),
         "primary_exchange":result.get("primary_exchange", ""), "local_symbol":result.get("local_symbol", instrument.symbol),
         "description":result.get("description", ""),"qualified_at":timezone.now()})[0]
+    primary_exchange=result.get("primary_exchange", "") or instrument.primary_exchange
+    calendar=trading_calendar_for(instrument.exchange,primary_exchange,instrument.currency)
+    updates=[]
+    if primary_exchange and instrument.primary_exchange != primary_exchange:
+        instrument.primary_exchange=primary_exchange;updates.append("primary_exchange")
+    if instrument.trading_calendar != calendar:
+        instrument.trading_calendar=calendar;updates.append("trading_calendar")
+    if updates:
+        instrument.save(update_fields=[*updates,"updated_at"] if hasattr(instrument,"updated_at") else updates)
     publish_instrument_registry(contract)
     from .models import InstrumentProviderMapping
     mapping,_=InstrumentProviderMapping.objects.get_or_create(instrument=instrument,provider="FINNHUB")

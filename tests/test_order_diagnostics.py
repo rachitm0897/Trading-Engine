@@ -22,7 +22,7 @@ def submitted_order(settings):
     bind_managed_gateway(portfolio, settings)
     instrument = Instrument.objects.create(symbol="AAPL", exchange="SMART", primary_exchange="NASDAQ")
     intent = OrderIntent.objects.create(portfolio=portfolio, instrument=instrument, side="BUY", quantity=1,
-        idempotency_key="diagnostic-intent")
+        idempotency_key="diagnostic-intent", origin=OrderIntent.Origin.MANUAL)
     order = create_order(intent)
     order = transition(order, "QUEUED", "oms", "diagnostic:queued")
     return transition(order, "SUBMITTED", "gateway", "diagnostic:submitted")
@@ -43,6 +43,48 @@ def test_exact_ibkr_rejection_is_append_only_and_changes_status(submitted_order)
     assert history.reason=="Order rejected - insufficient available equity"
     assert history.broker_status=="Inactive" and history.details["why_held"]=="locate pending"
     assert submitted_order.status_history.filter(event_key="broker-order:reject-201").count()==1
+
+
+def test_percentage_warning_requires_confirmation_and_preserves_exact_message(client, submitted_order):
+    message="The order price exceeds the percentage constraint of 3%. Confirm to transmit anyway."
+    process_snapshot({"event_type":"broker.order","payload":{"source_event_id":"warning-163",
+        "internal_id":submitted_order.internal_id,"broker_order_id":"881","broker_status":"Inactive",
+        "error_code":"163","error_message":message,"occurred_at":"2026-07-13T01:30:00+00:00"}})
+    submitted_order.refresh_from_db();submitted_order.intent.refresh_from_db()
+    assert submitted_order.status=="BROKER_BLOCKED"
+    assert submitted_order.intent.operation_status=="CONFIRMATION_REQUIRED"
+    status=client.get(f"/api/v1/orders/intents/{submitted_order.intent_id}/status/").json()["data"]
+    assert status["confirmation"]=={"required":True,"warning_code":"163",
+        "warning_message":message,"broker_order_id":"881"}
+
+
+def test_percentage_confirmation_is_idempotent_and_decline_does_not_resubmit(client, submitted_order):
+    process_snapshot({"event_type":"broker.order","payload":{"source_event_id":"warning-109",
+        "internal_id":submitted_order.internal_id,"broker_order_id":"882","broker_status":"Inactive",
+        "error_code":"109","error_message":"Price exceeds the configured percentage constraint"}})
+    url=f"/api/v1/orders/intents/{submitted_order.intent_id}/confirmation/"
+    first=client.post(url,json.dumps({"confirmed":True}),content_type="application/json",HTTP_IDEMPOTENCY_KEY="confirm-a")
+    second=client.post(url,json.dumps({"confirmed":True}),content_type="application/json",HTTP_IDEMPOTENCY_KEY="confirm-b")
+    assert first.status_code==second.status_code==202
+    commands=submitted_order.broker_commands.filter(command_type="MODIFY")
+    assert commands.count()==1
+    assert commands.get().request_payload=={"internal_id":submitted_order.internal_id,
+        "override_percentage_constraints":True}
+
+    other_intent=OrderIntent.objects.create(portfolio=submitted_order.intent.portfolio,
+        instrument=submitted_order.intent.instrument,side="BUY",quantity=1,
+        idempotency_key="diagnostic-decline",origin=OrderIntent.Origin.MANUAL)
+    other=create_order(other_intent);other=transition(other,"QUEUED","oms","decline:queued")
+    other=transition(other,"SUBMITTED","gateway","decline:submitted")
+    process_snapshot({"event_type":"broker.order","payload":{"source_event_id":"warning-decline",
+        "internal_id":other.internal_id,"broker_order_id":"883","broker_status":"Inactive",
+        "error_code":"163","error_message":"Percentage constraint"}})
+    declined=client.post(f"/api/v1/orders/intents/{other_intent.pk}/confirmation/",
+        json.dumps({"confirmed":False}),content_type="application/json",HTTP_IDEMPOTENCY_KEY="decline")
+    other.refresh_from_db();other_intent.refresh_from_db()
+    assert declined.status_code==200 and other.status=="REJECTED"
+    assert other_intent.operation_status=="USER_CANCELLED"
+    assert not other.broker_commands.exists()
 
 
 @responses.activate

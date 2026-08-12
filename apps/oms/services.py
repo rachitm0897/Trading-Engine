@@ -12,9 +12,9 @@ from .models import Order, OrderStatusHistory
 
 ALLOWED = {
  "CREATED": {"RISK_APPROVED", "REJECTED", "BROKER_BLOCKED"}, "RISK_APPROVED": {"QUEUED"},
- "QUEUED": {"SUBMITTED", "BROKER_BLOCKED", "REJECTED", "CANCEL_PENDING", "UNKNOWN"}, "BROKER_BLOCKED": {"QUEUED", "REJECTED", "UNKNOWN"},
- "SUBMITTED": {"ACKNOWLEDGED", "PARTIALLY_FILLED", "FILLED", "REJECTED", "UNKNOWN", "CANCEL_PENDING"},
- "ACKNOWLEDGED": {"PARTIALLY_FILLED", "FILLED", "CANCEL_PENDING", "CANCELLED", "EXPIRED", "UNKNOWN"},
+ "QUEUED": {"SUBMITTED", "BROKER_BLOCKED", "REJECTED", "CANCEL_PENDING", "UNKNOWN"}, "BROKER_BLOCKED": {"QUEUED", "SUBMITTED", "REJECTED", "UNKNOWN"},
+ "SUBMITTED": {"ACKNOWLEDGED", "PARTIALLY_FILLED", "FILLED", "BROKER_BLOCKED", "REJECTED", "UNKNOWN", "CANCEL_PENDING"},
+ "ACKNOWLEDGED": {"PARTIALLY_FILLED", "FILLED", "BROKER_BLOCKED", "CANCEL_PENDING", "CANCELLED", "EXPIRED", "UNKNOWN"},
  "PARTIALLY_FILLED": {"PARTIALLY_FILLED", "FILLED", "CANCEL_PENDING", "CANCELLED", "UNKNOWN"},
  "CANCEL_PENDING": {"QUEUED", "SUBMITTED", "ACKNOWLEDGED", "PARTIALLY_FILLED", "CANCEL_PENDING", "CANCELLED", "FILLED", "UNKNOWN"},
  "UNKNOWN": {"QUEUED", "BROKER_BLOCKED", "SUBMITTED", "ACKNOWLEDGED", "PARTIALLY_FILLED", "FILLED", "CANCEL_PENDING", "CANCELLED"},
@@ -146,7 +146,7 @@ def apply_execution(order, execution):
     quantity = Decimal(str(execution["quantity"]))
     price = Decimal(str(execution["price"]))
     commission = Decimal(str(execution.get("commission", 0)))
-    currency = execution.get("currency", "USD")
+    currency = execution.get("currency") or order.intent.instrument.currency
     fill, created = Fill.objects.get_or_create(execution_id=execution["execution_id"], defaults={"order": order, "quantity": quantity, "price": price, "commission": commission, "currency": currency, "executed_at": execution.get("executed_at", timezone.now()), "raw_event": raw_event})
     if not created:
         fill = Fill.objects.select_for_update().select_related(

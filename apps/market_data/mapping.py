@@ -13,12 +13,15 @@ MIC_BY_IBKR_EXCHANGE = {
     "NYSE": {"XNYS"}, "ARCA": {"ARCX"}, "NYSEARCA": {"ARCX"}, "AMEX": {"XASE"},
     "BATS": {"BATS", "XCBO"}, "IEX": {"IEXG"}, "ASX": {"XASX"}, "LSE": {"XLON"},
     "TSE": {"XTKS"}, "TSX": {"XTSE"}, "SBF": {"XPAR"}, "FWB": {"XFRA"}, "IBIS": {"XETR"},
+    "NSE": {"XNSE"}, "XNSE": {"XNSE"}, "BSE": {"XBOM"}, "BOM": {"XBOM"}, "XBOM": {"XBOM"},
 }
 PROVIDER_EXCHANGE_ALIASES = {
     "NYSE": {"NYSE", "NEWYORKSTOCKEXCHANGE"},
     "NASDAQ": {"NASDAQ"}, "NASDAQ.NMS": {"NASDAQ"}, "NASDAQCM": {"NASDAQ"}, "NASDAQGM": {"NASDAQ"},
     "ARCA": {"NYSEARCA", "ARCA"}, "NYSEARCA": {"NYSEARCA", "ARCA"},
     "AMEX": {"NYSEAMERICAN", "AMEX"}, "BATS": {"BATS", "CBOE"},
+    "NSE": {"NSE", "NATIONALSTOCKEXCHANGEOFINDIA"},
+    "BSE": {"BSE", "BOMBAYSTOCKEXCHANGE"}, "BOM": {"BSE", "BOMBAYSTOCKEXCHANGE"},
 }
 
 

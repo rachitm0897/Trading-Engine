@@ -112,8 +112,12 @@ def _place_payload(order):
         "account": intent.portfolio.account.account_id,
         "conid": contract.conid if contract else None,
         "symbol": instrument.symbol,
+        "local_symbol": contract.local_symbol if contract else instrument.symbol,
         "asset_class": instrument.asset_class,
         "exchange": instrument.exchange,
+        "primary_exchange": (
+            contract.primary_exchange if contract else instrument.primary_exchange
+        ),
         "currency": instrument.currency,
         "side": intent.side,
         "quantity": str(order.quantity),
@@ -140,6 +144,69 @@ def request_order_modification(order, changes, idempotency_key):
         changes,
         _command_key("modify", order.internal_id, idempotency_key),
     )
+
+
+@transaction.atomic
+def confirm_percentage_constraints(order):
+    """Queue exactly one override modification for an IBKR 109/163 warning."""
+    order = (
+        Order.objects.select_for_update(of=("self",))
+        .select_related("intent")
+        .get(pk=order.pk)
+    )
+    intent = order.intent
+    if intent.origin != OrderIntent.Origin.MANUAL:
+        raise ValueError("Only manual orders can be operator-confirmed")
+    if intent.operation_status not in {"CONFIRMATION_REQUIRED", "RESUBMITTING"}:
+        raise ValueError("Order does not require percentage-constraint confirmation")
+    warning = order.status_history.filter(reason_code__in=["109", "163"]).order_by(
+        "-occurred_at", "-pk"
+    ).first()
+    command = enqueue_broker_command(
+        order,
+        BrokerCommand.CommandType.MODIFY,
+        {"override_percentage_constraints": True},
+        f"broker:percentage-confirm:{order.internal_id}",
+    )
+    if intent.operation_status == "CONFIRMATION_REQUIRED":
+        intent.operation_status = "RESUBMITTING"
+        intent.operation_error = ""
+        intent.retryable = False
+        intent.save(update_fields=["operation_status", "operation_error", "retryable"])
+        logger.info(
+            "order_execution stage=user_confirmation internal_id=%s broker_order_id=%s warning_code=%s confirmation=accepted command_id=%s",
+            order.internal_id, order.broker_order_id or "",
+            warning.reason_code if warning else "109/163", command.pk,
+        )
+    return command
+
+
+@transaction.atomic
+def decline_percentage_constraints(order):
+    order = Order.objects.select_for_update().select_related("intent").get(pk=order.pk)
+    intent = order.intent
+    if intent.origin != OrderIntent.Origin.MANUAL:
+        raise ValueError("Only manual orders can be operator-confirmed")
+    if intent.operation_status == "USER_CANCELLED":
+        return order
+    if intent.operation_status != "CONFIRMATION_REQUIRED":
+        raise ValueError("Order does not require percentage-constraint confirmation")
+    order = transition(
+        order, "REJECTED", "operator",
+        f"order:{order.internal_id}:percentage-confirmation-declined",
+        "Operator declined the IBKR percentage-constraint override",
+        reason_code="IBKR_CONFIRMATION_DECLINED", operator_requested=True,
+    )
+    intent.operation_status = "USER_CANCELLED"
+    intent.operation_error = "Operator cancelled after the IBKR precautionary warning"
+    intent.retryable = False
+    intent.eligible = False
+    intent.save(update_fields=["operation_status", "operation_error", "retryable", "eligible"])
+    logger.info(
+        "order_execution stage=user_confirmation internal_id=%s broker_order_id=%s confirmation=declined",
+        order.internal_id, order.broker_order_id or "",
+    )
+    return order
 
 
 @transaction.atomic
@@ -384,6 +451,11 @@ def _send(command, client):
     if command.command_type == BrokerCommand.CommandType.PLACE:
         return client.place_order(command.request_payload, key)
     if command.command_type == BrokerCommand.CommandType.MODIFY:
+        if command.request_payload.get("override_percentage_constraints") is True:
+            logger.info(
+                "order_execution stage=percentage_override_resubmission command_id=%s internal_id=%s broker_order_id=%s",
+                command.pk, command.internal_order_id, command.order.broker_order_id or "",
+            )
         payload = {
             key: value
             for key, value in command.request_payload.items()
@@ -488,6 +560,28 @@ def _acknowledge(command_id, response, *, recovered=False):
             )
         OrderIntent.objects.filter(pk=order.intent_id).update(
             operation_status="QUEUED", operation_error="", retryable=False
+        )
+    elif (
+        command.command_type == BrokerCommand.CommandType.MODIFY
+        and command.request_payload.get("override_percentage_constraints") is True
+    ):
+        if "SUBMITTED" in __import__("apps.oms.services", fromlist=["ALLOWED"]).ALLOWED.get(
+            order.status, set()
+        ):
+            order = transition(
+                order, "SUBMITTED", "broker_command",
+                f"broker-command:{command.pk}:percentage-override-acknowledged",
+                reason_code="IBKR_PERCENTAGE_OVERRIDE_SUBMITTED",
+                details={"gateway_command_id": command.gateway_command_id},
+                operator_requested=True,
+            )
+        OrderIntent.objects.filter(pk=order.intent_id).update(
+            operation_status="QUEUED", operation_error="", retryable=False
+        )
+        logger.info(
+            "order_execution stage=percentage_override_acknowledged command_id=%s internal_id=%s broker_order_id=%s",
+            command.pk, command.internal_order_id,
+            command.broker_order_id or order.broker_order_id or "",
         )
     return command
 
