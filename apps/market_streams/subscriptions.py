@@ -1,4 +1,5 @@
 import uuid
+import logging
 from datetime import timedelta
 from django.conf import settings
 from django.db import transaction
@@ -7,6 +8,8 @@ from apps.broker_gateway.client import GatewayClient,GatewayError
 from apps.strategies.models import StrategyInstance
 from apps.strategies.plugins import get_plugin
 from .models import MarketDataConsumerLease,MarketDataSubscription
+
+logger = logging.getLogger(__name__)
 
 
 def _requirements(instrument,timeframe,gateway_session=None):
@@ -86,7 +89,16 @@ def reconcile_market_subscription(instrument,timeframe,gateway=None,force=False,
     else:client=gateway
     generation=connection_generation
     if count and generation is None:
+        logger.info(
+            "manual_quote stage=gateway_health_start session_id=%s instrument_id=%s timeframe=%s",
+            gateway_session.pk if gateway_session else "", instrument.pk, timeframe,
+        )
         health=client.health();generation=str(health.get("connection_generation") or "")
+        logger.info(
+            "manual_quote stage=gateway_health_succeeded session_id=%s instrument_id=%s connected=%s generation=%s",
+            gateway_session.pk if gateway_session else "", instrument.pk,
+            bool(health.get("connected")), generation,
+        )
     action=None;payload=None;command_key=None
     with transaction.atomic():
         subscription,_=MarketDataSubscription.objects.select_for_update().get_or_create(gateway_session=gateway_session,instrument=instrument,timeframe=timeframe,
@@ -97,7 +109,14 @@ def reconcile_market_subscription(instrument,timeframe,gateway=None,force=False,
                 subscription.save(update_fields=["conid","consumer_count","required_history_bars","updated_at"])
                 return subscription
             if not force and subscription.state in {"SUBSCRIBING","ACTIVE"} and subscription.gateway_connection_generation==generation:
-                subscription.save(update_fields=["conid","consumer_count","required_history_bars","updated_at"]);return subscription
+                subscription.save(update_fields=["conid","consumer_count","required_history_bars","updated_at"])
+                logger.info(
+                    "manual_quote stage=subscription_reused subscription_id=%s session_id=%s instrument_id=%s state=%s provider=%s last_event_at=%s last_error=%s",
+                    subscription.pk, gateway_session.pk if gateway_session else "", instrument.pk,
+                    subscription.state, subscription.active_provider,
+                    subscription.last_event_at or "", subscription.last_error or "",
+                )
+                return subscription
             subscription.request_id=uuid.uuid4();subscription.provider_generation=uuid.uuid4()
             subscription.active_provider="IBKR";subscription.fallback_state="PRIMARY";subscription.fallback_reason=""
             subscription.state="SUBSCRIBING";subscription.requested_at=timezone.now()
@@ -119,11 +138,26 @@ def reconcile_market_subscription(instrument,timeframe,gateway=None,force=False,
             return subscription
         subscription_id=subscription.pk
     try:
+        logger.info(
+            "manual_quote stage=subscription_command_start subscription_id=%s session_id=%s instrument_id=%s action=%s timeframe=%s",
+            subscription_id, gateway_session.pk if gateway_session else "", instrument.pk,
+            action, timeframe,
+        )
         queued=(client.subscribe_market_data(payload,command_key) if action=="subscribe"
             else client.cancel_market_data(payload,command_key))
         MarketDataSubscription.objects.filter(pk=subscription_id).update(gateway_command_id=queued.get("command_id"),last_error="")
+        logger.info(
+            "manual_quote stage=subscription_command_queued subscription_id=%s session_id=%s instrument_id=%s action=%s gateway_command_id=%s",
+            subscription_id, gateway_session.pk if gateway_session else "", instrument.pk,
+            action, queued.get("command_id") or "",
+        )
     except GatewayError as exc:
         MarketDataSubscription.objects.filter(pk=subscription_id).update(state="ERROR",last_error=str(exc)[:2000])
+        logger.warning(
+            "manual_quote stage=subscription_command_failed subscription_id=%s session_id=%s instrument_id=%s action=%s error_type=%s error=%s",
+            subscription_id, gateway_session.pk if gateway_session else "", instrument.pk,
+            action, type(exc).__name__, str(exc),
+        )
         if action=="subscribe":
             from apps.market_data.fallback import handle_ibkr_failure
             handle_ibkr_failure(MarketDataSubscription.objects.get(pk=subscription_id),message=str(exc),historical=True)

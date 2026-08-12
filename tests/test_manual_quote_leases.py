@@ -54,6 +54,11 @@ def test_manual_quote_demand_activates_without_a_strategy(client,settings,monkey
     assert result.status_code==202
     assert subscription.consumer_count==1 and subscription.state=="SUBSCRIBING"
     assert len(calls)==1
+    data=result.json()["data"]
+    assert data["subscription_id"]==subscription.pk
+    assert data["subscription_state"]=="SUBSCRIBING"
+    assert data["gateway_command_id"]==1
+    assert data["subscription_error"]==""
 
 
 def test_strategy_and_manual_demand_are_added(settings,monkeypatch):

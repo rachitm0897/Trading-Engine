@@ -97,6 +97,11 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        "apps.market_streams.subscriptions": {
+            "handlers": ["order_console"],
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
