@@ -12,7 +12,9 @@ python scripts/ensure_database.py
 echo "Running Django migrations..."
 python manage.py migrate --noinput
 
-if [ "${CLEANUP_DATABASE_ON_START:-false}" = "true" ]; then
+cleanup_database_on_start="$(python -c 'import os; from dotenv import load_dotenv; load_dotenv("/app/.env", override=False); print(os.getenv("CLEANUP_DATABASE_ON_START", "false").strip().lower())')"
+echo "CLEANUP_DATABASE_ON_START=${cleanup_database_on_start}"
+if [ "${cleanup_database_on_start}" = "true" ]; then
   echo "CLEANUP_DATABASE_ON_START=true: deleting all database rows..."
   python manage.py flush --noinput
   echo "Database rows deleted. Set CLEANUP_DATABASE_ON_START=false before the next restart."
