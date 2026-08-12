@@ -184,7 +184,7 @@ def _manual_intent_row(intent):
         })
         if intent.operation_status == "CONFIRMATION_REQUIRED":
             warning = intent.order.status_history.filter(
-                reason_code__in=["109", "163"]
+                reason_code="201"
             ).order_by("-occurred_at", "-pk").first()
             if warning:
                 data["confirmation"] = {
@@ -192,6 +192,7 @@ def _manual_intent_row(intent):
                     "warning_code": warning.reason_code,
                     "warning_message": intent.operation_error or warning.reason,
                     "broker_order_id": intent.order.broker_order_id,
+                    "can_confirm": bool((warning.details or {}).get("advanced_override_codes")),
                 }
     return data
 
@@ -241,7 +242,7 @@ def manual_order_confirmation(request, intent_id):
     key = request.headers.get("Idempotency-Key")
     if not key:
         return response(status=400, error={"code":"IDEMPOTENCY_KEY_REQUIRED","message":"Idempotency-Key header is required","details":{}})
-    from apps.execution.dispatch import command_summary, confirm_percentage_constraints, decline_percentage_constraints
+    from apps.execution.dispatch import command_summary, confirm_advanced_reject, decline_advanced_reject
     from apps.oms.models import OrderIntent
     try:
         payload=json.loads(request.body or b"{}")
@@ -250,10 +251,10 @@ def manual_order_confirmation(request, intent_id):
             raise ValueError("confirmed must be true or false")
         intent=OrderIntent.objects.select_related("order").get(pk=intent_id,origin=OrderIntent.Origin.MANUAL)
         if confirmed:
-            command=confirm_percentage_constraints(intent.order)
+            command=confirm_advanced_reject(intent.order)
             intent.refresh_from_db()
             return response({**_manual_intent_row(intent),"broker_command":command_summary(command)},status=202)
-        decline_percentage_constraints(intent.order)
+        decline_advanced_reject(intent.order)
         intent.refresh_from_db()
         return response(_manual_intent_row(intent))
     except OrderIntent.DoesNotExist:

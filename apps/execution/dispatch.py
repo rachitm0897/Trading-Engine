@@ -143,8 +143,8 @@ def request_order_modification(order, changes, idempotency_key):
 
 
 @transaction.atomic
-def confirm_percentage_constraints(order):
-    """Queue exactly one override modification for an IBKR 109/163 warning."""
+def confirm_advanced_reject(order):
+    """Atomically queue one new order using only IBKR-provided override codes."""
     order = (
         Order.objects.select_for_update(of=("self",))
         .select_related("intent")
@@ -153,32 +153,41 @@ def confirm_percentage_constraints(order):
     intent = order.intent
     if intent.origin != OrderIntent.Origin.MANUAL:
         raise ValueError("Only manual orders can be operator-confirmed")
-    if intent.operation_status not in {"CONFIRMATION_REQUIRED", "RESUBMITTING"}:
-        raise ValueError("Order does not require percentage-constraint confirmation")
-    warning = order.status_history.filter(reason_code__in=["109", "163"]).order_by(
+    warning = order.status_history.filter(reason_code="201").order_by(
         "-occurred_at", "-pk"
     ).first()
+    codes=(warning.details or {}).get("advanced_override_codes") if warning else []
+    codes=list(dict.fromkeys(str(code).strip() for code in (codes or []) if str(code).strip()))
+    if not codes:
+        raise ValueError("IBKR did not provide an advanced reject override code; resubmission is unsafe")
+    fingerprint=hashlib.sha256(f"{warning.event_key}:{','.join(codes)}".encode()).hexdigest()[:20]
+    command_key=f"broker:advanced-confirm:{order.internal_id}:{fingerprint}"
+    existing=order.broker_commands.filter(idempotency_key=command_key).first()
+    if existing:
+        return existing
+    if intent.operation_status != "CONFIRMATION_REQUIRED":
+        raise ValueError("Order does not require IBKR advanced-reject confirmation")
+    payload={**_place_payload(order),"advanced_error_override":",".join(codes),
+        "original_broker_order_id":order.broker_order_id}
     command = enqueue_broker_command(
         order,
-        BrokerCommand.CommandType.MODIFY,
-        {"override_percentage_constraints": True},
-        f"broker:percentage-confirm:{order.internal_id}",
+        BrokerCommand.CommandType.PLACE,
+        payload,
+        command_key,
     )
-    if intent.operation_status == "CONFIRMATION_REQUIRED":
-        intent.operation_status = "RESUBMITTING"
-        intent.operation_error = ""
-        intent.retryable = False
-        intent.save(update_fields=["operation_status", "operation_error", "retryable"])
-        logger.info(
-            "order_execution stage=user_confirmation internal_id=%s broker_order_id=%s warning_code=%s confirmation=accepted command_id=%s",
-            order.internal_id, order.broker_order_id or "",
-            warning.reason_code if warning else "109/163", command.pk,
-        )
+    intent.operation_status = "CONFIRMING"
+    intent.operation_error = ""
+    intent.retryable = False
+    intent.save(update_fields=["operation_status", "operation_error", "retryable"])
+    logger.info(
+        "order_execution stage=user_confirmation application_order_id=%s original_ibkr_order_id=%s warning_code=201 confirmation=accepted override_codes=%s command_id=%s",
+        order.internal_id, order.broker_order_id or "", codes, command.pk,
+    )
     return command
 
 
 @transaction.atomic
-def decline_percentage_constraints(order):
+def decline_advanced_reject(order):
     order = Order.objects.select_for_update().select_related("intent").get(pk=order.pk)
     intent = order.intent
     if intent.origin != OrderIntent.Origin.MANUAL:
@@ -186,15 +195,15 @@ def decline_percentage_constraints(order):
     if intent.operation_status == "USER_CANCELLED":
         return order
     if intent.operation_status != "CONFIRMATION_REQUIRED":
-        raise ValueError("Order does not require percentage-constraint confirmation")
+        raise ValueError("Order does not require IBKR advanced-reject confirmation")
     order = transition(
         order, "REJECTED", "operator",
-        f"order:{order.internal_id}:percentage-confirmation-declined",
-        "Operator declined the IBKR percentage-constraint override",
+        f"order:{order.internal_id}:advanced-confirmation-declined",
+        "Operator declined the IBKR surveillance warning",
         reason_code="IBKR_CONFIRMATION_DECLINED", operator_requested=True,
     )
     intent.operation_status = "USER_CANCELLED"
-    intent.operation_error = "Operator cancelled after the IBKR precautionary warning"
+    intent.operation_error = "Operator cancelled after the IBKR surveillance warning"
     intent.retryable = False
     intent.eligible = False
     intent.save(update_fields=["operation_status", "operation_error", "retryable", "eligible"])

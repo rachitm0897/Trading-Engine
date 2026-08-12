@@ -45,31 +45,35 @@ def test_exact_ibkr_rejection_is_append_only_and_changes_status(submitted_order)
     assert submitted_order.status_history.filter(event_key="broker-order:reject-201").count()==1
 
 
-def test_percentage_warning_requires_confirmation_and_preserves_exact_message(client, submitted_order):
-    message="The order price exceeds the percentage constraint of 3%. Confirm to transmit anyway."
-    process_snapshot({"event_type":"broker.order","payload":{"source_event_id":"warning-163",
+def test_surveillance_warning_requires_confirmation_and_preserves_advanced_reject(client, submitted_order):
+    message="Order rejected - reason: Security is under Surveillance Measure - High low variation. Would you like to continue?"
+    process_snapshot({"event_type":"broker.order","payload":{"source_event_id":"warning-201",
         "internal_id":submitted_order.internal_id,"broker_order_id":"881","broker_status":"Inactive",
-        "error_code":"163","error_message":message,"occurred_at":"2026-07-13T01:30:00+00:00"}})
+        "error_code":"201","error_message":message,
+        "advanced_reject":{"errorCode":201,"errorData":{"rejectEventCode":"IBKR-PROVIDED"}},
+        "occurred_at":"2026-07-13T01:30:00+00:00"}})
     submitted_order.refresh_from_db();submitted_order.intent.refresh_from_db()
     assert submitted_order.status=="BROKER_BLOCKED"
     assert submitted_order.intent.operation_status=="CONFIRMATION_REQUIRED"
     status=client.get(f"/api/v1/orders/intents/{submitted_order.intent_id}/status/").json()["data"]
-    assert status["confirmation"]=={"required":True,"warning_code":"163",
-        "warning_message":message,"broker_order_id":"881"}
+    assert status["confirmation"]=={"required":True,"warning_code":"201",
+        "warning_message":message,"broker_order_id":"881","can_confirm":True}
 
 
-def test_percentage_confirmation_is_idempotent_and_decline_does_not_resubmit(client, submitted_order):
-    process_snapshot({"event_type":"broker.order","payload":{"source_event_id":"warning-109",
+def test_advanced_confirmation_is_idempotent_and_decline_does_not_resubmit(client, submitted_order):
+    message="Security is under Surveillance Measure. Would you like to continue?"
+    process_snapshot({"event_type":"broker.order","payload":{"source_event_id":"warning-201",
         "internal_id":submitted_order.internal_id,"broker_order_id":"882","broker_status":"Inactive",
-        "error_code":"109","error_message":"Price exceeds the configured percentage constraint"}})
+        "error_code":"201","error_message":message,
+        "advanced_reject":{"errorData":{"rejectEventCode":"IBKR-PROVIDED"}}}})
     url=f"/api/v1/orders/intents/{submitted_order.intent_id}/confirmation/"
     first=client.post(url,json.dumps({"confirmed":True}),content_type="application/json",HTTP_IDEMPOTENCY_KEY="confirm-a")
     second=client.post(url,json.dumps({"confirmed":True}),content_type="application/json",HTTP_IDEMPOTENCY_KEY="confirm-b")
     assert first.status_code==second.status_code==202
-    commands=submitted_order.broker_commands.filter(command_type="MODIFY")
+    commands=submitted_order.broker_commands.filter(command_type="PLACE")
     assert commands.count()==1
-    assert commands.get().request_payload=={"internal_id":submitted_order.internal_id,
-        "override_percentage_constraints":True}
+    assert commands.get().request_payload["advanced_error_override"]=="IBKR-PROVIDED"
+    assert commands.get().request_payload["original_broker_order_id"]=="882"
 
     other_intent=OrderIntent.objects.create(portfolio=submitted_order.intent.portfolio,
         instrument=submitted_order.intent.instrument,side="BUY",quantity=1,
@@ -78,13 +82,25 @@ def test_percentage_confirmation_is_idempotent_and_decline_does_not_resubmit(cli
     other=transition(other,"SUBMITTED","gateway","decline:submitted")
     process_snapshot({"event_type":"broker.order","payload":{"source_event_id":"warning-decline",
         "internal_id":other.internal_id,"broker_order_id":"883","broker_status":"Inactive",
-        "error_code":"163","error_message":"Percentage constraint"}})
+        "error_code":"201","error_message":message}})
     declined=client.post(f"/api/v1/orders/intents/{other_intent.pk}/confirmation/",
         json.dumps({"confirmed":False}),content_type="application/json",HTTP_IDEMPOTENCY_KEY="decline")
     other.refresh_from_db();other_intent.refresh_from_db()
     assert declined.status_code==200 and other.status=="REJECTED"
     assert other_intent.operation_status=="USER_CANCELLED"
     assert not other.broker_commands.exists()
+
+def test_surveillance_confirmation_without_ibkr_override_cannot_resubmit(client, submitted_order):
+    message="Security is under Surveillance Measure. Would you like to continue?"
+    process_snapshot({"event_type":"broker.order","payload":{"source_event_id":"warning-no-override",
+        "internal_id":submitted_order.internal_id,"broker_order_id":"884","broker_status":"Inactive",
+        "error_code":"201","error_message":message,"advanced_reject":None}})
+    status=client.get(f"/api/v1/orders/intents/{submitted_order.intent_id}/status/").json()["data"]
+    assert status["confirmation"]["can_confirm"] is False
+    result=client.post(f"/api/v1/orders/intents/{submitted_order.intent_id}/confirmation/",
+        json.dumps({"confirmed":True}),content_type="application/json",HTTP_IDEMPOTENCY_KEY="unsafe")
+    assert result.status_code==409
+    assert not submitted_order.broker_commands.filter(command_type="PLACE").exists()
 
 
 @responses.activate

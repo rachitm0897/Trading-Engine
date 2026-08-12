@@ -22,7 +22,7 @@ from .models import BrokerPositionSnapshot, BrokerSessionAccount, BrokerSyncCurs
 logger = logging.getLogger(__name__)
 
 TERMINAL={"FILLED","CANCELLED","REJECTED","EXPIRED"}
-PERCENTAGE_CONFIRMATION_CODES={"109","163"}
+SURVEILLANCE_CONFIRMATION_CODE="201"
 STATUS_MAP={
     "PendingSubmit":"SUBMITTED","ApiPending":"SUBMITTED","PreSubmitted":"ACKNOWLEDGED",
     "Submitted":"ACKNOWLEDGED","PendingCancel":"CANCEL_PENDING","ApiCancelled":"CANCELLED",
@@ -252,22 +252,37 @@ def _external_order(row, instrument, portfolio, gateway_session=None):
 def _broker_reason(row):
     return str(row.get("error_message") or row.get("why_held") or row.get("warning_text") or "")[:255]
 
+def _surveillance_confirmation(row, order):
+    message=str(row.get("error_message") or row.get("warning_text") or row.get("why_held") or "")
+    return (
+        str(row.get("error_code") or "").strip()==SURVEILLANCE_CONFIRMATION_CODE
+        and "security is under surveillance measure" in message.lower()
+        and "would you like to continue" in message.lower()
+        and order.intent.origin==OrderIntent.Origin.MANUAL
+        and order.filled_quantity==0
+    )
+
+def _advanced_override_codes(row):
+    supplied=row.get("advanced_override_codes") or []
+    if supplied:
+        return list(dict.fromkeys(str(code).strip() for code in supplied if str(code).strip()))
+    advanced=row.get("advanced_reject")
+    error_data=advanced.get("errorData") if isinstance(advanced,dict) else None
+    raw=error_data.get("rejectEventCode") if isinstance(error_data,dict) else None
+    values=raw if isinstance(raw,list) else str(raw or "").split(",")
+    return list(dict.fromkeys(str(code).strip() for code in values if str(code).strip()))
+
 def _record_broker_status(order,row,event_key,source="ibkr",target_override=None):
     broker_status=str(row.get("broker_status") or row.get("status") or "")
     target=target_override or STATUS_MAP.get(broker_status)
     error_code=str(row.get("error_code") or "").strip()
-    confirmation_candidate=(
-        error_code in PERCENTAGE_CONFIRMATION_CODES
-        and order.intent.origin==OrderIntent.Origin.MANUAL
-        and order.filled_quantity == 0
-        and not order.broker_commands.filter(
-            idempotency_key=f"broker:percentage-confirm:{order.internal_id}"
-        ).exists()
-    )
+    confirmation_candidate=_surveillance_confirmation(row,order)
     details={"error_message":str(row.get("error_message") or ""),"why_held":str(row.get("why_held") or ""),
         "warning_text":str(row.get("warning_text") or ""),"advanced_reject":row.get("advanced_reject"),
         "trade_log":row.get("trade_log") or [],"broker_order_id":str(row.get("broker_order_id") or ""),
-        "permanent_id":str(row.get("permanent_id") or "")}
+        "permanent_id":str(row.get("permanent_id") or ""),
+        "original_broker_order_id":str(row.get("broker_order_id") or order.broker_order_id or ""),
+        "advanced_override_codes":_advanced_override_codes(row)}
     occurred=parse_datetime(str(row.get("occurred_at") or "")) or timezone.now()
     history,created=OrderStatusHistory.objects.get_or_create(event_key=event_key[:128],defaults={"order":order,
         "from_status":order.status,"to_status":"BROKER_BLOCKED" if confirmation_candidate else target or order.status,"source":source,"broker_status":broker_status,
