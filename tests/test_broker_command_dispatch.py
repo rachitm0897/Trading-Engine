@@ -424,6 +424,6 @@ def test_automatic_paper_intent_creates_durable_place_command(
     command = execute_order_intent(intent.pk)
     assert command.command_type == BrokerCommand.CommandType.PLACE
     assert command.request_payload["internal_id"] == command.order.internal_id
-    assert command.request_payload["local_symbol"] == command.order.intent.instrument.symbol
-    assert command.request_payload["primary_exchange"] == ""
+    assert "local_symbol" not in command.request_payload
+    assert "primary_exchange" not in command.request_payload
     assert command.status == BrokerCommand.Status.PENDING
