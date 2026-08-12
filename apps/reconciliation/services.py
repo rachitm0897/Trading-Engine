@@ -2,6 +2,7 @@ from collections import defaultdict
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.accounts.models import BrokerAccount
@@ -143,13 +144,20 @@ def reconcile(trigger="manual", client=None, *, broker_account=None, broker_acco
 
         for category in ("GATEWAY", "POSITION", "EXECUTION", "ORDER", "CASH", "ACCOUNT"):
             if not run.breaks.filter(category=category, material=True).exists():
-                ReconciliationBreak.objects.filter(
+                prior_breaks = ReconciliationBreak.objects.filter(
                     run__broker_account=account,
-                    run__gateway_session=gateway_session,
                     category=category,
                     material=True,
                     resolved=False,
-                ).exclude(run=run).update(
+                ).exclude(run=run)
+                if gateway_session is not None:
+                    prior_breaks = prior_breaks.filter(
+                        Q(run__gateway_session=gateway_session)
+                        | Q(run__gateway_session__isnull=True)
+                    )
+                else:
+                    prior_breaks = prior_breaks.filter(run__gateway_session__isnull=True)
+                prior_breaks.update(
                     resolved=True,
                     resolution=f"Automatically resolved by clean account reconciliation run {run.pk}",
                 )

@@ -4,6 +4,7 @@ from apps.accounts.models import BrokerAccount
 from apps.instruments.models import BrokerContract, Instrument
 from apps.portfolios.models import PortfolioPosition, TradingPortfolio
 from apps.reconciliation.services import reconcile
+from tests.managed_gateway import bind_gateway_mode
 
 pytestmark=pytest.mark.django_db
 
@@ -47,6 +48,20 @@ def test_clean_run_resolves_only_prior_breaks_for_the_same_account():
     assert first_b.breaks.filter(material=True,resolved=False).exists()
     account_b.refresh_from_db()
     assert account_b.is_reconciled is False
+
+
+def test_clean_session_run_resolves_legacy_unscoped_break_for_same_account():
+    account,portfolio=create_account("DU-LEGACY")
+    legacy=reconcile("legacy-disconnect",FakeGateway(),broker_account=account)
+    session=bind_gateway_mode(portfolio,mode="live")
+
+    clean=reconcile(
+        "session-recovered",FakeGateway(connected=True,reconciled=True),
+        broker_account=account,gateway_session=session,
+    )
+
+    assert clean.status=="COMPLETED"
+    assert legacy.breaks.filter(material=True,resolved=True).exists()
 
 
 def test_same_contract_is_compared_by_broker_account():

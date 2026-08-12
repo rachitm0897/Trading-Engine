@@ -13,6 +13,7 @@ from apps.accounts.models import BrokerAccount
 from apps.audit.models import AuditEvent, OperationAttempt
 from apps.broker_gateway.client import GatewayClient, GatewayError
 from apps.broker_gateway.crypto import BrokerCredentialError
+from apps.broker_gateway.models import BrokerSessionAccount
 from apps.execution.dispatch import (
     claim_next_broker_command,
     dispatch_broker_command,
@@ -603,6 +604,25 @@ def test_gateway_transport_failure_leaves_truthful_retryable_pending_intent(
         True,
         "gateway restarting",
     )
+
+
+def test_unavailable_bound_account_terminally_fails_intent(
+    client, settings, monkeypatch
+):
+    _, portfolio, _, instrument = _manual_case(settings)
+    _disable_task_enqueue(monkeypatch)
+    accepted = _post(client, _payload(portfolio, instrument), "manual-account-removed")
+    BrokerSessionAccount.objects.filter(
+        session=portfolio.gateway_session, broker_account=portfolio.account
+    ).delete()
+
+    assert execute_order_intent(accepted.json()["data"]["intent_id"]) is None
+
+    intent = OrderIntent.objects.get(pk=accepted.json()["data"]["intent_id"])
+    assert intent.operation_status == "FAILED"
+    assert intent.retryable is False
+    assert intent.eligible is False
+    assert "not available" in intent.operation_error
 
 
 def test_held_manual_intent_can_be_retried_by_existing_worker(

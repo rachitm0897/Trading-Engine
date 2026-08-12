@@ -12,6 +12,7 @@ from apps.broker_gateway.client import (
     GatewayClient,
     GatewayCommandRejected,
     GatewayError,
+    GatewaySessionUnavailable,
     GatewayTransportError,
 )
 from apps.broker_gateway.crypto import BrokerCredentialError
@@ -915,6 +916,28 @@ def execute_order_intent(intent_id):
             intent.pk, bool((state or {}).get("connected")),
             bool((state or {}).get("reconciled")), (state or {}).get("mode") or "",
         )
+    except GatewaySessionUnavailable as exc:
+        OrderIntent.objects.filter(pk=intent.pk).update(
+            operation_status="FAILED",
+            operation_error=str(exc)[:1000],
+            retryable=False,
+            eligible=False,
+        )
+        OperationAttempt.objects.filter(
+            operation_type="ORDER_INTENT",
+            operation_id=str(intent.pk),
+            attempt_number=intent.attempt_count,
+        ).update(
+            status="FAILED",
+            retryable=False,
+            error=str(exc)[:1000],
+            completed_at=timezone.now(),
+        )
+        logger.warning(
+            "order_execution stage=gateway_session_unavailable intent_id=%s error=%s retryable=false",
+            intent.pk, str(exc),
+        )
+        return None
     except (GatewayError, BrokerCredentialError) as exc:
         OrderIntent.objects.filter(pk=intent.pk).update(
             operation_status="PENDING",
