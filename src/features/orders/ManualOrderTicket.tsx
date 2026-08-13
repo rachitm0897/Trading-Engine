@@ -215,6 +215,10 @@ function IbkrWarningConfirmation({warning, pending, onCancel, onConfirm}: {
     <div className="confirm-dialog manual-order-confirmation" role="dialog" aria-modal="true" aria-labelledby="ibkr-warning-title" aria-describedby="ibkr-warning-message">
       <header><AlertTriangle /><div><h2 id="ibkr-warning-title">IBKR Order Warning</h2><p>IBKR requires your confirmation before this order can continue.</p></div></header>
       <div className="inline-warning"><AlertTriangle /><div><strong>IBKR warning {warning.warning_code}</strong><p id="ibkr-warning-message" style={{whiteSpace: 'pre-line'}}>{message}</p>{warning.broker_order_id && <p>Broker order <code>{warning.broker_order_id}</code></p>}</div></div>
+      {warning.can_confirm && warning.override_options && warning.override_options.length > 0 && <div className="manual-order-risk-note">
+        <strong>IBKR acknowledgement</strong>
+        {warning.override_options.map((option) => <p key={option.code}>{option.text || 'Continue with this broker warning.'} <small>(IBKR code <code>{option.code}</code>)</small></p>)}
+      </div>}
       {!warning.can_confirm && <p className="manual-order-risk-note">IBKR did not provide a programmatic override code. Continue is disabled; review the Gateway configuration and captured advanced reject JSON.</p>}
       <footer><button type="button" className="button-secondary" disabled={pending} onClick={onCancel}>{pending ? 'Updating…' : 'Cancel'}</button><button type="button" className="button-primary" disabled={pending || !warning.can_confirm} onClick={onConfirm}>{pending ? 'Resubmitting…' : 'Continue'}</button></footer>
     </div>

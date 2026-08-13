@@ -213,6 +213,10 @@ export interface ManualOrderIntentStatus {
     warning_message: string
     broker_order_id: string
     can_confirm: boolean
+    override_options?: Array<{
+      code: string
+      text: string
+    }>
   }
 }
 

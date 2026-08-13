@@ -343,6 +343,7 @@ test('shows a cleaned IBKR surveillance warning and sends one explicit decision'
         warning_message: 'Error 201, reqId 6: Order rejected - reason\\:<br>Security is under Surveillance Measure.\\<br>Would you like to continue?',
         broker_order_id: '881',
         can_confirm: true,
+        override_options: [{code: 'SURVEILLANCE', text: 'Yes, transmit the order.'}],
       },
     },
     onWarningDecision,
@@ -351,6 +352,8 @@ test('shows a cleaned IBKR surveillance warning and sends one explicit decision'
   expect(within(dialog).getByText(/Order rejected - reason:\s+Security is under Surveillance Measure/)).toBeInTheDocument()
   expect(within(dialog).getByText('IBKR warning 201')).toBeInTheDocument()
   expect(within(dialog).getByText('881')).toBeInTheDocument()
+  expect(within(dialog).getByText(/Yes, transmit the order/)).toBeInTheDocument()
+  expect(within(dialog).getByText(/SURVEILLANCE/)).toBeInTheDocument()
   await user.click(within(dialog).getByRole('button', {name: 'Continue'}))
   expect(onWarningDecision).toHaveBeenCalledOnce()
   expect(onWarningDecision).toHaveBeenCalledWith(true)
