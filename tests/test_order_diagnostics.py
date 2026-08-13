@@ -57,7 +57,29 @@ def test_surveillance_warning_requires_confirmation_and_preserves_advanced_rejec
     assert submitted_order.intent.operation_status=="CONFIRMATION_REQUIRED"
     status=client.get(f"/api/v1/orders/intents/{submitted_order.intent_id}/status/").json()["data"]
     assert status["confirmation"]=={"required":True,"warning_code":"201",
-        "warning_message":message,"broker_order_id":"881","can_confirm":True}
+        "warning_message":message,"broker_order_id":"881","can_confirm":True,
+        "override_options":[{"code":"IBKR-PROVIDED","text":""}]}
+
+def test_surveillance_fixstr_override_is_extracted_and_can_be_confirmed(client, submitted_order):
+    message="Security is under Surveillance Measure. Would you like to continue?"
+    advanced={"rejects":[{"buttons":[{"options":[
+        {"fixstr":"8229=SURVEILLANCE","text":"Yes, transmit the order."},
+        {"fixstr":"8229=SEBI-GSM","text":"Accept additional surveillance warning"},
+    ]}]}]}
+    process_snapshot({"event_type":"broker.order","payload":{"source_event_id":"warning-fixstr",
+        "internal_id":submitted_order.internal_id,"broker_order_id":"886","broker_status":"Inactive",
+        "error_code":"201","error_message":message,"advanced_reject":advanced}})
+    status=client.get(f"/api/v1/orders/intents/{submitted_order.intent_id}/status/").json()["data"]
+    assert status["confirmation"]["can_confirm"] is True
+    assert status["confirmation"]["override_options"]==[
+        {"code":"SURVEILLANCE","text":"Yes, transmit the order."},
+        {"code":"SEBI-GSM","text":"Accept additional surveillance warning"},
+    ]
+    result=client.post(f"/api/v1/orders/intents/{submitted_order.intent_id}/confirmation/",
+        json.dumps({"confirmed":True}),content_type="application/json",HTTP_IDEMPOTENCY_KEY="fixstr-confirm")
+    assert result.status_code==202
+    command=submitted_order.broker_commands.get(command_type="PLACE")
+    assert command.request_payload["advanced_error_override"]=="SURVEILLANCE,SEBI-GSM"
 
 
 def test_advanced_confirmation_is_idempotent_and_decline_does_not_resubmit(client, submitted_order):

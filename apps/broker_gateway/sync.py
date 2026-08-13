@@ -263,14 +263,35 @@ def _surveillance_confirmation(row, order):
     )
 
 def _advanced_override_codes(row):
-    supplied=row.get("advanced_override_codes") or []
-    if supplied:
-        return list(dict.fromkeys(str(code).strip() for code in supplied if str(code).strip()))
+    return [option["code"] for option in _advanced_override_options(row)]
+
+def _advanced_override_options(row):
+    supplied=row.get("advanced_override_options") or []
+    options=[]
+    def add(code,text=""):
+        import re
+        code=str(code or "").strip()
+        if code and re.fullmatch(r"[A-Za-z0-9_.:-]+",code) and code not in {item["code"] for item in options}:
+            options.append({"code":code,"text":str(text or "").strip()})
+    for option in supplied:
+        if isinstance(option,dict):add(option.get("code"),option.get("text"))
+    for code in row.get("advanced_override_codes") or []:
+        add(code)
+    if options:return options
     advanced=row.get("advanced_reject")
     error_data=advanced.get("errorData") if isinstance(advanced,dict) else None
     raw=error_data.get("rejectEventCode") if isinstance(error_data,dict) else None
     values=raw if isinstance(raw,list) else str(raw or "").split(",")
-    return list(dict.fromkeys(str(code).strip() for code in values if str(code).strip()))
+    for code in values:add(code)
+    for reject in advanced.get("rejects",[]) if isinstance(advanced,dict) else []:
+        for button in reject.get("buttons",[]) if isinstance(reject,dict) else []:
+            for option in button.get("options",[]) if isinstance(button,dict) else []:
+                if not isinstance(option,dict):continue
+                for field in str(option.get("fixstr") or "").split(";"):
+                    tag,separator,codes=field.strip().partition("=")
+                    if separator and tag.strip()=="8229":
+                        for code in codes.split(","):add(code,option.get("text"))
+    return options
 
 def _record_broker_status(order,row,event_key,source="ibkr",target_override=None):
     broker_status=str(row.get("broker_status") or row.get("status") or "")
@@ -282,7 +303,8 @@ def _record_broker_status(order,row,event_key,source="ibkr",target_override=None
         "trade_log":row.get("trade_log") or [],"broker_order_id":str(row.get("broker_order_id") or ""),
         "permanent_id":str(row.get("permanent_id") or ""),
         "original_broker_order_id":str(row.get("broker_order_id") or order.broker_order_id or ""),
-        "advanced_override_codes":_advanced_override_codes(row)}
+        "advanced_override_codes":_advanced_override_codes(row),
+        "advanced_override_options":_advanced_override_options(row)}
     occurred=parse_datetime(str(row.get("occurred_at") or "")) or timezone.now()
     # A single IBKR rejection is reported through error/order-status callbacks
     # and later repeated in open/completed-order snapshots.  Broker order id plus

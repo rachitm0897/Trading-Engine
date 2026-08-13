@@ -193,6 +193,7 @@ def _manual_intent_row(intent):
                     "warning_message": intent.operation_error or warning.reason,
                     "broker_order_id": intent.order.broker_order_id,
                     "can_confirm": bool((warning.details or {}).get("advanced_override_codes")),
+                    "override_options": (warning.details or {}).get("advanced_override_options") or [],
                 }
     return data
 
