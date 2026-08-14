@@ -17,7 +17,12 @@ from apps.broker_gateway.client import (
 )
 from apps.broker_gateway.models import BrokerGatewaySession
 from apps.instruments.models import Instrument
-from apps.instruments.services import resolve_instrument, search_broker_instruments
+from apps.instruments.services import (
+    option_chain,
+    qualify_option_contract,
+    resolve_instrument,
+    search_broker_instruments,
+)
 from apps.portfolios.models import TradingPortfolio
 from .deletion import (
     StrategyDeletionError,
@@ -717,3 +722,47 @@ def search_instruments(request):
             "message":str(exc),
             "details":{"operation":"SEARCH_CONTRACTS","retryable":True},
         })
+
+
+@csrf_exempt
+def instrument_option_chain(request):
+    invalid=method_guard(request,"POST")
+    if invalid:return invalid
+    try:
+        payload=json.loads(request.body or b"{}")
+        session=_authoritative_gateway_session(payload)
+        instrument=Instrument.objects.select_related("broker_contract").get(pk=payload["underlying_instrument_id"])
+        return response(option_chain(underlying_instrument=instrument,gateway_session=session))
+    except (BrokerGatewaySession.DoesNotExist,TradingPortfolio.DoesNotExist,Instrument.DoesNotExist):
+        return response(status=404,error={"code":"OPTION_UNDERLYING_NOT_FOUND","message":"Option underlying or broker session was not found","details":{}})
+    except GatewayError as exc:
+        return _gateway_failure(exc,operation="OPTION_CHAIN")
+    except (json.JSONDecodeError,KeyError,ValueError) as exc:
+        return response(status=400,error={"code":"OPTION_CHAIN_FAILED","message":str(exc),"details":{}})
+
+
+@csrf_exempt
+def resolve_option(request):
+    invalid=method_guard(request,"POST")
+    if invalid:return invalid
+    try:
+        payload=json.loads(request.body or b"{}")
+        session=_authoritative_gateway_session(payload)
+        instrument=Instrument.objects.select_related("broker_contract").get(pk=payload["underlying_instrument_id"])
+        option,contract,details=qualify_option_contract(
+            underlying_instrument=instrument,expiration=payload["expiration"],strike=payload["strike"],
+            right=payload["right"],multiplier=payload["multiplier"],trading_class=payload["trading_class"],
+            exchange=payload.get("exchange") or "SMART",gateway_session=session,
+        )
+        return response({"instrument_id":option.pk,"symbol":option.symbol,"asset_class":"OPT",
+            "exchange":option.exchange,"currency":option.currency,"conid":contract.conid,
+            "primary_exchange":contract.primary_exchange,"qualification_command":None,
+            "expiration":details.expiration,"strike":details.strike,"right":details.right,
+            "multiplier":details.multiplier,"trading_class":details.trading_class,
+            "underlying_conid":details.underlying_conid})
+    except (BrokerGatewaySession.DoesNotExist,TradingPortfolio.DoesNotExist,Instrument.DoesNotExist):
+        return response(status=404,error={"code":"OPTION_UNDERLYING_NOT_FOUND","message":"Option underlying or broker session was not found","details":{}})
+    except GatewayError as exc:
+        return _gateway_failure(exc,operation="QUALIFY_OPTION")
+    except (json.JSONDecodeError,KeyError,ValueError,IntegrityError) as exc:
+        return response(status=400,error={"code":"OPTION_RESOLUTION_FAILED","message":str(exc),"details":{}})

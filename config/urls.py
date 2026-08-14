@@ -40,6 +40,7 @@ new_api = [
     path("strategy-instances/<int:instance_id>/execution-timeline/",strategy_views.related,{"resource":"execution-timeline"}),
     path("strategy-instances/<int:instance_id>/chart/",strategy_views.chart),
     path("strategy-policies/",strategy_views.policies),path("instruments/search/",strategy_views.search_instruments),path("instruments/resolve/",strategy_views.resolve),
+    path("instruments/options/chain/",strategy_views.instrument_option_chain),path("instruments/options/resolve/",strategy_views.resolve_option),
     path("streaming/health/",streaming_views.health),path("streaming/topics/",streaming_views.topics),
     path("execution/readiness/",execution_views.readiness),
     path("execution/diagnostics/",execution_views.diagnostics),

@@ -454,6 +454,8 @@ def _final_dispatch_checks(command, client):
 def _send(command, client):
     key = command.idempotency_key
     if command.command_type == BrokerCommand.CommandType.PLACE:
+        if str(command.request_payload.get("asset_class") or "").upper() == "OPT":
+            return client.place_option_order(command.request_payload, key)
         return client.place_order(command.request_payload, key)
     if command.command_type == BrokerCommand.CommandType.MODIFY:
         if command.request_payload.get("override_percentage_constraints") is True:

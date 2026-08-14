@@ -129,13 +129,31 @@ def _validate_qualified_selection(requested, result):
         raise ValueError("IBKR qualified a contract in a different currency")
 
 
+def _validate_qualified_option(requested, result):
+    if _asset_class(result) != "OPT":
+        raise ValueError("IBKR did not qualify an option contract")
+    expected = _option_values({**requested, "asset_class": "OPT"})
+    actual = _option_values(result)
+    for field in ("expiration", "strike", "right", "multiplier", "trading_class"):
+        if expected[field] != actual[field]:
+            raise ValueError(f"IBKR qualified an option with a different {field}")
+    requested_underlying = expected["underlying_conid"]
+    if requested_underlying and actual["underlying_conid"] != requested_underlying:
+        raise ValueError("IBKR qualified an option for a different underlying")
+    requested_currency = str(_value(requested, "currency")).upper()
+    if requested_currency and str(_value(result, "currency")).upper() != requested_currency:
+        raise ValueError("IBKR qualified an option in a different currency")
+    if int(_value(result, "conid", "conId", default=0)) <= 0:
+        raise ValueError("IBKR qualified option has no conId")
+
+
 def search_broker_instruments(query, gateway=None, gateway_session=None, *, asset_classes=None,
                               country=None, currency=None):
     query=str(query or "").strip()
     if len(query)<2:raise ValueError("Instrument search query must contain at least 2 characters")
     requested = tuple(str(value).upper() for value in (asset_classes or ("STK", "OPT")))
-    if any(value not in {"STK", "OPT"} for value in requested):
-        raise ValueError("asset_classes may contain only STK and OPT")
+    if any(value not in {"STK", "IND", "OPT"} for value in requested):
+        raise ValueError("asset_classes may contain only STK, IND, and OPT")
     client = _gateway(gateway,gateway_session)
     try:
         rows=client.search_contracts(query,asset_classes=requested,country=country,currency=currency)
@@ -161,6 +179,84 @@ def search_broker_instruments(query, gateway=None, gateway_session=None, *, asse
                 raise
             continue
     return results
+
+
+def option_chain(*, underlying_instrument, gateway=None, gateway_session=None):
+    contract = getattr(underlying_instrument, "broker_contract", None)
+    if not contract or not contract.conid:
+        raise ValueError("Qualify the underlying IBKR contract before loading its option chain")
+    if underlying_instrument.asset_class not in {"STK", "IND"}:
+        raise ValueError("Option-chain underlying must be a stock or index")
+    payload = {
+        "underlying_conid": contract.conid,
+        "symbol": underlying_instrument.symbol,
+        "asset_class": underlying_instrument.asset_class,
+        "exchange": underlying_instrument.exchange,
+        "currency": underlying_instrument.currency,
+    }
+    result = _gateway(gateway,gateway_session).option_chain(payload)
+    chains = []
+    for row in result.get("chains", []):
+        multiplier = Decimal(str(_value(row, "multiplier", default="0")))
+        expirations = sorted({value.isoformat() for value in filter(None, (_expiration({"expiration": item}) for item in row.get("expirations", [])))})
+        strikes = sorted({Decimal(str(item)) for item in row.get("strikes", [])})
+        if multiplier <= 0 or not expirations or not strikes:
+            continue
+        chains.append({
+            "exchange": str(_value(row, "exchange")),
+            "trading_class": str(_value(row, "trading_class", "tradingClass")),
+            "multiplier": str(multiplier),
+            "expirations": expirations,
+            "strikes": [str(value) for value in strikes],
+        })
+    if not chains:
+        raise ValueError("IBKR returned no usable option-chain definitions for this underlying")
+    return {"underlying": _contract_row({
+        "conid": contract.conid,"symbol": underlying_instrument.symbol,
+        "local_symbol": contract.local_symbol,"asset_class": underlying_instrument.asset_class,
+        "exchange": underlying_instrument.exchange,"primary_exchange": contract.primary_exchange,
+        "currency": underlying_instrument.currency,"description": contract.description,
+    },contract),"chains":chains}
+
+
+@transaction.atomic
+def qualify_option_contract(*, underlying_instrument, expiration, strike, right, multiplier,
+                            trading_class, exchange, gateway=None, gateway_session=None):
+    underlying = getattr(underlying_instrument, "broker_contract", None)
+    if not underlying or not underlying.conid:
+        raise ValueError("The underlying contract must be qualified first")
+    requested = {
+        "symbol": underlying_instrument.symbol,"asset_class": "OPT",
+        "exchange": exchange or "SMART","currency": underlying_instrument.currency,
+        "expiration": expiration,"strike": strike,"right": right,"multiplier": multiplier,
+        "trading_class": trading_class,"underlying_conid": underlying.conid,
+    }
+    canonical = "|".join(str(requested[key]) for key in sorted(requested))
+    import hashlib
+    key = f"qualify:option:{hashlib.sha256(canonical.encode()).hexdigest()[:48]}"
+    result = _gateway(gateway,gateway_session).qualify_contract_exact(requested,key)
+    _validate_qualified_option(requested,result)
+    conid = int(_value(result,"conid","conId"))
+    existing = BrokerContract.objects.select_related("instrument").filter(conid=conid).first()
+    if existing:
+        instrument = existing.instrument
+        if instrument.asset_class != "OPT":
+            raise ValueError("IBKR option conId is already assigned to a non-option instrument")
+    else:
+        local_symbol = str(_value(result,"local_symbol","localSymbol",default=f"OPT-{conid}")).upper()
+        instrument = Instrument.objects.create(
+            symbol=local_symbol,asset_class="OPT",exchange=str(_value(result,"exchange",default=exchange or "SMART")),
+            primary_exchange=str(_value(result,"primary_exchange","primaryExchange")),
+            currency=str(_value(result,"currency",default=underlying_instrument.currency)),
+            multiplier=Decimal(str(_value(result,"multiplier"))),lot_size=1,fractional_support=False,
+            trading_calendar=underlying_instrument.trading_calendar,
+        )
+    contract = record_qualified_contract(instrument,result)
+    option = instrument.option_contract
+    if option.underlying_id != underlying_instrument.pk:
+        option.underlying = underlying_instrument
+        option.save(update_fields=["underlying"])
+    return instrument, contract, option
 
 
 def publish_instrument_registry(contract):

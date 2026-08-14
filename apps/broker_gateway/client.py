@@ -399,6 +399,18 @@ class GatewayClient:
         )
         return result.get("results", [])
 
+    def option_chain(self, payload):
+        self._require_session_purpose("command")
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        digest = hashlib.sha256(canonical.encode()).hexdigest()[:40]
+        result = self._execute_retryable_command(
+            "contracts/option-chain/",
+            payload,
+            f"option-chain:{digest}",
+            "OPTION_CHAIN",
+        )
+        return result
+
     def events(self, after=0):
         return self.request("GET", f"events/?after={int(after)}")
 
@@ -410,6 +422,10 @@ class GatewayClient:
     def place_order(self, payload, key):
         self._require_session_purpose("command")
         return self.request("POST", "orders/", json=payload, idempotency_key=key, retries=0)
+
+    def place_option_order(self, payload, key):
+        self._require_session_purpose("command")
+        return self.request("POST", "options/orders/", json=payload, idempotency_key=key, retries=0)
 
     def modify_order(self, internal_id, payload, key):
         self._require_session_purpose("command")

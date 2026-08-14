@@ -60,6 +60,24 @@ def test_gateway_contract_search_waits_for_durable_command():
 
 
 @responses.activate
+def test_gateway_option_chain_waits_for_durable_command():
+    responses.post("http://gateway/api/v1/contracts/option-chain/",json={"ok":True,"data":{"command_id":8,"status":"PENDING"}},status=202)
+    result={"chains":[{"exchange":"NFO","trading_class":"NIFTY","multiplier":"75","expirations":["20260826"],"strikes":[25000]}]}
+    responses.get("http://gateway/api/v1/commands/8/",json={"ok":True,"data":{"command_id":8,"status":"COMPLETED","result":result}})
+    actual=GatewayClient(GatewayRoute("test-option-chain", "http://gateway/api/v1", "secret")).option_chain({"underlying_conid":1234})
+    assert actual==result
+
+
+@responses.activate
+def test_option_order_uses_dedicated_gateway_endpoint():
+    responses.post("http://gateway/api/v1/options/orders/",json={"ok":True,"data":{"status":"SUBMITTED"}},status=200)
+    result=GatewayClient(GatewayRoute("test-option-order","http://gateway/api/v1","secret")).place_option_order(
+        {"internal_id":"OPT-1","asset_class":"OPT","conid":7654321,"quantity":"1"},"option-order:1")
+    assert result["status"]=="SUBMITTED"
+    assert responses.calls[0].request.headers["Idempotency-Key"]=="option-order:1"
+
+
+@responses.activate
 def test_gateway_contract_search_replays_completed_command_result():
     responses.post("http://gateway/api/v1/contracts/search/",json={"ok":True,"data":{"command_id":7,"status":"COMPLETED"}},status=202)
     responses.get("http://gateway/api/v1/commands/7/",json={"ok":True,"data":{"command_id":7,"status":"COMPLETED","result":{"results":[{"symbol":"AAPL","conid":265598}]}}})

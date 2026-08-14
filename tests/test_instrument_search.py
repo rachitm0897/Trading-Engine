@@ -1,6 +1,6 @@
 import pytest
 from apps.instruments.models import BrokerContract, Instrument, OptionContract
-from apps.instruments.services import resolve_instrument, search_broker_instruments
+from apps.instruments.services import option_chain, qualify_option_contract, resolve_instrument, search_broker_instruments
 from apps.audit.models import OutboxEvent
 
 pytestmark=pytest.mark.django_db
@@ -97,3 +97,27 @@ def test_indian_option_search_and_exact_qualification_persists_contract_identity
     assert instrument.currency=="INR" and instrument.multiplier==75
     assert option.expiration.isoformat()=="2026-08-26" and option.strike==25000
     assert option.right=="C" and option.trading_class=="NIFTY" and option.underlying_conid==1234
+
+
+def test_two_stage_index_option_chain_and_exact_qualification():
+    underlying=Instrument.objects.create(symbol="NIFTY",asset_class="IND",exchange="NSE",primary_exchange="NSE",currency="INR",trading_calendar="XNSE")
+    BrokerContract.objects.create(instrument=underlying,conid=1234,primary_exchange="NSE",local_symbol="NIFTY 50")
+
+    class OptionGateway:
+        def option_chain(self,payload):
+            assert payload["underlying_conid"]==1234 and payload["asset_class"]=="IND"
+            return {"chains":[{"exchange":"NFO","trading_class":"NIFTY","multiplier":"75",
+                "expirations":["20260826","2026-09-30"],"strikes":[25100,25000]}]}
+        def qualify_contract_exact(self,payload,key):
+            assert payload["underlying_conid"]==1234 and payload["expiration"]=="2026-08-26"
+            return {**payload,"conid":7654321,"local_symbol":"NIFTY26AUG25000CE",
+                "primary_exchange":"NSE","description":"NIFTY 26 Aug 2026 25000 Call"}
+
+    chain=option_chain(underlying_instrument=underlying,gateway=OptionGateway())
+    assert chain["chains"]==[{"exchange":"NFO","trading_class":"NIFTY","multiplier":"75",
+        "expirations":["2026-08-26","2026-09-30"],"strikes":["25000","25100"]}]
+    instrument,contract,details=qualify_option_contract(
+        underlying_instrument=underlying,expiration="2026-08-26",strike="25000",right="C",
+        multiplier="75",trading_class="NIFTY",exchange="NFO",gateway=OptionGateway())
+    assert contract.conid==7654321 and instrument.symbol=="NIFTY26AUG25000CE"
+    assert details.underlying==underlying and details.underlying_conid==1234
