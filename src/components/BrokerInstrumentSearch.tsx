@@ -56,15 +56,13 @@ export function BrokerInstrumentSearch({value, onValueChange, onContractSelected
     onResolved(null)
   }, [sessionId])
   const search = useQuery({
-    queryKey: ['instrument-search', sessionId, allowOptions ? 'IN' : 'ALL', assetClass, searchQuery],
+    queryKey: ['instrument-search', sessionId, assetClass, searchQuery],
     queryFn: ({signal}) => request<InstrumentSearchResult[]>(
       withQuery('instruments/search/', {
         query: searchQuery,
         session_id: sessionId,
         portfolio_id: portfolioId,
         asset_classes: assetClass,
-        country: allowOptions ? 'IN' : undefined,
-        currency: allowOptions ? 'INR' : undefined,
       }),
       {signal},
     ),
@@ -104,7 +102,7 @@ export function BrokerInstrumentSearch({value, onValueChange, onContractSelected
   }
   return <div className="broker-instrument-search">
     {allowOptions && <div className="instrument-type-switch" role="group" aria-label="Instrument type"><button type="button" className={assetClass === 'STK' ? 'selected' : ''} aria-pressed={assetClass === 'STK'} onClick={() => changeAssetClass('STK')}>Stocks</button><button type="button" className={assetClass === 'OPT' ? 'selected' : ''} aria-pressed={assetClass === 'OPT'} onClick={() => changeAssetClass('OPT')}>Options</button></div>}
-    <label>IBKR {allowOptions ? `Indian ${assetClass === 'OPT' ? 'option' : 'stock'}` : 'instrument'} search<input aria-label={searchLabel} value={value} list={suggestionsId} placeholder={assetClass === 'OPT' ? 'Underlying or option symbol' : 'Ticker or company name'} onChange={(event) => updateValue(event.target.value)} autoFocus={autoFocus} /><datalist id={suggestionsId}>{suggestions.map((item) => <option key={item.id} value={item.symbol} />)}</datalist></label>
+    <label>IBKR {allowOptions ? (assetClass === 'OPT' ? 'option' : 'stock') : 'instrument'} search<input aria-label={searchLabel} value={value} list={suggestionsId} placeholder={assetClass === 'OPT' ? 'Underlying or option symbol' : 'Ticker or company name'} onChange={(event) => updateValue(event.target.value)} autoFocus={autoFocus} /><datalist id={suggestionsId}>{suggestions.map((item) => <option key={item.id} value={item.symbol} />)}</datalist></label>
     <div className="contract-search-results" aria-live="polite">
       {!sessionId && <p>Select a connected broker session before searching.</p>}
       {sessionId && !sessionReady && <p>The selected broker session is not connected or command-ready.</p>}

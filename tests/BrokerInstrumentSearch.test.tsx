@@ -151,7 +151,7 @@ test('routes qualification through the portfolio-assigned Gateway instead of the
   })
 })
 
-test('searches and qualifies an exact Indian option contract', async () => {
+test('searches and qualifies an exact option contract without country or currency filtering', async () => {
   const urls:string[]=[]
   vi.stubGlobal('fetch',vi.fn(async (input:string,init?:RequestInit) => {
     const url=String(input)
@@ -179,8 +179,8 @@ test('searches and qualifies an exact Indian option contract', async () => {
   await user.click(screen.getByRole('button',{name:'Qualify selected contract'}))
   await screen.findByText('QUALIFIED')
   expect(urls[0]).toContain('asset_classes=OPT')
-  expect(urls[0]).toContain('country=IN')
-  expect(urls[0]).toContain('currency=INR')
+  expect(urls[0]).not.toContain('country=')
+  expect(urls[0]).not.toContain('currency=')
   const resolveCall=vi.mocked(fetch).mock.calls.find(([value]) => String(value).includes('/instruments/resolve/'))
   expect(JSON.parse(String(resolveCall?.[1]?.body))).toMatchObject({
     conid:7654321,asset_class:'OPT',expiration:'2026-08-26',strike:'25000',right:'C',multiplier:'75',

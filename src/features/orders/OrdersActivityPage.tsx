@@ -190,7 +190,7 @@ export function OrdersActivityPage() {
     </TerminalPanel>}
     </div>
     <div className="activity-grid"><TerminalPanel id="executions" title="Executions" description="Append-only broker fill ledger">{executions.isLoading ? <Skeleton lines={4} /> : executions.isError ? <ErrorState error={executions.error} onRetry={() => void executions.refetch()} compact /> : <DataTable rows={executions.data || []} columns={executionColumns} getRowKey={(fill) => fill.execution_id} emptyTitle="No executions" />}</TerminalPanel><TerminalPanel id="operational-activity" title="Operational activity" description="Recent audit events">{audit.isError ? <ErrorState error={audit.error} onRetry={() => void audit.refetch()} compact /> : <ActivityTimeline items={activity.slice(0, 12)} />}</TerminalPanel></div>
-    <TerminalPanel id="indian-contract-search" title="Indian stock & option search" description="Search IBKR, select an exact NSE/NFO/BSE contract, and qualify it before using it in an order." defaultOpen>
+    <TerminalPanel id="broker-contract-search" title="Stock & option search" description="Search IBKR globally, select an exact contract, and qualify it before using it in an order." defaultOpen>
       <BrokerInstrumentSearch
         value={contractQuery}
         onValueChange={setContractQuery}
@@ -201,7 +201,7 @@ export function OrdersActivityPage() {
         }}
         portfolioId={selectedPortfolioId}
         gatewaySessionId={session?.id}
-        searchLabel="Indian stock or option"
+        searchLabel="Stock or option"
         allowOptions
       />
     </TerminalPanel>
