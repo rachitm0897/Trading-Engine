@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_FLOOR
 
 from django.conf import settings
 from django.db import transaction
@@ -24,6 +24,15 @@ ACTIVE_ORDER_STATUSES = {
 RESERVED_SELL_INTENT_STATUSES = {
     "PENDING", "CLAIMED", "RISK_APPROVED", "SUBMITTING", "QUEUED", "BROKER_BLOCKED",
 }
+
+
+def _contract_multiplier(instrument):
+    """Return the cash-value multiplier for one unit/contract."""
+    if str(instrument.asset_class).upper() != "OPT":
+        return Decimal(1)
+    option = getattr(instrument, "option_contract", None)
+    multiplier = Decimal(option.multiplier if option is not None else instrument.multiplier or 1)
+    return multiplier if multiplier > 0 else Decimal(1)
 
 
 def order_quantity_error(portfolio, instrument, quantity):
@@ -105,7 +114,7 @@ def _unreserved_committed_capital(intent, policy):
         price = Decimal(candidate.reference_price or candidate.limit_price or 0)
         if price <= 0:
             continue
-        notional = Decimal(candidate.quantity) * price
+        notional = Decimal(candidate.quantity) * price * _contract_multiplier(candidate.instrument)
         committed += notional + notional * Decimal(policy.estimated_commission_rate) + Decimal(policy.estimated_fixed_fee)
     return committed
 
@@ -255,7 +264,11 @@ def evaluate_intent(intent, gateway_state=None):
 
     approved = min(approved, Decimal(policy.maximum_order_quantity))
     if price > 0:
-        approved = min(approved, Decimal(policy.maximum_order_notional) / price)
+        unit_notional = price * _contract_multiplier(intent.instrument)
+        approved = min(approved, Decimal(policy.maximum_order_notional) / unit_notional)
+    if not intent.instrument.fractional_support:
+        lot_size = Decimal(intent.instrument.lot_size or 1)
+        approved = (approved / lot_size).to_integral_value(rounding=ROUND_FLOOR) * lot_size
     if approved <= 0:
         add("policy_limits", "REJECTED", "Persisted risk policy approved zero quantity", 0)
         return "REJECTED", Decimal(0), checks
@@ -291,7 +304,7 @@ def evaluate_intent(intent, gateway_state=None):
             return "REJECTED", Decimal(0), checks
 
     if intent.side == "BUY" and price > 0:
-        notional = approved * price
+        notional = approved * price * _contract_multiplier(intent.instrument)
         fees = notional * Decimal(policy.estimated_commission_rate) + Decimal(policy.estimated_fixed_fee)
         already_reserved = CapitalReservation.objects.filter(
             account=account, status__in=["ACTIVE", "CONSUMED"]

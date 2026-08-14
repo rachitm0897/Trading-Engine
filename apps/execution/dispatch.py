@@ -107,7 +107,7 @@ def _place_payload(order):
     intent = order.intent
     instrument = intent.instrument
     contract = getattr(instrument, "broker_contract", None)
-    return {
+    payload = {
         "internal_id": order.internal_id,
         "account": intent.portfolio.account.account_id,
         "conid": contract.conid if contract else None,
@@ -122,6 +122,19 @@ def _place_payload(order):
         "stop_price": str(intent.stop_price) if intent.stop_price else None,
         "time_in_force": intent.time_in_force,
     }
+    option = getattr(instrument, "option_contract", None)
+    if instrument.asset_class == "OPT" and option is not None:
+        payload.update({
+            "expiration": option.expiration.isoformat(),
+            "strike": str(option.strike),
+            "right": option.right,
+            "multiplier": str(option.multiplier),
+            "trading_class": option.trading_class,
+            "underlying_conid": option.underlying_conid,
+            "local_symbol": contract.local_symbol if contract else "",
+            "primary_exchange": contract.primary_exchange if contract else instrument.primary_exchange,
+        })
+    return payload
 
 
 def enqueue_place_command(order):

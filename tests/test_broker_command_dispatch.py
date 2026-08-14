@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -22,7 +22,7 @@ from apps.execution.dispatch import (
     request_order_modification,
 )
 from apps.execution.models import BrokerCommand
-from apps.instruments.models import Instrument
+from apps.instruments.models import BrokerContract, Instrument, OptionContract
 from apps.oms.models import Order, OrderIntent
 from apps.oms.services import apply_execution
 from apps.portfolios.models import TradingPortfolio
@@ -124,6 +124,36 @@ def _claimed_place(settings):
     assert claim_next_broker_command() == command.pk
     command.refresh_from_db()
     return order, command
+
+
+def test_option_place_command_carries_exact_qualified_contract_identity(settings):
+    order, _ = _order(settings)
+    instrument = order.intent.instrument
+    instrument.asset_class = "OPT"
+    instrument.symbol = "NIFTY26AUG25000CE"
+    instrument.exchange = "NFO"
+    instrument.currency = "INR"
+    instrument.multiplier = 75
+    instrument.save()
+    BrokerContract.objects.create(
+        instrument=instrument, conid=7654321, local_symbol=instrument.symbol,
+        primary_exchange="NSE",
+    )
+    OptionContract.objects.create(
+        instrument=instrument, underlying_conid=1234, expiration=date(2026,8,26),
+        strike=25000, right="C", trading_class="NIFTY", multiplier=75,
+    )
+
+    payload = enqueue_place_command(order).request_payload
+
+    assert payload == {
+        **payload,
+        "asset_class": "OPT", "conid": 7654321,
+        "expiration": "2026-08-26", "strike": "25000", "right": "C",
+        "multiplier": "75", "trading_class": "NIFTY",
+        "underlying_conid": 1234, "local_symbol": instrument.symbol,
+        "primary_exchange": "NSE",
+    }
 
 
 def _make_uncertain(settings, state):

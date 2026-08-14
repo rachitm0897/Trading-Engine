@@ -148,9 +148,16 @@ def _page(request, default=250, maximum=500):
     return limit, offset
 
 def _order_row(order):
+    instrument=order.intent.instrument
+    option=getattr(instrument,"option_contract",None)
     return {"id":order.pk,"internal_id":order.internal_id,"account_id":order.intent.portfolio.account.account_id,
         "portfolio_id":order.intent.portfolio_id,"symbol":order.intent.instrument.symbol,"side":order.intent.side,
-        "origin":order.intent.origin,
+        "origin":order.intent.origin,"instrument_id":order.intent.instrument_id,
+        "asset_class":instrument.asset_class,"exchange":instrument.exchange,"currency":instrument.currency,
+        "expiration":option.expiration if option else None,"strike":option.strike if option else None,
+        "right":option.right if option else None,"multiplier":option.multiplier if option else instrument.multiplier,
+        "trading_class":option.trading_class if option else "",
+        "underlying_conid":option.underlying_conid if option else None,
         "order_type":order.intent.order_type,"time_in_force":order.intent.time_in_force,"broker_order_id":order.broker_order_id,
         "broker_permanent_id":order.broker_permanent_id,"status":order.status,"quantity":order.quantity,
         "filled_quantity":order.filled_quantity,"average_fill_price":order.average_fill_price,
@@ -435,7 +442,7 @@ def orders(request, internal_id=None, action=None):
     if request.method == "GET":
         if internal_id and action=="detail":
             try:
-                order=Order.objects.select_related("intent__instrument","intent__portfolio__account",
+                order=Order.objects.select_related("intent__instrument__option_contract","intent__portfolio__account",
                     "intent__strategy_instance","intent__strategy_version").get(internal_id=internal_id)
             except Order.DoesNotExist:
                 return response(status=404,error={"code":"ORDER_NOT_FOUND","message":"Order was not found","details":{}})
@@ -465,7 +472,7 @@ def orders(request, internal_id=None, action=None):
             return response({"order":_order_row(order),"status_history":history,"broker_diagnostics":diagnostics,
                 "risk_decisions":risks,"fills":fills,"strategy_attribution":attributions})
         limit,offset=_page(request)
-        query=Order.objects.select_related("intent__instrument","intent__portfolio__account").order_by("-created_at")
+        query=Order.objects.select_related("intent__instrument__option_contract","intent__portfolio__account").order_by("-created_at")
         if request.GET.get("portfolio"):query=query.filter(intent__portfolio_id=request.GET["portfolio"])
         if request.GET.get("status"):query=query.filter(status=request.GET["status"].upper())
         if request.GET.get("symbol"):query=query.filter(intent__instrument__symbol__iexact=request.GET["symbol"])
@@ -509,6 +516,8 @@ def orders(request, internal_id=None, action=None):
                 return _manual_intent_response(intent)
 
             if not instrument.active or not instrument.tradable:raise ValueError("Instrument must be active and tradable")
+            if instrument.asset_class=="OPT" and quantity!=quantity.to_integral_value():
+                raise ValueError("Option quantity must be a positive whole number of contracts")
             quantity_error=order_quantity_error(portfolio,instrument,quantity)
             if quantity_error:raise ValueError(quantity_error)
             if not session.is_active:

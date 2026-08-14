@@ -6,7 +6,7 @@ from django.db import close_old_connections, connection
 import pytest
 from apps.accounts.models import BrokerAccount
 from apps.execution.models import Fill
-from apps.instruments.models import Instrument
+from apps.instruments.models import Instrument, OptionContract
 from apps.oms.models import OrderIntent
 from apps.oms.services import apply_execution, create_order, transition
 from apps.portfolios.models import TradingPortfolio, CashLedgerEntry, PortfolioPosition, PositionLedgerEntry
@@ -48,6 +48,18 @@ def test_cross_currency_order_is_rejected_without_trusted_fx_conversion(intent):
     assert decision=="REJECTED" and approved==0
     assert checks[-1].check_name=="currency_conversion"
     assert checks[-1].details=={"instrument_currency":"INR","account_currency":"USD"}
+
+
+def test_option_risk_notional_includes_contract_multiplier(intent):
+    intent.instrument.asset_class="OPT";intent.instrument.multiplier=100;intent.instrument.save()
+    OptionContract.objects.create(instrument=intent.instrument,expiration="2026-08-26",strike=100,
+        right="C",trading_class="AAPL",multiplier=100)
+    intent.quantity=2;intent.reference_price=5;intent.save()
+    PreTradeRiskPolicy.objects.create(portfolio=intent.portfolio,maximum_order_notional=600,
+        maximum_order_quantity=100)
+    decision,approved,checks=evaluate_intent(intent,{"connected":True,"reconciled":True,"mode":"paper"})
+    assert decision=="RESIZED" and approved==Decimal("1")
+    assert CapitalReservation.objects.get(order_intent=intent).amount==Decimal("501.25000000")
 
 def test_partial_fill_is_idempotent_and_updates_ledgers(intent):
     order = create_order(intent); order.status="ACKNOWLEDGED"; order.save()
