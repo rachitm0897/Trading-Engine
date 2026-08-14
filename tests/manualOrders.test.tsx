@@ -218,6 +218,7 @@ test('uses the same conservative stop-order reference as backend risk', () => {
   const stopLimit = {...initialManualOrderDraft, orderType: 'STP_LMT' as const, quantity: '2', stopPrice: '125', limitPrice: '121'}
   expect(estimateManualOrderNotional(stop, '126.50')).toBe(253)
   expect(estimateManualOrderNotional(stopLimit, '126.50')).toBe(250)
+  expect(estimateManualOrderNotional(stopLimit, '126.50', 75)).toBe(18750)
 })
 
 test('disables submission without an eligible portfolio and shows the reason', () => {

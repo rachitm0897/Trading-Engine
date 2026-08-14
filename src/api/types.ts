@@ -146,8 +146,18 @@ export interface Order {
   internal_id: string
   account_id: string
   portfolio_id?: number
+  instrument_id?: number
   origin?: string
   symbol: string
+  asset_class: string
+  exchange: string
+  currency: string
+  expiration?: string | null
+  strike?: DecimalValue
+  right?: 'C' | 'P' | null
+  multiplier?: DecimalValue
+  trading_class?: string
+  underlying_conid?: number | null
   side: string
   order_type: string
   time_in_force: string

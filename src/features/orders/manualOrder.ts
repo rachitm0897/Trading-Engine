@@ -79,6 +79,8 @@ export function validateManualOrderDraft(draft: ManualOrderDraft, instruments: I
   if (!['MKT', 'LMT', 'STP', 'STP_LMT'].includes(draft.orderType)) errors.orderType = 'Select a supported order type.'
   if (!isPositiveBackendDecimal(draft.quantity)) {
     errors.quantity = 'Enter a positive quantity with at most 8 decimal places.'
+  } else if (instrument?.asset_class === 'OPT' && !Number.isInteger(Number(draft.quantity))) {
+    errors.quantity = 'Option quantity must be a positive whole number of contracts.'
   }
   if (orderTypeNeedsLimitPrice(draft.orderType) && !isPositiveBackendDecimal(draft.limitPrice)) {
     errors.limitPrice = 'Enter a positive limit price with at most 8 decimal places.'
@@ -134,7 +136,7 @@ export function manualOrderBlockingReasons(
   return [...new Set(reasons)]
 }
 
-export function estimateManualOrderNotional(draft: ManualOrderDraft, marketPrice?: string | number | null) {
+export function estimateManualOrderNotional(draft: ManualOrderDraft, marketPrice?: string | number | null, multiplier: string | number = 1) {
   const quantity = Number(draft.quantity)
   let price: number | null = null
   if (draft.orderType === 'LMT') price = Number(draft.limitPrice)
@@ -142,7 +144,9 @@ export function estimateManualOrderNotional(draft: ManualOrderDraft, marketPrice
   else if (draft.orderType === 'STP') price = Math.max(Number(draft.stopPrice), Number(marketPrice))
   else if (marketPrice !== null && marketPrice !== undefined) price = Number(marketPrice)
   if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(price) || (price ?? 0) <= 0) return null
-  const notional = quantity * (price as number)
+  const contractMultiplier = Number(multiplier)
+  if (!Number.isFinite(contractMultiplier) || contractMultiplier <= 0) return null
+  const notional = quantity * (price as number) * contractMultiplier
   return Number.isSafeInteger(Math.trunc(notional)) || Math.abs(notional) < Number.MAX_SAFE_INTEGER ? notional : null
 }
 

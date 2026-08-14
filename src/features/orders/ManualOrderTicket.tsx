@@ -83,7 +83,7 @@ export function ManualOrderTicket({
       : []),
   ]
   const trustedReferencePrice = readyQuote?.reference_price ?? null
-  const estimatedNotional = estimateManualOrderNotional(draft, trustedReferencePrice)
+  const estimatedNotional = estimateManualOrderNotional(draft, trustedReferencePrice, instrument?.multiplier ?? 1)
   const busy = pending || polling
 
   useEffect(() => {
@@ -155,6 +155,11 @@ export function ManualOrderTicket({
         <strong>{readyQuote ? formatMoney(readyQuote.reference_price, instrument.currency) : quotePending ? 'Requesting live price…' : 'Not ready'}</strong>
         <small>{readyQuote ? `${readyQuote.provider} · ${readyQuote.source} · ${Math.round(readyQuote.age_seconds || 0)}s old` : quote?.display_status || 'Waiting for a trusted persisted quote'}</small>
       </div>}
+      {instrument?.asset_class === 'OPT' && <div className="manual-order-estimate" role="status" aria-label="Selected option contract">
+        <span>Qualified option contract</span>
+        <strong>{instrument.expiration} · {instrument.strike} · {instrument.right === 'C' ? 'Call' : 'Put'}</strong>
+        <small>{instrument.trading_class || instrument.symbol} · {instrument.exchange} · multiplier {String(instrument.multiplier)}</small>
+      </div>}
       <label>Side
         <select aria-label="Side" value={draft.side} onChange={(event) => update('side', event.target.value as ManualOrderDraft['side'])} aria-invalid={Boolean(validationErrors.side)}><option>BUY</option><option>SELL</option></select>
         {validationErrors.side && <span className="field-error">{validationErrors.side}</span>}
@@ -164,8 +169,9 @@ export function ManualOrderTicket({
         {validationErrors.orderType && <span className="field-error">{validationErrors.orderType}</span>}
       </label>
       <label>Quantity
-        <input aria-label="Quantity" value={draft.quantity} onChange={(event) => update('quantity', event.target.value)} type="number" min="0.00000001" step="0.00000001" inputMode="decimal" aria-invalid={Boolean(validationErrors.quantity)} />
+        <input aria-label="Quantity" value={draft.quantity} onChange={(event) => update('quantity', event.target.value)} type="number" min={instrument?.asset_class === 'OPT' ? '1' : '0.00000001'} step={instrument?.asset_class === 'OPT' ? '1' : '0.00000001'} inputMode={instrument?.asset_class === 'OPT' ? 'numeric' : 'decimal'} aria-invalid={Boolean(validationErrors.quantity)} />
         {validationErrors.quantity && <span className="field-error">{validationErrors.quantity}</span>}
+        {instrument?.asset_class === 'OPT' && <small>Number of contracts; whole numbers only.</small>}
       </label>
       {orderTypeNeedsStopPrice(draft.orderType) && <label>Stop price
         <input aria-label="Stop price" value={draft.stopPrice} onChange={(event) => update('stopPrice', event.target.value)} type="number" min="0.00000001" step="0.00000001" inputMode="decimal" aria-invalid={Boolean(validationErrors.stopPrice)} />
@@ -198,7 +204,7 @@ export function ManualOrderTicket({
       accountName={account?.account_id || 'Not selected'}
       portfolioName={portfolio?.name || 'Not selected'}
       referencePrice={trustedReferencePrice}
-      estimatedNotional={estimateManualOrderNotional(confirmation, trustedReferencePrice)}
+      estimatedNotional={estimateManualOrderNotional(confirmation, trustedReferencePrice, instruments.find((item) => item.id === Number(confirmation.instrumentId))?.multiplier ?? 1)}
       pending={pending}
       onClose={() => setConfirmation(null)}
       onConfirm={confirm}
