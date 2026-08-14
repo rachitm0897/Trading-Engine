@@ -159,14 +159,22 @@ test('searches and qualifies an exact option contract without country or currenc
     if (url.includes('/instruments/search/')) {
       urls.push(url)
       return envelope([{
-        symbol:'NIFTY',local_symbol:'NIFTY26AUG25000CE',conid:7654321,asset_class:'OPT',
-        exchange:'NFO',primary_exchange:'NSE',currency:'INR',description:'NIFTY call',instrument_id:null,
-        expiration:'2026-08-26',strike:'25000',right:'C',multiplier:'75',trading_class:'NIFTY',underlying_conid:1234,
+        symbol:'NIFTY',local_symbol:'NIFTY 50',conid:1234,asset_class:'IND',
+        exchange:'NSE',primary_exchange:'NSE',currency:'INR',description:'NIFTY 50',instrument_id:null,
       }])
     }
+    if (url.includes('/instruments/options/chain/')) return envelope({
+      underlying:{symbol:'NIFTY',local_symbol:'NIFTY 50',conid:1234,asset_class:'IND',exchange:'NSE',primary_exchange:'NSE',currency:'INR',description:'NIFTY 50',instrument_id:90},
+      chains:[{exchange:'NFO',trading_class:'NIFTY',multiplier:'75',expirations:['2026-08-26'],strikes:['25000']}],
+    })
+    if (url.includes('/instruments/options/resolve/')) return envelope({
+      instrument_id:91,symbol:'NIFTY26AUG25000CE',conid:7654321,asset_class:'OPT',exchange:'NFO',
+      primary_exchange:'NSE',currency:'INR',expiration:'2026-08-26',strike:'25000',right:'C',
+      multiplier:'75',trading_class:'NIFTY',underlying_conid:1234,qualification_command:null,
+    })
     if (url.includes('/instruments/resolve/')) {
       const request=JSON.parse(String(init?.body))
-      return envelope({...request,instrument_id:91,qualification_command:null})
+      return envelope({...request,instrument_id:90,conid:1234,qualification_command:null})
     }
     return envelope([])
   }))
@@ -176,13 +184,15 @@ test('searches and qualifies an exact option contract without country or currenc
   const input=screen.getByLabelText('Ticker')
   await user.type(input,'NIFTY')
   await user.click(await screen.findByRole('button',{name:'Select NIFTY NSE INR'}))
-  await user.click(screen.getByRole('button',{name:'Qualify selected contract'}))
-  await screen.findByText('QUALIFIED')
-  expect(urls[0]).toContain('asset_classes=OPT')
+  await user.click(screen.getByRole('button',{name:'Qualify underlying & load chain'}))
+  await screen.findByLabelText('Option expiration')
+  await user.click(screen.getByRole('button',{name:'Qualify exact option'}))
+  await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([value]) => String(value).includes('/instruments/options/resolve/'))).toBe(true))
+  expect(urls[0]).toContain('asset_classes=STK%2CIND')
   expect(urls[0]).not.toContain('country=')
   expect(urls[0]).not.toContain('currency=')
-  const resolveCall=vi.mocked(fetch).mock.calls.find(([value]) => String(value).includes('/instruments/resolve/'))
+  const resolveCall=vi.mocked(fetch).mock.calls.find(([value]) => String(value).includes('/instruments/options/resolve/'))
   expect(JSON.parse(String(resolveCall?.[1]?.body))).toMatchObject({
-    conid:7654321,asset_class:'OPT',expiration:'2026-08-26',strike:'25000',right:'C',multiplier:'75',
+    underlying_instrument_id:90,expiration:'2026-08-26',strike:'25000',right:'C',multiplier:'75',
   })
 })

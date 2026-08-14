@@ -108,6 +108,8 @@
 .instrument-type-switch { display: inline-flex; gap: .3rem; margin-bottom: .8rem; padding: .25rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-subtle); }
 .instrument-type-switch button { padding: .45rem .8rem; border: 0; border-radius: 5px; color: var(--text-muted); background: transparent; cursor: pointer; }
 .instrument-type-switch button.selected { color: var(--text); background: var(--surface); box-shadow: 0 0 0 1px var(--border); }
+.option-chain-picker { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)) auto; align-items: end; gap: .8rem; margin-top: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-subtle); }
+.option-chain-picker label { display: grid; gap: .35rem; }
 .contract-search-results > p { margin: 0; padding: .8rem; color: var(--text-muted); border: 1px dashed var(--border); border-radius: var(--radius); }
 .contract-search-results > button { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(220px, 1.5fr) auto; align-items: center; gap: .8rem; width: 100%; padding: .8rem; color: inherit; text-align: left; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer; }
 .contract-search-results > button:hover, .contract-search-results > button.selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }

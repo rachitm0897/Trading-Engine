@@ -660,6 +660,19 @@ export interface InstrumentSearchResult {
   underlying_conid?: number | null
 }
 
+export interface OptionChainDefinition {
+  exchange: string
+  trading_class: string
+  multiplier: DecimalValue
+  expirations: string[]
+  strikes: string[]
+}
+
+export interface OptionChain {
+  underlying: InstrumentSearchResult
+  chains: OptionChainDefinition[]
+}
+
 export interface SeriesPoint {
   time: string
   value: number
