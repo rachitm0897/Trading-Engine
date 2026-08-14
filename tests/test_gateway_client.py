@@ -74,7 +74,7 @@ def test_option_order_uses_dedicated_gateway_endpoint():
     result=GatewayClient(GatewayRoute("test-option-order","http://gateway/api/v1","secret")).place_option_order(
         {"internal_id":"OPT-1","asset_class":"OPT","conid":7654321,"quantity":"1"},"option-order:1")
     assert result["status"]=="SUBMITTED"
-    assert responses.calls[0].request.headers["Idempotency-Key"]=="option-order:1"
+    assert responses.calls[0].request.headers["Idempotency-Key"]=="session:test-option-order:option-order:1"
 
 
 @responses.activate

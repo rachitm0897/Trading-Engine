@@ -48,6 +48,25 @@ def test_existing_selected_conid_is_requalified_from_broker():
     assert contract.description=="BHP Group Limited"
 
 
+def test_qualification_idempotency_key_includes_complete_contract_payload():
+    keys=[]
+
+    class RecordingBroker(BrokerStub):
+        def qualify_contract_exact(self,payload,key):
+            keys.append(key)
+            return {**self.result,"conid":payload["conid"],"description":payload["description"],"qualified":True}
+
+    gateway=RecordingBroker()
+    common={"ticker":"BHP","asset_class":"STK","exchange":"SMART","currency":"AUD",
+            "conid":12345,"local_symbol":"BHP","gateway":gateway}
+    resolve_instrument(primary_exchange="ASX",description="BHP Group Limited",**common)
+    resolve_instrument(primary_exchange="ASX",description="BHP Group Limited ADR",**common)
+
+    assert len(keys)==2
+    assert keys[0] != keys[1]
+    assert all(key.startswith("qualify:contract:") for key in keys)
+
+
 def test_indian_contract_uses_indian_currency_and_trading_calendar():
     row={"symbol":"KISSHT","local_symbol":"KISSHT","conid":54321,"asset_class":"STK",
          "exchange":"NSE","primary_exchange":"NSE","currency":"INR","description":"Kissht Limited"}

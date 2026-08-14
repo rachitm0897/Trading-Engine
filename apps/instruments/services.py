@@ -1,3 +1,5 @@
+import hashlib
+import json
 from datetime import datetime
 from decimal import Decimal
 from django.db import transaction
@@ -29,6 +31,12 @@ def _gateway(gateway=None,gateway_session=None):
     if gateway_session is None:
         raise GatewaySessionUnavailable("A broker gateway session is required")
     return GatewayClient(gateway_session,require_commands=True)
+
+
+def _qualification_key(payload, kind="contract"):
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    digest = hashlib.sha256(canonical.encode()).hexdigest()[:48]
+    return f"qualify:{kind}:{digest}"
 
 
 def _value(row, *names, default=""):
@@ -231,9 +239,7 @@ def qualify_option_contract(*, underlying_instrument, expiration, strike, right,
         "expiration": expiration,"strike": strike,"right": right,"multiplier": multiplier,
         "trading_class": trading_class,"underlying_conid": underlying.conid,
     }
-    canonical = "|".join(str(requested[key]) for key in sorted(requested))
-    import hashlib
-    key = f"qualify:option:{hashlib.sha256(canonical.encode()).hexdigest()[:48]}"
+    key = _qualification_key(requested, "option")
     result = _gateway(gateway,gateway_session).qualify_contract_exact(requested,key)
     _validate_qualified_option(requested,result)
     conid = int(_value(result,"conid","conId"))
@@ -290,7 +296,7 @@ def resolve_instrument(*, instrument_id=None, ticker=None, asset_class="STK", ex
                 payload.update({"expiration":option.expiration.isoformat(),"strike":str(option.strike),
                     "right":option.right,"multiplier":str(option.multiplier),"trading_class":option.trading_class,
                     "underlying_conid":option.underlying_conid})
-            result=_gateway(gateway,gateway_session).qualify_contract_exact(payload,f"qualify:conid:{int(conid)}")
+            result=_gateway(gateway,gateway_session).qualify_contract_exact(payload,_qualification_key(payload))
             _validate_qualified_selection(payload,result)
             selected_contract=record_qualified_contract(selected_instrument,result)
         publish_instrument_registry(selected_contract)
@@ -326,10 +332,10 @@ def resolve_instrument(*, instrument_id=None, ticker=None, asset_class="STK", ex
             "trading_class":trading_class,"underlying_conid":underlying_conid})
     if conid:
         payload["conid"]=int(conid)
-        result=client.qualify_contract_exact(payload,f"qualify:conid:{int(conid)}")
+        result=client.qualify_contract_exact(payload,_qualification_key(payload))
         _validate_qualified_selection(payload,result)
         return instrument,record_qualified_contract(instrument,result),None
-    command = client.qualify_contract(payload,f"qualify:instrument:{instrument.pk}")
+    command = client.qualify_contract(payload,_qualification_key(payload))
     return instrument, None, command
 
 
