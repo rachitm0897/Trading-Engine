@@ -33,12 +33,12 @@ function envelope(data: unknown) {
   return {ok: true, status: 200, json: async () => ({ok: true, data, error: null, meta: {}})} as Response
 }
 
-function Harness({portfolioId, gatewaySessionId}: {portfolioId?: number; gatewaySessionId?: string} = {}) {
+function Harness({portfolioId, gatewaySessionId, allowOptions}: {portfolioId?: number; gatewaySessionId?: string; allowOptions?: boolean} = {}) {
   const [value,setValue]=useState('')
-  return <BrokerInstrumentSearch value={value} onValueChange={setValue} onResolved={() => undefined} portfolioId={portfolioId} gatewaySessionId={gatewaySessionId} />
+  return <BrokerInstrumentSearch value={value} onValueChange={setValue} onResolved={() => undefined} portfolioId={portfolioId} gatewaySessionId={gatewaySessionId} allowOptions={allowOptions} />
 }
 
-function renderSearch(props: {portfolioId?: number; gatewaySessionId?: string} = {}) {
+function renderSearch(props: {portfolioId?: number; gatewaySessionId?: string; allowOptions?: boolean} = {}) {
   const client=new QueryClient({defaultOptions:{queries:{retry:false},mutations:{retry:false}}})
   return render(<QueryClientProvider client={client}><Harness {...props} /></QueryClientProvider>)
 }
@@ -148,5 +148,41 @@ test('routes qualification through the portfolio-assigned Gateway instead of the
   expect(JSON.parse(String(resolveCall?.[1]?.body))).toMatchObject({
     portfolio_id:10,
     session_id:assigned.id,
+  })
+})
+
+test('searches and qualifies an exact Indian option contract', async () => {
+  const urls:string[]=[]
+  vi.stubGlobal('fetch',vi.fn(async (input:string,init?:RequestInit) => {
+    const url=String(input)
+    if (url.includes('/broker-sessions/')) return envelope([session])
+    if (url.includes('/instruments/search/')) {
+      urls.push(url)
+      return envelope([{
+        symbol:'NIFTY',local_symbol:'NIFTY26AUG25000CE',conid:7654321,asset_class:'OPT',
+        exchange:'NFO',primary_exchange:'NSE',currency:'INR',description:'NIFTY call',instrument_id:null,
+        expiration:'2026-08-26',strike:'25000',right:'C',multiplier:'75',trading_class:'NIFTY',underlying_conid:1234,
+      }])
+    }
+    if (url.includes('/instruments/resolve/')) {
+      const request=JSON.parse(String(init?.body))
+      return envelope({...request,instrument_id:91,qualification_command:null})
+    }
+    return envelope([])
+  }))
+  const user=userEvent.setup()
+  renderSearch({portfolioId:10,gatewaySessionId:session.id,allowOptions:true})
+  await user.click(screen.getByRole('button',{name:'Options'}))
+  const input=screen.getByLabelText('Ticker')
+  await user.type(input,'NIFTY')
+  await user.click(await screen.findByRole('button',{name:'Select NIFTY NSE INR'}))
+  await user.click(screen.getByRole('button',{name:'Qualify selected contract'}))
+  await screen.findByText('QUALIFIED')
+  expect(urls[0]).toContain('asset_classes=OPT')
+  expect(urls[0]).toContain('country=IN')
+  expect(urls[0]).toContain('currency=INR')
+  const resolveCall=vi.mocked(fetch).mock.calls.find(([value]) => String(value).includes('/instruments/resolve/'))
+  expect(JSON.parse(String(resolveCall?.[1]?.body))).toMatchObject({
+    conid:7654321,asset_class:'OPT',expiration:'2026-08-26',strike:'25000',right:'C',multiplier:'75',
   })
 })

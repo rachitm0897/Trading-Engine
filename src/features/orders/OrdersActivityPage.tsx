@@ -5,6 +5,7 @@ import {ApiError, mutationOptions, request} from '../../api/client'
 import {queries} from '../../api/queries'
 import type {Execution, ManualOrderIntentStatus, ManualOrderQuoteStatus, Order, OrderDetail, OrderStatusHistory} from '../../api/types'
 import {ActivityTimeline} from '../../components/ActivityTimeline'
+import {BrokerInstrumentSearch} from '../../components/BrokerInstrumentSearch'
 import {FillProgress} from '../../components/FillProgress'
 import {ConfirmActionDialog, DataTable, DetailDrawer, EmptyState, ErrorState, Freshness, PageHeader, Skeleton, StatusBadge, TerminalPanel, formatDateTime, formatMoney, formatNumber} from '../../components/ui'
 import {useSelection} from '../../stores/useSelection'
@@ -23,6 +24,7 @@ export function OrdersActivityPage() {
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null)
   const [manualResult, setManualResult] = useState<ManualOrderIntentStatus>()
   const [manualInstrumentId, setManualInstrumentId] = useState<number | null>(null)
+  const [contractQuery, setContractQuery] = useState('')
   const [activeIntent, setActiveIntent] = useState<{intentId: number; startedAt: number} | null>(null)
   const [pollTimedOut, setPollTimedOut] = useState(false)
   const manualSubmissionInFlight = useRef(false)
@@ -188,6 +190,21 @@ export function OrdersActivityPage() {
     </TerminalPanel>}
     </div>
     <div className="activity-grid"><TerminalPanel id="executions" title="Executions" description="Append-only broker fill ledger">{executions.isLoading ? <Skeleton lines={4} /> : executions.isError ? <ErrorState error={executions.error} onRetry={() => void executions.refetch()} compact /> : <DataTable rows={executions.data || []} columns={executionColumns} getRowKey={(fill) => fill.execution_id} emptyTitle="No executions" />}</TerminalPanel><TerminalPanel id="operational-activity" title="Operational activity" description="Recent audit events">{audit.isError ? <ErrorState error={audit.error} onRetry={() => void audit.refetch()} compact /> : <ActivityTimeline items={activity.slice(0, 12)} />}</TerminalPanel></div>
+    <TerminalPanel id="indian-contract-search" title="Indian stock & option search" description="Search IBKR, select an exact NSE/NFO/BSE contract, and qualify it before using it in an order." defaultOpen>
+      <BrokerInstrumentSearch
+        value={contractQuery}
+        onValueChange={setContractQuery}
+        onResolved={(resolution) => {
+          if (!resolution?.instrument_id) return
+          setManualInstrumentId(resolution.instrument_id)
+          void queryClient.invalidateQueries({queryKey: ['instruments']})
+        }}
+        portfolioId={selectedPortfolioId}
+        gatewaySessionId={session?.id}
+        searchLabel="Indian stock or option"
+        allowOptions
+      />
+    </TerminalPanel>
     <TerminalPanel id="manual-order-ticket" title="Manual order ticket" description="Advanced operator action. Manual orders use the durable intent, risk, OMS, and Gateway pipeline." defaultOpen={false}><ManualOrderTicket
       instruments={instruments.data || []}
       positions={positions.data || []}
@@ -204,6 +221,7 @@ export function OrdersActivityPage() {
       quotePending={manualQuote.isPending || manualQuote.isFetching}
       quoteError={manualQuote.error}
       onInstrumentChange={setManualInstrumentId}
+      selectedInstrumentId={manualInstrumentId}
       onSubmit={submitManualOrder}
       onWarningDecision={(confirmed) => {
         if (!manualResult?.confirmation?.required || confirmOrder.isPending) return

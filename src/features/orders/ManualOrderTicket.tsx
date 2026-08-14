@@ -1,5 +1,5 @@
 import {AlertTriangle, ShieldCheck, SlidersHorizontal, X} from 'lucide-react'
-import {useMemo, useState} from 'react'
+import {useEffect, useMemo, useState} from 'react'
 import {ApiError} from '../../api/client'
 import type {
   ExecutionMode,
@@ -38,6 +38,7 @@ interface ManualOrderTicketProps extends ManualOrderSelection {
   quotePending: boolean
   quoteError: unknown
   onInstrumentChange: (instrumentId: number | null) => void
+  selectedInstrumentId?: number | null
   onSubmit: (payload: ManualOrderPayload) => void
   onWarningDecision?: (confirmed: boolean) => void
   warningDecisionPending?: boolean
@@ -60,6 +61,7 @@ export function ManualOrderTicket({
   quotePending,
   quoteError,
   onInstrumentChange,
+  selectedInstrumentId,
   onSubmit,
   onWarningDecision,
   warningDecisionPending,
@@ -83,6 +85,17 @@ export function ManualOrderTicket({
   const trustedReferencePrice = readyQuote?.reference_price ?? null
   const estimatedNotional = estimateManualOrderNotional(draft, trustedReferencePrice)
   const busy = pending || polling
+
+  useEffect(() => {
+    if (!selectedInstrumentId) return
+    setDraft((current) => ({...current, instrumentId: String(selectedInstrumentId)}))
+    setValidationErrors((current) => {
+      if (!current.instrumentId) return current
+      const next = {...current}
+      delete next.instrumentId
+      return next
+    })
+  }, [selectedInstrumentId])
 
   const update = <K extends keyof ManualOrderDraft>(field: K, value: ManualOrderDraft[K]) => {
     setDraft((current) => ({...current, [field]: value}))

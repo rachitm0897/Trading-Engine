@@ -118,6 +118,11 @@ export interface Instrument {
   trading_calendar: string
   active: boolean
   tradable: boolean
+  expiration?: string | null
+  strike?: DecimalValue
+  right?: 'C' | 'P' | null
+  trading_class?: string
+  underlying_conid?: number | null
 }
 
 export interface Position {
@@ -629,6 +634,12 @@ export interface InstrumentResolution {
   conid: number | null
   primary_exchange: string | null
   qualification_command: JsonRecord | null
+  expiration?: string | null
+  strike?: DecimalValue
+  right?: 'C' | 'P' | null
+  multiplier?: DecimalValue
+  trading_class?: string
+  underlying_conid?: number | null
 }
 
 export interface InstrumentSearchResult {
@@ -641,6 +652,12 @@ export interface InstrumentSearchResult {
   currency: string
   description: string
   instrument_id: number | null
+  expiration?: string | null
+  strike?: DecimalValue
+  right?: 'C' | 'P' | null
+  multiplier?: DecimalValue
+  trading_class?: string
+  underlying_conid?: number | null
 }
 
 export interface SeriesPoint {
