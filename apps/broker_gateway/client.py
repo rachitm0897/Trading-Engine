@@ -379,13 +379,21 @@ class GatewayClient:
                 )
         raise AssertionError("unreachable")
 
-    def search_contracts(self, query):
+    def search_contracts(self, query, *, asset_classes=None, country=None, currency=None):
         self._require_session_purpose("command")
         query = str(query).strip()
-        digest = hashlib.sha256(query.casefold().encode()).hexdigest()[:32]
+        payload = {"query": query}
+        if asset_classes:
+            payload["asset_classes"] = list(asset_classes)
+        if country:
+            payload["country"] = str(country).upper()
+        if currency:
+            payload["currency"] = str(currency).upper()
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(canonical.casefold().encode()).hexdigest()[:32]
         result = self._execute_retryable_command(
             "contracts/search/",
-            {"query": query},
+            payload,
             f"contract-search:{digest}",
             "SEARCH_CONTRACTS",
         )

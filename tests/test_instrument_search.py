@@ -1,5 +1,5 @@
 import pytest
-from apps.instruments.models import BrokerContract, Instrument
+from apps.instruments.models import BrokerContract, Instrument, OptionContract
 from apps.instruments.services import resolve_instrument, search_broker_instruments
 from apps.audit.models import OutboxEvent
 
@@ -62,3 +62,38 @@ def test_indian_contract_uses_indian_currency_and_trading_calendar():
     assert command is None and contract.conid==54321
     assert instrument.currency=="INR" and instrument.primary_exchange=="NSE"
     assert instrument.trading_calendar=="XNSE"
+
+
+def test_indian_option_search_and_exact_qualification_persists_contract_identity():
+    row={"symbol":"NIFTY","local_symbol":"NIFTY26AUG25000CE","conid":7654321,
+         "asset_class":"OPT","exchange":"NFO","primary_exchange":"NSE","currency":"INR",
+         "description":"NIFTY 26 Aug 2026 25000 Call","expiration":"20260826","strike":"25000",
+         "right":"C","multiplier":"75","trading_class":"NIFTY","underlying_conid":1234}
+
+    class IndianOptionBroker:
+        def search_contracts(self,query,**filters):
+            assert filters=={"asset_classes":("STK","OPT"),"country":"IN","currency":"INR"}
+            return [row]
+        def qualify_contract_exact(self,payload,key):
+            assert payload["conid"]==row["conid"]
+            return {**row,"qualified":True}
+
+    results=search_broker_instruments("NIFTY",IndianOptionBroker(),country="IN",currency="INR")
+    assert results==[{
+        "symbol":"NIFTY","local_symbol":"NIFTY26AUG25000CE","conid":7654321,
+        "asset_class":"OPT","exchange":"NFO","primary_exchange":"NSE","currency":"INR",
+        "description":"NIFTY 26 Aug 2026 25000 Call","instrument_id":None,
+        "expiration":"2026-08-26","strike":"25000","right":"C","multiplier":"75",
+        "trading_class":"NIFTY","underlying_conid":1234,
+    }]
+    selected=results[0]
+    instrument,contract,command=resolve_instrument(
+        ticker=selected["symbol"],gateway=IndianOptionBroker(),qualify=True,**{
+            key:value for key,value in selected.items() if key not in {"symbol","instrument_id"}
+        })
+    option=OptionContract.objects.get(instrument=instrument)
+    assert command is None and contract.conid==7654321
+    assert instrument.symbol=="NIFTY26AUG25000CE" and instrument.asset_class=="OPT"
+    assert instrument.currency=="INR" and instrument.multiplier==75
+    assert option.expiration.isoformat()=="2026-08-26" and option.strike==25000
+    assert option.right=="C" and option.trading_class=="NIFTY" and option.underlying_conid==1234

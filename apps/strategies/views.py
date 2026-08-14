@@ -659,10 +659,17 @@ def resolve(request):
         instrument,contract,command=resolve_instrument(instrument_id=payload.get("instrument_id"),ticker=payload.get("ticker"),
             asset_class=payload.get("asset_class","STK"),exchange=payload.get("exchange","SMART"),currency=payload.get("currency","USD"),
             primary_exchange=payload.get("primary_exchange"),conid=payload.get("conid"),local_symbol=payload.get("local_symbol"),
-            description=payload.get("description"),qualify=qualification_requested,gateway_session=gateway_session)
+            description=payload.get("description"),qualify=qualification_requested,gateway_session=gateway_session,
+            expiration=payload.get("expiration"),strike=payload.get("strike"),right=payload.get("right"),
+            multiplier=payload.get("multiplier"),trading_class=payload.get("trading_class"),
+            underlying_conid=payload.get("underlying_conid"))
+        option=getattr(instrument,"option_contract",None)
         return response({"instrument_id":instrument.pk,"symbol":instrument.symbol,"asset_class":instrument.asset_class,
             "exchange":instrument.exchange,"currency":instrument.currency,"conid":contract.conid if contract else None,
-            "primary_exchange":contract.primary_exchange if contract else None,"qualification_command":command})
+            "primary_exchange":contract.primary_exchange if contract else None,"qualification_command":command,
+            "expiration":option.expiration if option else None,"strike":option.strike if option else None,
+            "right":option.right if option else None,"multiplier":option.multiplier if option else instrument.multiplier,
+            "trading_class":option.trading_class if option else "","underlying_conid":option.underlying_conid if option else None})
     except GatewayError as exc:
         return _gateway_failure(exc,operation="QUALIFY")
     except (BrokerGatewaySession.DoesNotExist,TradingPortfolio.DoesNotExist):
@@ -687,7 +694,12 @@ def search_instruments(request):
     if invalid:return invalid
     try:
         session=_authoritative_gateway_session(request.GET)
-        return response(search_broker_instruments(request.GET.get("query"),gateway_session=session))
+        raw_types=str(request.GET.get("asset_classes") or "STK,OPT")
+        asset_classes=[value.strip().upper() for value in raw_types.split(",") if value.strip()]
+        return response(search_broker_instruments(
+            request.GET.get("query"),gateway_session=session,asset_classes=asset_classes,
+            country=request.GET.get("country") or None,currency=request.GET.get("currency") or None,
+        ))
     except (BrokerGatewaySession.DoesNotExist,TradingPortfolio.DoesNotExist):
         return response(status=404,error={"code":"BROKER_SESSION_NOT_FOUND","message":"Broker session not found","details":{}})
     except BrokerSessionRequired as exc:

@@ -45,6 +45,49 @@ class BrokerContract(models.Model):
     qualified_at = models.DateTimeField(null=True, blank=True)
 
 
+class OptionContract(models.Model):
+    class Right(models.TextChoices):
+        CALL = "C", "Call"
+        PUT = "P", "Put"
+
+    instrument = models.OneToOneField(
+        Instrument, on_delete=models.PROTECT, related_name="option_contract"
+    )
+    underlying = models.ForeignKey(
+        Instrument, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="listed_options",
+    )
+    underlying_conid = models.BigIntegerField(null=True, blank=True, db_index=True)
+    expiration = models.DateField()
+    strike = models.DecimalField(max_digits=24, decimal_places=8)
+    right = models.CharField(max_length=1, choices=Right.choices)
+    trading_class = models.CharField(max_length=64, blank=True)
+    multiplier = models.DecimalField(max_digits=20, decimal_places=8, default=1)
+    style = models.CharField(max_length=16, default="UNKNOWN")
+    settlement = models.CharField(max_length=16, default="UNKNOWN")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "underlying_conid", "expiration", "strike", "right",
+                    "trading_class", "multiplier",
+                ],
+                name="unique_option_contract_identity",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(multiplier__gt=0),
+                name="option_contract_positive_multiplier",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["underlying_conid", "expiration", "right", "strike"],
+                name="option_chain_lookup_idx",
+            ),
+        ]
+
+
 class InstrumentProviderMapping(models.Model):
     STATUSES = [(value, value) for value in ["PENDING", "VERIFIED", "AMBIGUOUS", "UNSUPPORTED", "ERROR"]]
     VERIFICATION_METHODS = [(value, value) for value in ["AUTOMATIC", "MANUAL"]]

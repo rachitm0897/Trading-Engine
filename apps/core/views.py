@@ -299,7 +299,16 @@ def instruments(request):
     invalid=method_guard(request,"GET")
     if invalid:return invalid
     from apps.instruments.models import Instrument
-    return response(_serialize(Instrument.objects.all(), ["symbol", "asset_class", "exchange", "primary_exchange", "currency", "sector", "multiplier", "lot_size", "min_tick", "fractional_support", "trading_calendar", "active", "tradable"]))
+    rows=[]
+    for item in Instrument.objects.select_related("option_contract").all():
+        row={field:getattr(item,field) for field in ["symbol", "asset_class", "exchange", "primary_exchange", "currency", "sector", "multiplier", "lot_size", "min_tick", "fractional_support", "trading_calendar", "active", "tradable"]}
+        row["id"]=item.pk
+        option=getattr(item,"option_contract",None)
+        row.update({"expiration":option.expiration if option else None,"strike":option.strike if option else None,
+            "right":option.right if option else None,"trading_class":option.trading_class if option else "",
+            "underlying_conid":option.underlying_conid if option else None})
+        rows.append(row)
+    return response(rows)
 
 def portfolios(request):
     invalid=method_guard(request,"GET")

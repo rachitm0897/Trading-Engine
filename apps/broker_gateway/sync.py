@@ -53,10 +53,13 @@ def ensure_instrument(row):
     if conid:
         existing=BrokerContract.objects.select_related("instrument").filter(conid=conid).first()
         if existing:
-            from apps.instruments.services import publish_instrument_registry
-            publish_instrument_registry(existing);return existing.instrument
-    symbol=row.get("symbol") or row.get("local_symbol") or (f"CONID-{conid}" if conid else "UNKNOWN")
-    defaults={"asset_class":row.get("asset_class") or "STK","exchange":row.get("exchange") or row.get("primary_exchange") or "SMART",
+            from apps.instruments.services import record_qualified_contract
+            record_qualified_contract(existing.instrument,row)
+            return existing.instrument
+    asset_class=str(row.get("asset_class") or row.get("sec_type") or "STK").upper()
+    if asset_class=="OPTION":asset_class="OPT"
+    symbol=(row.get("local_symbol") if asset_class=="OPT" else row.get("symbol")) or row.get("local_symbol") or (f"CONID-{conid}" if conid else "UNKNOWN")
+    defaults={"asset_class":asset_class,"exchange":row.get("exchange") or row.get("primary_exchange") or "SMART",
         "primary_exchange":row.get("primary_exchange") or "","currency":row.get("currency") or "USD"}
     instrument=Instrument.objects.filter(symbol=symbol,asset_class=defaults["asset_class"],exchange=defaults["exchange"],
         currency=defaults["currency"],primary_exchange="",broker_contract__isnull=True).first()
@@ -67,8 +70,8 @@ def ensure_instrument(row):
         contract,_=BrokerContract.objects.get_or_create(instrument=instrument,defaults={"conid":conid,
         "primary_exchange":row.get("primary_exchange") or "","local_symbol":row.get("local_symbol") or symbol,
         "description":row.get("description") or "","qualified_at":timezone.now()})
-        from apps.instruments.services import publish_instrument_registry
-        publish_instrument_registry(contract)
+        from apps.instruments.services import record_qualified_contract
+        contract=record_qualified_contract(instrument,{**row,"conid":conid,"asset_class":asset_class})
     return instrument
 
 def sync_accounts(rows, gateway_session=None):
