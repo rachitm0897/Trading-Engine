@@ -1,91 +1,137 @@
-# Finflock IBKR Trading Execution Engine
+# Finflock Trading Engine
 
-A paper-first execution platform that converts deterministic portfolio targets into risk-checked orders, broker executions, append-only ledgers, and reconciliation records.
+Finflock is a paper-first, event-driven trading platform for building strategies, monitoring broker-backed portfolios, and sending risk-checked orders to Interactive Brokers. It combines an operator-focused React workspace with durable Django workflows, real-time Kafka/Flink processing, portfolio accounting, and reconciliation.
 
-## Repository components
+> Paper and Live workflows use the same execution path. Live trading is disabled by default and remains gated by explicit configuration, readiness checks, reconciliation, kill switches, and pre-trade risk controls.
 
-- `Backend/` contains Django ASGI, Celery workers, research, allocation, risk, OMS, execution, and reconciliation.
-- `Frontend/` contains the React/TypeScript operator application served by Nginx.
-- `IB_gateway/` builds the reusable `linux/amd64` Docker Hub image used for one private IBKR session child.
-- `streaming/` contains Kafka contracts and PyFlink jobs. PostgreSQL remains the financial source of truth.
+<p align="center">
+  <a href="images/dashboard.png">
+    <img src="images/dashboard.png" alt="Finflock portfolio command center showing NAV, cash, exposure, holdings, orders, and readiness" width="100%">
+  </a>
+</p>
 
-Only the private Gateway child owns an `ib_async`/TWS connection. The browser, Frontend, Backend, Kafka, and Flink never connect to a TWS socket directly.
+## What it does
 
-## Production architecture
+- Runs isolated IBKR Paper or Live sessions with encrypted, one-time-consumed credentials and managed noVNC access.
+- Turns live market events into normalized prices, bars, indicators, and data-quality signals with Kafka and Flink.
+- Supports portable, schema-driven strategies and follows each signal through targets, allocation, rebalancing, position sizing, and risk.
+- Routes automatic and manual orders through one durable intent, OMS, broker-command, fill-accounting, and reconciliation pipeline.
+- Gives operators one workspace for NAV, cash, exposure, holdings, P&L, orders, broker connectivity, streaming health, and audit activity.
 
-QFS contains exactly two public applications:
+## Architecture
 
-| QFS application | Root/build context | Dockerfile | Public URL |
-| --- | --- | --- | --- |
-| Frontend | `Frontend` | `Frontend/Dockerfile` | `https://qfsplatform.com/trading_eng_frontend` |
-| Backend | `Backend` | `Backend/Dockerfile` | `https://qfsplatform.com/trading_eng_backend` |
+```mermaid
+flowchart LR
+    Operator([Operator]) --> UI["React + TypeScript<br/>operator workspace"]
+    UI <-->|REST / WebSocket| API["Django ASGI API"]
 
-PostgreSQL, Redis, Celery storage, Kafka, and Flink are external and are configured only on the Backend. Broker sessions use this path:
+    Provider["IBKR / Finnhub<br/>market data"] --> Ingest["Market ingestion<br/>+ transactional outbox"]
+    Ingest --> Raw[("Kafka<br/>market.raw")]
+    Raw --> Flink["Apache Flink<br/>normalize • bars • indicators • quality"]
+    Flink --> Derived[("Kafka<br/>derived market topics")]
+    Derived --> Persist["Market persistence<br/>+ strategy workers"]
 
-```text
-Frontend session form
-  -> Backend broker-session API
-  -> QCH Sub-container Broker API
-  -> QCH pulls IBKR_GATEWAY_IMAGE from Docker Hub
-  -> one private Gateway child per session
-  -> Backend uses http://<child-name>:8080/api/v1
+    API --> Workflow["Targets → rebalance → sizing<br/>→ risk → OMS → broker commands"]
+    Persist --> Workflow
+    API <--> DB[("PostgreSQL<br/>financial source of truth")]
+    Persist <--> DB
+    Workflow <--> DB
+    Redis[(Redis + Celery)] -. wakes durable workers .-> Persist
+    Redis -. wakes durable workers .-> Workflow
+
+    Workflow --> Gateway["Private per-session<br/>IB Gateway service"]
+    Gateway <--> IBKR[Interactive Brokers]
+    Gateway -->|orders, fills, positions| Reconcile[Accounting + reconciliation]
+    Reconcile --> DB
 ```
 
-The Backend validates and forwards only the configured image reference and child configuration. It does not run Docker, pull images, mount a Docker socket, or accept/store/forward registry credentials. Gateway children publish no host ports; managed noVNC is available only through the Backend broker-session path.
+Flink owns market-derived computation, Kafka transports events, and PostgreSQL owns financial workflow state. Strategy plugins produce deterministic decisions; they never submit broker orders directly. Only the private Gateway service owns the IBKR/TWS connection.
 
-Build and publish the child image separately:
+For the complete ownership and retry model, see [Architecture](docs/ARCHITECTURE.md) and [Order lifecycle](docs/ORDER_LIFECYCLE.md).
 
-```bash
-cd IB_gateway
-docker buildx build --platform linux/amd64 --load -t DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0 .
-docker push DOCKERHUB_USERNAME/trading-engine-ib-gateway:v1.0.0
-```
+## Product tour
 
-Production should configure `IBKR_GATEWAY_IMAGE=docker.io/<username>/<repository>@sha256:<64-hex-digest>`. A fixed non-`latest` Docker Hub tag is accepted for controlled testing. See [QFS deployment](docs/QFS_DEPLOYMENT.md) for the complete variable matrix, routes, networking, WebSocket, publication, and access-control requirements.
+<table>
+  <tr>
+    <td width="50%">
+      <a href="images/ibkr-sessions.png">
+        <img src="images/ibkr-sessions.png" alt="IBKR session management with a connected paper account">
+      </a>
+      <br><strong>IBKR sessions</strong><br>
+      Provision isolated Paper or Live sessions, select accounts, reconnect safely, and open the managed operator console.
+    </td>
+    <td width="50%">
+      <a href="images/system-readiness.png">
+        <img src="images/system-readiness.png" alt="System readiness dashboard showing IBKR, reconciliation, Kafka, and Flink status">
+      </a>
+      <br><strong>Operations and safety</strong><br>
+      Check Paper/Live readiness, IBKR connectivity, reconciliation, kill switches, streaming, and market-data health.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <a href="images/portfolio.png">
+        <img src="images/portfolio.png" alt="Portfolio page showing NAV, cash, exposure, concentration, and performance history">
+      </a>
+      <br><strong>Portfolio analytics</strong><br>
+      Explore NAV and P&amp;L history, cash, gross and net exposure, concentration, holdings, and strategy allocation.
+    </td>
+    <td width="50%">
+      <a href="images/strategies.png">
+        <img src="images/strategies.png" alt="Strategy workspace with search and lifecycle filters">
+      </a>
+      <br><strong>Strategy workspace</strong><br>
+      Create schema-driven strategies and filter instances by lifecycle state, execution mode, timeframe, and symbol.
+    </td>
+  </tr>
+</table>
 
-## Local development
+### Manual orders
 
-Compose starts PostgreSQL, Redis, Kafka, topic initialization, Flink, Backend, and Frontend. It does not start an IBKR Gateway. Without QCH and `IBKR_GATEWAY_IMAGE`, managed broker-session creation returns a configuration error while the rest of the platform remains available.
+Search stocks and options globally, qualify an exact IBKR contract, and review an order before it joins the same durable risk and execution path as automated intents.
+
+<p align="center">
+  <a href="images/manual-order.png">
+    <img src="images/manual-order.png" alt="Stock and option search with the Finflock manual order ticket" width="100%">
+  </a>
+</p>
+
+## Run locally
+
+### Prerequisites
+
+- Docker with Compose v2
+- PowerShell for the included end-to-end smoke scripts
 
 ```bash
 cp .env.example .env
 docker compose up --build -d
 docker compose exec backend python manage.py bootstrap_recommendation_system --skip-external
 docker compose ps
-powershell -NoProfile -File docs/compose_smoke.ps1
-powershell -NoProfile -File docs/automatic_execution_smoke.ps1
 ```
 
-The bootstrap command uses the root research bundle mounted read-only into
-Backend. The explicit local skip installs the 500-stock/97-strategy registry,
-protocol, mappings, and profiles without inventing provider history; Portfolio
-Builder readiness names the remaining external-data and Gateway blockers.
+Open the Frontend at <http://localhost:5173>. Backend liveness is available at <http://localhost:8000/healthz> and automatic-execution readiness at <http://localhost:8000/api/v1/execution/readiness/>.
 
-- Frontend: <http://localhost:5173>
-- Backend system API: <http://localhost:8000/api/v1/system/>
-- Backend liveness: <http://localhost:8000/healthz>
-- Automatic execution readiness: <http://localhost:8000/api/v1/execution/readiness/>
+The local Compose stack starts PostgreSQL, Redis, Kafka, Flink, Backend, and Frontend. It intentionally does not start an IBKR Gateway; broker operations require a configured managed session. See [Local development](docs/LOCAL_DEVELOPMENT.md) and [IBKR setup](docs/IBKR_SETUP.md).
 
-See [local development](docs/LOCAL_DEVELOPMENT.md), [Portfolio Builder](docs/PORTFOLIO_BUILDER.md), [research universe](docs/RESEARCH_UNIVERSE.md), and [recommendation engine](docs/RECOMMENDATION_ENGINE.md).
+## Repository map
 
-## Tests and independent builds
+| Path | Purpose |
+| --- | --- |
+| `Frontend/` | React, TypeScript, Vite, TanStack Query, Zustand, and Nginx |
+| `Backend/` | Django API, Celery workers, strategy/research workflows, risk, OMS, accounting, and reconciliation |
+| `IB_gateway/` | Private per-session IBKR Gateway service and the sole `ib_async`/TWS boundary |
+| `streaming/` | Kafka schemas, topic setup, and PyFlink market-processing jobs |
+| `Trading_Engine_Stock_Strategy_Universe_JSON/` | Versioned stock/strategy universe and compatibility rules |
+| `docs/` | Architecture, deployment, operations, workflow, and safety documentation |
+
+## Verify
 
 ```bash
 cd Backend && pytest
-cd ../IB_gateway && pytest
 cd ../Frontend && npm ci && npm test && npm run test:production-build
 cd .. && python -m pytest streaming/flink/tests
 docker compose config --quiet
-docker build -t trading-engine-backend ./Backend
-docker build -t trading-engine-frontend ./Frontend
-docker buildx build --platform linux/amd64 --load -t trading-engine-gateway ./IB_gateway
 ```
 
-`GET /healthz` is process liveness. Backend `GET /readyz` checks database and
-recommendation readiness. `GET /api/v1/execution/readiness/` is the stricter,
-fail-closed automatic Paper and Live readiness report for Flink checkpoints, Kafka and
-worker heartbeats, workflow backlogs, market freshness, Gateway connectivity,
-broker reconciliation, and uncertain orders. Missing managed-session
-configuration does not make process health fail. Live broker sessions remain
-subject to `ALLOW_LIVE_TRADING`, kill switches, reconciliation, confirmation,
-validation, and pre-trade risk controls.
+For deployment configuration, routes, networking, and Gateway image requirements, see [QFS deployment](docs/QFS_DEPLOYMENT.md).
